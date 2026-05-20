@@ -1,10 +1,10 @@
-# Contributing to deepseek-coder
+# 贡献指南
 
-Thanks for helping build `deepseek-coder`. This project is an AGPL-3.0-or-later free software code agent written in Rust and TypeScript.
+感谢你参与 `deepseek-coder`。这是一个使用 `AGPL-3.0-or-later` 许可证发布的自由软件代码 Agent，主要技术栈是 Rust 和 TypeScript。
 
-## Development Setup
+## 开发环境
 
-Use the setup instructions in `README.md` first. On Windows, verify the toolchain from a fresh PowerShell session:
+请先按照 `README.md` 中的开发环境配置完成本机准备。Windows 下建议在新的 PowerShell 窗口中确认工具链：
 
 ```powershell
 git --version
@@ -15,21 +15,21 @@ pnpm --version
 rg --version
 ```
 
-Install project dependencies from the repository root:
+在仓库根目录安装项目依赖：
 
 ```powershell
 pnpm install
 ```
 
-## Before You Submit
+## 提交前检查
 
-Run the same checks used by CI:
+提交前运行和 CI 一致的检查：
 
 ```powershell
 pnpm run check
 ```
 
-For targeted work, these commands are useful:
+局部开发时也可以单独运行：
 
 ```powershell
 cargo fmt --all -- --check
@@ -38,22 +38,22 @@ cargo test --workspace
 pnpm -r typecheck
 ```
 
-## Pull Request Guidelines
+## Pull Request 要求
 
-- Keep changes focused on one topic.
-- Explain the user-visible behavior and the engineering tradeoffs.
-- Include tests when changing behavior.
-- Update `README.md` development plan checkboxes when completing a planned item.
-- Do not commit local secrets, `.env`, `node_modules`, `target`, build outputs, or run logs.
-- Commit lockfiles when dependencies change: `Cargo.lock` and `pnpm-lock.yaml`.
+- 每个 PR 聚焦一个主题。
+- 说明用户可见行为、工程取舍和验证方式。
+- 修改行为时补充测试。
+- 完成开发计划中的事项时，同步更新 `README.md` 的 checkbox。
+- 不提交本地密钥、`.env`、`node_modules`、`target`、构建产物或 run log。
+- 依赖变化时提交锁文件：`Cargo.lock` 和 `pnpm-lock.yaml`。
 
-## Code Style
+## 代码风格
 
-- Rust uses `rustfmt`, Clippy, and `unsafe_code = "forbid"`.
-- TypeScript uses strict compiler settings and shared workspace configuration.
-- Prefer explicit errors over silent fallback behavior.
-- Keep protocol types shared instead of duplicating ad hoc shapes across packages.
+- Rust 使用 `rustfmt`、Clippy，并禁止 `unsafe_code`。
+- TypeScript 使用严格编译选项和共享 workspace 配置。
+- 优先显式错误，不用静默兜底掩盖问题。
+- 协议类型应集中在共享包中，避免在不同前端复制临时结构。
 
-## Licensing
+## 许可证
 
-By contributing, you agree that your contribution is licensed under `AGPL-3.0-or-later`.
+提交贡献即表示你同意该贡献按 `AGPL-3.0-or-later` 授权。

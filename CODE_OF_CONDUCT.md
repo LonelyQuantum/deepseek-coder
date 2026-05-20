@@ -1,25 +1,25 @@
-# Code of Conduct
+# 行为准则
 
-`deepseek-coder` aims to be a serious, welcoming free software project. We expect contributors to keep discussion technical, respectful, and useful.
+`deepseek-coder` 希望成为认真、友善、可持续的自由软件项目。我们希望所有参与者保持讨论技术、尊重他人、聚焦问题。
 
-## Expected Behavior
+## 鼓励的行为
 
-- Be respectful of different experience levels and backgrounds.
-- Criticize ideas and code, not people.
-- Ask clarifying questions before assuming intent.
-- Keep issues and pull requests focused on the project.
-- Give credit when building on someone else's work.
+- 尊重不同经验水平和背景。
+- 批评想法和代码，而不是攻击个人。
+- 在判断意图前先提问澄清。
+- 让 issue 和 PR 聚焦项目本身。
+- 在基于他人工作继续推进时给予署名或说明。
 
-## Unacceptable Behavior
+## 不接受的行为
 
-- Harassment, insults, threats, or personal attacks.
-- Discriminatory language or behavior.
-- Publishing private information without permission.
-- Repeated off-topic disruption after maintainers ask for focus.
-- Bad-faith security disclosures or coercive vulnerability handling.
+- 骚扰、辱骂、威胁或人身攻击。
+- 歧视性语言或歧视性行为。
+- 未经许可公开他人的私人信息。
+- 在维护者要求聚焦后仍持续离题干扰。
+- 恶意安全披露，或用漏洞信息胁迫项目成员。
 
-## Enforcement
+## 执行方式
 
-Maintainers may edit, hide, or delete comments; close issues; reject pull requests; or temporarily or permanently block participation when behavior harms the project.
+维护者可以编辑、隐藏或删除评论，关闭 issue，拒绝 PR，或临时/永久限制破坏项目协作氛围的参与者。
 
-Reports can be sent privately using the security contact described in `SECURITY.md`. Until a dedicated project email is published, use a private GitHub security advisory if the repository host supports it, or contact a maintainer directly.
+如需私下报告行为问题，可以使用 `SECURITY.md` 中描述的安全联系方式。项目发布专用邮箱前，优先使用代码托管平台的私密安全公告功能；如果平台不支持，则直接联系维护者。

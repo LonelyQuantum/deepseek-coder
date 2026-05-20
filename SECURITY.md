@@ -1,50 +1,50 @@
-# Security Policy
+# 安全策略
 
-`deepseek-coder` is intended to read, edit, and run commands in developer workspaces. Security issues are taken seriously because the tool may handle source code, secrets, shell commands, model outputs, and local project state.
+`deepseek-coder` 会读取代码、修改文件、执行命令并调用模型提供商。由于它可能接触源码、密钥、shell 命令、模型输出和本地项目状态，安全问题需要认真处理。
 
-## Supported Versions
+## 支持版本
 
-The project is pre-release. Security fixes target the default branch until versioned releases begin.
+项目当前处于预发布阶段。正式版本发布前，安全修复以默认分支为目标。
 
-## Reporting a Vulnerability
+## 报告漏洞
 
-Please do not open a public issue for a vulnerability before maintainers have had time to investigate.
+请不要在维护者有时间调查前公开创建漏洞 issue。
 
-Preferred reporting paths:
+推荐报告方式：
 
-- Use a private GitHub security advisory if available.
-- If private advisories are not available, contact a maintainer directly and include `SECURITY` in the subject.
+- 如果仓库平台支持，使用私密 GitHub Security Advisory。
+- 如果不支持私密安全公告，直接联系维护者，并在主题中包含 `SECURITY`。
 
-Include:
+报告中请包含：
 
-- Affected commit, version, or branch.
-- Reproduction steps.
-- Expected and actual behavior.
-- Impact assessment.
-- Whether the issue can expose source code, secrets, shell access, network access, or model prompts.
+- 受影响的 commit、版本或分支。
+- 复现步骤。
+- 预期行为和实际行为。
+- 影响评估。
+- 是否可能暴露源码、密钥、shell 权限、网络访问或模型 prompt。
 
-## Security Scope
+## 安全范围
 
-Issues in scope include:
+属于安全范围的问题包括：
 
-- Secret leakage through logs, prompts, tool output, or telemetry.
-- Unsafe command execution.
-- Workspace path traversal.
-- Unapproved file writes or destructive operations.
-- Prompt or tool-call handling that bypasses approval policy.
-- VS Code extension behavior that violates Workspace Trust expectations.
-- Supply-chain risks in release, package, or CI configuration.
+- 密钥通过日志、prompt、工具输出或遥测泄漏。
+- 不安全命令执行。
+- 工作区路径穿越。
+- 未经审批的文件写入或破坏性操作。
+- prompt 或 tool-call 处理绕过审批策略。
+- VS Code 插件行为违反 Workspace Trust 预期。
+- 发布、包管理或 CI 配置中的供应链风险。
 
-Issues out of scope include:
+通常不属于安全范围的问题包括：
 
-- Social engineering against maintainers.
-- Vulnerabilities requiring a malicious local administrator.
-- Denial of service through intentionally huge local files unless it bypasses documented limits.
+- 针对维护者的社交工程。
+- 需要恶意本地管理员权限才能利用的问题。
+- 用户故意提供超大本地文件导致的拒绝服务，除非它绕过了已记录的限制。
 
-## Handling Expectations
+## 处理预期
 
-Maintainers should acknowledge valid reports, avoid public disclosure until a fix is ready, and credit reporters who want credit. If a report is not accepted, maintainers should explain why it is out of scope or not reproducible.
+维护者应确认有效报告，避免在修复准备好前公开细节，并在报告者愿意署名时给予致谢。如果报告不被接受，维护者应说明它为何不在范围内或无法复现。
 
-## Secrets
+## 密钥
 
-Never include real API keys, access tokens, private source code, or confidential prompts in public issues, pull requests, logs, screenshots, or test fixtures.
+不要在公开 issue、PR、日志、截图或测试夹具中包含真实 API Key、访问令牌、私有源码或保密 prompt。
