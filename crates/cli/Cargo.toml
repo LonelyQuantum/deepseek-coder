@@ -1,0 +1,16 @@
+[package]
+name = "deepseek-coder-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "deepseek-coder"
+path = "src/main.rs"
+
+[dependencies]
+deepseek-coder-agent-core = { path = "../agent-core" }
+
+[lints]
+workspace = true
