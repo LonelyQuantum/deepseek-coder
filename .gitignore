@@ -1,3 +1,31 @@
-#agents
+# Project-local agent instructions and Codex state
 .agents/
-.codex
+.codex/
+
+# Runtime configuration and local state
+.env
+.env.*
+!.env.example
+.deepseek-coder/
+
+# Rust
+/target/
+
+# Node / pnpm / TypeScript
+node_modules/
+.pnpm-store/
+dist/
+out/
+*.tsbuildinfo
+*.vsix
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS files
+.DS_Store
+Thumbs.db
