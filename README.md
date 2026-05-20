@@ -76,6 +76,24 @@ User
 - 存储：本地 `.deepseek-coder/`，包含配置、索引、run log、token 统计和审批记录。
 - 测试：Rust 单元测试、快照测试、集成测试；VS Code 使用 `@vscode/test-electron`。
 
+## 设计文档
+
+详细设计放在 `docs/`，README 保留项目入口、开发环境和大的开发计划。
+
+文档默认使用中文编写。协议方法名、事件名、错误码、命令、许可证标识等需要稳定机器读取或生态通用的内容保留英文，并在必要时附中文说明。
+
+- `docs/architecture.md`：总体架构。
+- `docs/agent-core.md`：Agent Core 回合与职责。
+- `docs/json-rpc-protocol.md`：内部 JSON-RPC 协议。
+- `docs/context-capsule.md`：长上下文构建。
+- `docs/tool-system.md`：工具系统。
+- `docs/approval-model.md`：审批模型。
+- `docs/vscode-extension.md`：VS Code 插件设计。
+- `docs/tui.md`：TUI 设计。
+- `docs/security-model.md`：安全模型。
+- `docs/release.md`：发布策略。
+- `docs/adr/`：架构决策记录。
+
 ## 开发环境配置
 
 `deepseek-coder` 采用 Rust + TypeScript 双栈，Rust 负责 Agent Core、CLI/TUI、RPC Server 和本地工具执行，TypeScript 负责 VS Code 插件与编辑器集成。
@@ -512,7 +530,7 @@ extension.ts
 
 ## 开发计划
 
-当前进度：Phase 0 进行中。项目章程、基础 workspace、Windows 开发环境说明、本地检查链路、CI 骨架和基础社区文档已经完成；正式协议设计尚未完成。
+当前进度：Phase 0 进行中。项目章程、基础 workspace、Windows 开发环境说明、本地检查链路、CI 骨架、基础社区文档、docs/ADR 和 JSON-RPC 事件协议设计已经完成；工具 schema、风险等级和审批模型的正式细化尚未完成。
 
 ### Phase 0：项目章程
 
@@ -526,7 +544,8 @@ extension.ts
 - [x] 在 Windows 本机跑通 `pnpm run check`。
 - [x] 建立 CI 骨架。
 - [x] 建立 `CONTRIBUTING.md`、`CODE_OF_CONDUCT.md`、`SECURITY.md`。
-- [ ] 设计正式 JSON-RPC 事件协议。
+- [x] 建立 `docs/` 设计文档目录和 `docs/adr/` 架构决策记录。
+- [x] 设计正式 JSON-RPC 事件协议。
 - [ ] 定义工具 schema、风险等级和审批模型。
 
 ### Phase 1：Agent Core MVP
@@ -649,6 +668,18 @@ respect_gitignore = true
 │   ├── agent-rpc/
 │   ├── cli/
 │   └── tui/
+├── docs/
+│   ├── adr/
+│   ├── architecture.md
+│   ├── agent-core.md
+│   ├── json-rpc-protocol.md
+│   ├── context-capsule.md
+│   ├── tool-system.md
+│   ├── approval-model.md
+│   ├── vscode-extension.md
+│   ├── tui.md
+│   ├── security-model.md
+│   └── release.md
 ├── packages/
 │   └── protocol/
 ├── vscode/
@@ -656,7 +687,7 @@ respect_gitignore = true
 └── README.md
 ```
 
-后续实现阶段再补充 `docs/`、`examples/`、`tests/` 和发布脚本目录。
+后续实现阶段再补充 `examples/`、`tests/` 和发布脚本目录。
 
 ## 参考资料
 
