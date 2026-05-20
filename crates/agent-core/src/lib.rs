@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+pub mod approval;
+pub mod tool;
+
 pub const PROJECT_NAME: &str = "deepseek-coder";
 pub const DEFAULT_STATE_DIR: &str = ".deepseek-coder";
 
