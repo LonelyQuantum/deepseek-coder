@@ -530,7 +530,7 @@ extension.ts
 
 ## 开发计划
 
-当前进度：Phase 0 进行中。项目章程、基础 workspace、Windows 开发环境说明、本地检查链路、CI 骨架、基础社区文档、docs/ADR 和 JSON-RPC 事件协议设计已经完成；工具 schema、风险等级和审批模型的正式细化尚未完成。
+当前进度：Phase 0 已完成。下一步进入 Phase 1：Agent Core MVP 的具体实现。
 
 ### Phase 0：项目章程
 
@@ -546,7 +546,7 @@ extension.ts
 - [x] 建立 `CONTRIBUTING.md`、`CODE_OF_CONDUCT.md`、`SECURITY.md`。
 - [x] 建立 `docs/` 设计文档目录和 `docs/adr/` 架构决策记录。
 - [x] 设计正式 JSON-RPC 事件协议。
-- [ ] 定义工具 schema、风险等级和审批模型。
+- [x] 定义工具 schema、风险等级和审批模型。
 
 ### Phase 1：Agent Core MVP
 
