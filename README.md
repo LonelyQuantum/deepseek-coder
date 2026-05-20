@@ -1,0 +1,672 @@
+# deepseek-coder
+
+状态：设计草案。`deepseek-coder` 是一个 AGPL-3.0-or-later 许可证开源项目，目标是构建一个以 DeepSeek V4 系列 1M 上下文为核心能力的代码 Agent，先提供 CLI/TUI，随后提供一等公民级 VS Code 插件。
+
+本项目不是 DeepSeek 官方项目，也不与 DeepSeek AI 存在从属关系。当前阶段暂不展开商标策略。
+
+## 为什么做
+
+DeepSeek V4 API 当前提供 `deepseek-v4-flash` 与 `deepseek-v4-pro`，支持 1M 上下文、最大 384K 输出、OpenAI/Anthropic 兼容接口、思考模式、Tool Calls、FIM 补全和上下文硬盘缓存。代码 Agent 可以把这些能力组合成一种更适合大仓库的软件维护方式：少做碎片化检索，多做可审计的整仓理解、计划、修改、验证和回放。
+
+DeepSeek-TUI 已经证明了一个方向：终端内的代码 Agent 可以读取代码、编辑文件、运行命令、调用 MCP，并通过沙箱与审批保护用户工作区。本项目会参考它的产品形态和工程边界，但把重点放在以下差异上：
+
+- 1M 上下文优先：把仓库索引、文件正文、变更历史、任务约束和验证记录组织成稳定的长上下文前缀。
+- 多前端同核：CLI、TUI、VS Code 插件共享同一个 Agent Core，避免插件版和终端版行为分叉。
+- 可复现回合：每一轮模型输入、工具调用、补丁、命令输出和审批结果都进入本地 run log，便于调试、回滚和安全审计。
+- 严格工具协议：工具参数使用 JSON Schema，重要工具默认走审批；不依赖隐藏兜底、临时补丁或不可解释的后处理修正。
+- 自由软件治理：公开路线图、公开设计记录、无强制 CLA、可复现发布包，鼓励社区 fork 与二次发行。
+
+## 设计原则
+
+- 用户拥有最终控制权：所有文件写入、命令执行、网络访问、依赖安装、git 操作都应可见、可拒绝、可回放。
+- 长上下文不是无限信任：1M 上下文用于提供更多证据，不替代测试、类型检查、LSP 诊断和人工确认。
+- 显式失败优先：当上下文预算、权限、工具输出或模型响应不满足协议时，系统应停止并报告原因。
+- 本地优先：配置、日志、索引和缓存默认保存在用户机器；遥测默认关闭，不收集代码正文。
+- 兼容但不绑定：DeepSeek 是第一目标提供商，同时保留 OpenAI/Anthropic 兼容适配层，便于私有部署和未来模型切换。
+- 前端一致：CLI/TUI 与 VS Code 展示同一份计划、同一份 diff、同一套审批与同一份验证状态。
+
+## 许可证策略
+
+`deepseek-coder` 使用 `AGPL-3.0-or-later`：
+
+- 允许商业使用、私有部署、修改和再分发。
+- 分发修改版时，必须以 AGPL-3.0-or-later 兼容方式提供对应源码。
+- 通过网络向用户提供修改版服务时，也必须向这些用户提供对应源码。
+- 使用未修改版本作为本地工具不要求公开自己的业务代码或被处理的项目代码。
+- 贡献者提交代码时，默认同意其贡献按 AGPL-3.0-or-later 授权。
+
+这个选择的目的不是阻止商业化，而是保证围绕 `deepseek-coder` 本身产生的改进继续回到开源生态。
+
+## 总体架构
+
+```text
+User
+  |
+  +-- CLI/TUI -------------------+
+  |                              |
+  +-- VS Code Extension ---------+--> Agent RPC Server
+                                      |
+                                      +-- Agent Core
+                                      |   +-- Turn Loop
+                                      |   +-- Context Builder
+                                      |   +-- Tool Registry
+                                      |   +-- Approval Engine
+                                      |   +-- Run Log
+                                      |
+                                      +-- Provider Adapters
+                                      |   +-- DeepSeek OpenAI API
+                                      |   +-- DeepSeek Anthropic API
+                                      |   +-- Local OpenAI-compatible API
+                                      |
+                                      +-- Workspace Tools
+                                          +-- file/read/search/edit
+                                          +-- apply_patch
+                                          +-- shell
+                                          +-- git
+                                          +-- lsp diagnostics
+                                          +-- mcp tools
+```
+
+### 推荐技术栈
+
+- Core：Rust。适合构建跨平台单文件 CLI/TUI、沙箱边界、文件索引、流式解析和可复现发布。
+- TUI：`ratatui`。DeepSeek-TUI 也采用终端优先形态，Rust TUI 生态成熟。
+- VS Code 插件：TypeScript。插件通过 JSON-RPC 启动并连接 Rust Agent RPC Server。
+- 协议：JSON-RPC 2.0 + Server-Sent Events 风格的增量事件，便于终端和 VS Code 共用。
+- 存储：本地 `.deepseek-coder/`，包含配置、索引、run log、token 统计和审批记录。
+- 测试：Rust 单元测试、快照测试、集成测试；VS Code 使用 `@vscode/test-electron`。
+
+## 开发环境配置
+
+`deepseek-coder` 采用 Rust + TypeScript 双栈，Rust 负责 Agent Core、CLI/TUI、RPC Server 和本地工具执行，TypeScript 负责 VS Code 插件与编辑器集成。
+
+仓库已经包含 Rust workspace、pnpm workspace、TypeScript 基础配置、VS Code 插件骨架和 `.env.example`。依赖安装需要开发者在本机执行，项目不会提交 `node_modules/`、构建产物、本地缓存或 API Key。
+
+### 基础依赖
+
+- Rust：使用 stable toolchain，项目使用 Rust 2024 edition；MSRV 在首个可运行版本落地后锁定到 `rust-toolchain.toml`。
+- Node.js：使用当前 LTS 版本，最低要求暂定为 `>= 22`。
+- 包管理器：使用 `pnpm`，通过 Corepack 启用。
+- Git：用于工作区状态、diff、patch 审计和发布标签。
+- ripgrep：搜索工具优先使用 `rg`。
+- VS Code：用于插件开发、调试和 `@vscode/test-electron` 集成测试。
+
+### Windows 本机工具安装
+
+Windows 开发机通常已经带有 Git、PowerShell、VS Code 和 Visual Studio Build Tools。先在新的 PowerShell 窗口中确认现有工具，不需要重复安装已经存在的组件。
+
+```powershell
+git --version
+code --version
+cl
+rustc --version
+cargo --version
+node --version
+corepack --version
+rg --version
+```
+
+如果某个命令不存在，按下面对应项补齐。
+
+#### PowerShell
+
+Windows 自带 Windows PowerShell，可以完成本项目开发。推荐使用 PowerShell 7，但不是硬性要求。
+
+缺少 PowerShell 7 时，可用一种方式安装：
+
+- 从 Microsoft Store 搜索 `PowerShell` 安装。
+- 从 PowerShell GitHub Releases 下载 Windows x64 MSI 安装包。
+- 使用企业软件源提供的 PowerShell 7 安装包。
+
+安装后打开新的终端，确认：
+
+```powershell
+$PSVersionTable.PSVersion
+```
+
+#### Git
+
+如果 `git --version` 已经可用，保持现状即可。
+
+缺少 Git 时，可用一种方式安装：
+
+- 从 Git for Windows 官网下载安装器，安装时保留默认选项即可。
+- 使用企业软件源安装 Git for Windows。
+- 使用 `winget install --id Git.Git --source winget`。
+
+安装后打开新的 PowerShell，确认：
+
+```powershell
+git --version
+```
+
+#### Visual Studio Build Tools
+
+Rust 在 Windows 下默认使用 MSVC 工具链。需要 Visual Studio Build Tools 提供 C/C++ 编译器和 Windows SDK。
+
+如果 `cl` 命令不可用，不一定代表 Build Tools 没装；`cl` 通常只在 Developer PowerShell 里自动进入 PATH。可以从开始菜单打开 `Developer PowerShell for VS 2022` 再执行：
+
+```powershell
+cl
+```
+
+缺少 Build Tools 或 C++ 工作负载时，可用一种方式安装：
+
+- 打开 Visual Studio Installer，选择 Build Tools 或 Visual Studio，点击 Modify。
+- 勾选 `Desktop development with C++`。
+- 确认包含 MSVC 编译器、Windows SDK 和 CMake tools for Windows。
+- 应用修改并等待安装完成。
+
+安装后重新打开 PowerShell。普通 PowerShell 中 `cargo build` 能调用 MSVC 即可；如果遇到 C++ 链接器错误，再用 `Developer PowerShell for VS 2022` 验证。
+
+#### Rust
+
+可以，从 Rust 官网下载 `rustup-init.exe` 安装是推荐方式。
+
+缺少 Rust 时，可用这一种方式安装：
+
+1. 打开 Rust 官网安装页：https://rustup.rs/
+2. 下载 Windows 版 `rustup-init.exe`。
+3. 双击运行 `rustup-init.exe`。
+4. 选择默认安装，也就是 stable toolchain、MSVC target 和默认 cargo 路径。
+5. 安装完成后关闭当前 PowerShell，重新打开一个新的 PowerShell。
+6. 确认 Rust 可用：
+
+```powershell
+rustc --version
+cargo --version
+rustup --version
+```
+
+如果安装后仍然找不到 `cargo`，检查用户级 `Path` 是否包含：
+
+```text
+%USERPROFILE%\.cargo\bin
+```
+
+然后安装项目需要的 Rust 组件：
+
+```powershell
+rustup default stable
+rustup component add rustfmt clippy
+```
+
+#### Node.js 和 pnpm
+
+如果 `node --version` 已经显示 `v22` 或更高版本，可以继续使用当前 Node.js。
+
+缺少 Node.js 或版本过低时，可用一种方式安装：
+
+- 从 Node.js 官网下载安装 LTS 版本安装器。
+- 使用企业软件源安装 Node.js LTS。
+- 使用 `winget install --id OpenJS.NodeJS.LTS --source winget`。
+
+安装后重新打开 PowerShell，确认：
+
+```powershell
+node --version
+corepack --version
+```
+
+pnpm 通过 Corepack 启用，不需要单独全局安装 npm 包：
+
+```powershell
+corepack enable
+corepack prepare pnpm@10.0.0 --activate
+```
+
+确认：
+
+```powershell
+pnpm --version
+```
+
+#### ripgrep
+
+`deepseek-coder` 搜索文件时优先使用 `rg`。
+
+缺少 ripgrep 时，可用一种方式安装：
+
+- 从 ripgrep GitHub Releases 下载 Windows x64 压缩包，解压后把 `rg.exe` 所在目录加入用户级 `Path`。
+- 使用 `winget install --id BurntSushi.ripgrep.MSVC --source winget`。
+- Rust 已安装后，使用 `cargo install ripgrep`。
+
+安装后重新打开 PowerShell，确认：
+
+```powershell
+rg --version
+```
+
+#### VS Code
+
+如果 `code --version` 已经可用，保持现状即可。
+
+缺少 VS Code 或 `code` 命令不可用时，可用一种方式处理：
+
+- 已安装 VS Code 但没有 `code` 命令：重新运行 VS Code User Installer 并确认加入 PATH，或手动把 `%LOCALAPPDATA%\Programs\Microsoft VS Code\bin` 加入用户级 `Path`。
+- 未安装 VS Code：从 VS Code 官网下载 User Installer 安装，安装时保留加入 PATH 的选项。
+- 使用企业软件源安装 VS Code。
+
+确认：
+
+```powershell
+code --version
+```
+
+### Linux/macOS 工具安装
+
+Linux/macOS 可使用系统包管理器安装 Git、Node.js、ripgrep、C/C++ 编译工具、OpenSSL 头文件和 `pkg-config`，再通过 `rustup` 安装 Rust stable、`rustfmt` 和 `clippy`。
+
+### 项目依赖安装
+
+Rust 当前 scaffold 没有第三方 crate，`cargo build` 可以直接解析本地 workspace。TypeScript 和 VS Code 插件需要安装 npm 依赖：
+
+```powershell
+pnpm install
+```
+
+`pnpm install` 会生成 `pnpm-lock.yaml`，这个 lockfile 应该提交到仓库，用于锁定 TypeScript、VS Code 类型和插件打包工具版本。
+
+### 环境变量
+
+开发时可以复制 `.env.example` 到 `.env`，再填写 API Key。`.env` 已被 `.gitignore` 排除。
+
+```powershell
+Copy-Item .env.example .env
+notepad .env
+```
+
+也可以在当前 PowerShell 会话中临时设置：
+
+```powershell
+$env:DEEPSEEK_API_KEY = "sk-..."
+$env:DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+$env:DEEPSEEK_MODEL = "deepseek-v4-pro"
+$env:DEEPSEEK_CODER_HOME = ".deepseek-coder"
+$env:RUST_LOG = "deepseek_coder=info"
+```
+
+需要用户级持久环境变量时使用：
+
+```powershell
+[Environment]::SetEnvironmentVariable("DEEPSEEK_API_KEY", "sk-...", "User")
+```
+
+API Key 不应提交到仓库。本项目默认忽略 `.env`、本地缓存、run log 和密钥文件。
+
+### 预期配置文件
+
+```text
+.
+├── rust-toolchain.toml
+├── rustfmt.toml
+├── Cargo.toml
+├── pnpm-workspace.yaml
+├── package.json
+├── tsconfig.base.json
+├── .editorconfig
+├── .env.example
+├── crates/
+│   ├── agent-core/
+│   ├── agent-rpc/
+│   ├── cli/
+│   └── tui/
+├── packages/
+│   └── protocol/
+└── vscode/
+    └── extension/
+```
+
+`rust-toolchain.toml` 负责锁定 Rust channel、edition 相关组件和格式化工具；`pnpm-workspace.yaml` 负责管理 VS Code 插件、共享协议包和未来可能的 Web UI 包。
+
+### 常用开发命令
+
+Rust workspace：
+
+```powershell
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo build --workspace
+```
+
+TypeScript workspace，需要先运行 `pnpm install`：
+
+```powershell
+pnpm -r typecheck
+pnpm -r lint
+pnpm -r test
+pnpm -C vscode/extension package
+```
+
+全量检查：
+
+```powershell
+pnpm run check
+```
+
+首个 MVP 合入前，CI 至少应覆盖 Rust 格式化、Clippy、单元测试、TypeScript lint、TypeScript 类型检查和 VS Code 插件测试。
+
+## 长上下文方案
+
+1M 上下文的价值在于稳定、完整、可复用，而不是把所有文件无序拼接给模型。
+
+### Context Capsule
+
+每次 Agent 回合生成一个 `Context Capsule`：
+
+```text
+system policy
+project rules
+user task
+workspace manifest
+git status and diff summary
+selected file contents
+tool results
+active plan
+acceptance criteria
+previous run summary
+```
+
+上下文构建必须满足：
+
+- 稳定排序：项目规则、manifest、文件内容和日志摘要顺序固定，提升缓存命中率。
+- 精确计量：所有片段在进入请求前计算 token 预算，并记录在 run log。
+- 明确来源：每段内容带 path、mtime、git object id 或命令 id。
+- 边界完整：文件片段按语法单元或整文件进入；不能把函数、类、JSON、Markdown 表格截断成不可解析状态。
+- 超预算即停止：如果必要上下文无法纳入预算，回合应报告缺口，让用户选择缩小任务或允许分阶段执行。
+
+### Workspace Manifest
+
+Manifest 是长上下文的骨架，建议使用 JSONL：
+
+```json
+{"path":"src/main.rs","kind":"rust","bytes":12345,"tokens":3210,"sha256":"...","git":"HEAD:..."}
+{"path":"README.md","kind":"markdown","bytes":8000,"tokens":1800,"sha256":"...","git":"working-tree"}
+```
+
+Manifest 还应记录：
+
+- ignore 规则：`.gitignore`、用户配置、秘密文件规则。
+- 语言与构建系统：package manager、test command、formatter、linter。
+- 入口点：bin、library、VS Code extension activation、MCP server。
+- 风险标记：大文件、生成文件、锁文件、二进制文件、秘密疑似文件。
+
+### 缓存策略
+
+DeepSeek API 默认支持上下文硬盘缓存。为了提高命中率：
+
+- 把稳定内容放在前缀：系统约束、项目规则、manifest、固定文件快照。
+- 把易变内容放在后缀：用户新消息、最新命令输出、临时计划。
+- 每轮记录 `prompt_cache_hit_tokens` 与 `prompt_cache_miss_tokens`。
+- 对大仓库任务优先使用“整仓前缀 + 变更后缀”的回合结构。
+
+## Agent 回合
+
+基础回合如下：
+
+1. 读取任务与工作区状态。
+2. 构建 Context Capsule。
+3. 调用模型，流式接收 `reasoning_content`、`content` 和 tool calls。
+4. 校验 tool call schema。
+5. 若工具有风险，进入审批。
+6. 执行工具并写入 run log。
+7. 根据结果继续子回合，直到生成计划、补丁或最终报告。
+8. 运行验证命令。
+9. 输出变更摘要、测试结果和残余风险。
+
+思考模式下如果发生工具调用，后续请求必须按 DeepSeek 文档完整回传相关 `reasoning_content`。Agent Core 应把这件事作为协议状态机处理，避免前端各自实现。
+
+## 工具系统
+
+第一阶段内置工具：
+
+- `workspace_manifest`：生成工作区 manifest。
+- `read_file`：读取文本文件，保留编码与行号。
+- `search`：优先使用 `rg`，记录命令、耗时和匹配数量。
+- `apply_patch`：唯一的文本写入入口，记录 patch 与反向 patch。
+- `shell`：执行命令，按风险等级审批。
+- `git_status` / `git_diff`：只读 git 状态。
+- `lsp_diagnostics`：读取 VS Code 或独立语言服务器诊断。
+- `plan_update`：记录 Agent 当前计划。
+
+后续扩展：
+
+- MCP client。
+- 浏览器自动化工具。
+- 包管理器工具。
+- issue/PR 工具。
+- 本地模型或私有推理服务适配器。
+
+### 工具风险等级
+
+| 等级 | 示例 | 默认行为 |
+| --- | --- | --- |
+| Read | 读取文件、搜索、git status | 自动允许 |
+| Write | apply_patch、格式化当前项目文件 | 展示 diff 后审批 |
+| Exec | 测试、构建、lint | 展示命令后审批或按规则允许 |
+| Network | 下载依赖、访问远程 API | 明确审批 |
+| Destructive | 删除、reset、清理未跟踪文件 | 总是审批，要求展示目标路径 |
+
+## CLI/TUI 体验
+
+MVP 命令：
+
+```bash
+deepseek-coder
+deepseek-coder run "修复 failing tests"
+deepseek-coder plan "给这个仓库加 VS Code 插件"
+deepseek-coder doctor
+deepseek-coder resume <run-id>
+deepseek-coder log <run-id>
+```
+
+TUI 页面：
+
+- Chat：对话、流式输出、工具调用。
+- Plan：当前计划、状态、验收标准。
+- Diff：文件级 diff 与 hunk 审批。
+- Tools：命令输出、耗时、退出码。
+- Context：token 预算、缓存命中、上下文来源。
+- Settings：模型、base URL、审批策略、ignore 规则。
+
+## VS Code 插件方案
+
+VS Code 插件不是简单包一层终端，而是直接复用 Agent Core：
+
+- Sidebar Chat：项目级任务、计划、工具日志。
+- Inline Diff：用 VS Code 原生 diff editor 展示补丁。
+- Code Actions：对选中代码生成修复、解释、测试、重构计划。
+- Diagnostics Loop：读取 Problems 面板，把错误作为上下文。
+- Terminal Approval：执行命令前展示 shell、cwd、环境变量差异。
+- Workspace Trust：未信任工作区禁用写入和命令执行。
+- Settings Sync：模型、base URL、审批策略、上下文预算、排除规则。
+- FIM Completion：通过 DeepSeek FIM Beta 提供补全；最大补全长度按官方限制处理。
+
+插件与核心通信：
+
+```text
+extension.ts
+  -> spawn deepseek-coder rpc --stdio
+  -> initialize(workspace, config)
+  -> sendUserTurn(...)
+  <- stream events: delta, tool_call, approval_required, patch, diagnostics, done
+```
+
+## 可参考 DeepSeek-TUI 的地方
+
+- 终端优先：键盘驱动、低依赖、跨平台发布。
+- 沙箱与审批：让危险操作进入显式确认流程。
+- MCP：把外部能力作为协议化工具，而不是硬编码进主循环。
+- 多安装渠道：npm wrapper、Cargo、Homebrew、GitHub Releases、Docker。
+- 本地配置：通过用户目录保存 provider、模型、locale、审批策略。
+
+## 本项目要做得不同
+
+- VS Code 首发同级支持，而不是后续附属界面。
+- Context Capsule 成为核心数据结构，并在 UI 中展示 token 来源和缓存命中。
+- run log 可回放：同一轮请求、工具结果、补丁和验证结果可以导出为审计包。
+- 插件、TUI 和自动化模式共用同一套工具权限系统。
+- 对自由软件发布更严格：源码、构建脚本、发布校验、贡献规范和安全策略一起发布。
+- 更重视中文工作流：中文项目规则、中文 commit/PR 摘要、双语文档和中文错误解释作为内置能力。
+
+## 开发计划
+
+当前进度：Phase 0 进行中。项目章程、基础 workspace、Windows 开发环境说明、本地检查链路、CI 骨架和基础社区文档已经完成；正式协议设计尚未完成。
+
+### Phase 0：项目章程
+
+- [x] 确定 `deepseek-coder` 名称和 AGPL-3.0-or-later 许可证。
+- [x] 编写 README 技术方案、架构、开发计划和注意事项。
+- [x] 建立 Rust workspace：`agent-core`、`agent-rpc`、`cli`、`tui`。
+- [x] 建立 TypeScript/pnpm workspace：`packages/protocol` 和 `vscode/extension`。
+- [x] 建立基础环境配置：`rust-toolchain.toml`、`rustfmt.toml`、`tsconfig.base.json`、`.editorconfig`、`.gitattributes`、`.env.example`。
+- [x] 更新 `.gitignore`，排除本地状态、依赖目录、构建产物和密钥文件。
+- [x] 生成并保留 `Cargo.lock` 与 `pnpm-lock.yaml`。
+- [x] 在 Windows 本机跑通 `pnpm run check`。
+- [x] 建立 CI 骨架。
+- [x] 建立 `CONTRIBUTING.md`、`CODE_OF_CONDUCT.md`、`SECURITY.md`。
+- [ ] 设计正式 JSON-RPC 事件协议。
+- [ ] 定义工具 schema、风险等级和审批模型。
+
+### Phase 1：Agent Core MVP
+
+- [ ] DeepSeek OpenAI API adapter。
+- [ ] 流式响应解析。
+- [ ] `reasoning_content` 状态机。
+- [ ] read/search/apply_patch/shell/git 工具。
+- [ ] run log。
+- [ ] 基础上下文构建与 token 统计。
+
+验收标准：
+
+- 能在一个小型 Rust/TypeScript 项目中读取代码、生成计划、修改文件、运行测试并报告结果。
+- 所有写入都经过 patch。
+- 所有命令都有 cwd、退出码和输出记录。
+
+### Phase 2：1M Context Capsule
+
+- [ ] workspace manifest。
+- [ ] 稳定前缀构建。
+- [ ] token 预算报告。
+- [ ] 缓存命中统计。
+- [ ] 超预算停止机制。
+- [ ] 大仓库基准测试。
+
+验收标准：
+
+- 在 200K、500K、900K token 三档样例仓库上生成可审计 Context Capsule。
+- 能展示哪些文件进入上下文、哪些没有进入，以及原因。
+
+### Phase 3：TUI
+
+- [ ] Chat/Plan/Diff/Tools/Context/Settings 页面。
+- [ ] hunk 级审批。
+- [ ] run resume。
+- [ ] 配置文件。
+- [ ] release binary。
+
+### Phase 4：VS Code 插件
+
+- [x] TypeScript extension scaffold。
+- [ ] RPC server 管理。
+- [ ] Sidebar Chat。
+- [ ] Native diff editor。
+- [ ] Problems 面板集成。
+- [ ] Terminal command approval。
+- [ ] FIM completion preview。
+
+验收标准：
+
+- 插件不需要用户手动打开终端即可完成一次“诊断 -> 修改 -> 测试 -> 报告”。
+- 插件和 CLI 对同一任务产生一致的 run log。
+
+### Phase 5：自由软件发布
+
+- [x] 确定许可证：AGPL-3.0-or-later。
+- [ ] 发布 `LICENSE`、源码获取说明和网络服务源码提供说明。
+- [ ] 发布源码包、Cargo crate、npm wrapper、VSIX、GitHub Release 校验和。
+- [ ] 建立公开 roadmap 和 issue 模板。
+- [ ] 增加 reproducible build 说明。
+
+## 安全与注意事项
+
+- API Key 只能从环境变量、系统密钥链或用户配置读取，不能进入 run log。
+- 默认排除 `.env`、密钥、证书、浏览器配置、包管理器 token 和大型二进制文件。
+- 运行命令前展示 cwd、命令、环境变量差异和风险等级。
+- Windows、Linux、macOS 的沙箱能力不同，必须分别实现和测试。
+- 不自动执行 `git reset`、删除文件、修改远程分支、发布包或上传数据。
+- 不把模型输出当作可信 JSON；所有 tool call arguments 在执行前验证 schema。
+- FIM 补全是 Beta 能力，且最大补全长度有限，不能把它当成大规模重构工具。
+- DeepSeek 价格、模型名、折扣和 Beta 能力可能变化，README 中的数字只作为设计依据，最终以官方文档为准。
+- DeepSeek V3.2 开源权重使用 MIT 许可证；API 使用还受 DeepSeek 平台条款约束。本项目 AGPL 许可证只覆盖本项目代码。
+- VS Code Marketplace 发布需要遵守 Microsoft Marketplace 规则；自由软件源码发布不等于自动上架成功。
+
+## 配置草案
+
+```toml
+[provider]
+name = "deepseek"
+base_url = "https://api.deepseek.com"
+model = "deepseek-v4-pro"
+thinking = "enabled"
+reasoning_effort = "max"
+
+[context]
+max_input_tokens = 1000000
+stable_prefix = true
+record_cache_usage = true
+
+[approval]
+write = "ask"
+exec = "ask"
+network = "ask"
+destructive = "always_ask"
+
+[workspace]
+state_dir = ".deepseek-coder"
+respect_gitignore = true
+```
+
+## 当前目录结构
+
+```text
+.
+├── Cargo.toml
+├── CODE_OF_CONDUCT.md
+├── CONTRIBUTING.md
+├── package.json
+├── pnpm-workspace.yaml
+├── rust-toolchain.toml
+├── rustfmt.toml
+├── SECURITY.md
+├── tsconfig.base.json
+├── .github/
+│   └── workflows/
+│       └── ci.yml
+├── crates/
+│   ├── agent-core/
+│   ├── agent-rpc/
+│   ├── cli/
+│   └── tui/
+├── packages/
+│   └── protocol/
+├── vscode/
+│   └── extension/
+└── README.md
+```
+
+后续实现阶段再补充 `docs/`、`examples/`、`tests/` 和发布脚本目录。
+
+## 参考资料
+
+- DeepSeek API 快速开始：https://api-docs.deepseek.com/
+- DeepSeek 模型与价格：https://api-docs.deepseek.com/zh-cn/quick_start/pricing
+- DeepSeek 思考模式：https://api-docs.deepseek.com/zh-cn/guides/thinking_mode
+- DeepSeek Tool Calls：https://api-docs.deepseek.com/zh-cn/guides/tool_calls
+- DeepSeek 上下文硬盘缓存：https://api-docs.deepseek.com/zh-cn/guides/kv_cache
+- DeepSeek FIM 补全：https://api-docs.deepseek.com/zh-cn/guides/fim_completion
+- DeepSeek Agent 工具接入：https://api-docs.deepseek.com/zh-cn/quick_start/agent_integrations/claude_code
+- DeepSeek-TUI：https://github.com/Hmbown/deepseek-tui
+- DeepSeek-TUI 官网：https://deepseek-tui.com/en
+- DeepSeek 集成列表：https://github.com/deepseek-ai/awesome-deepseek-integration
