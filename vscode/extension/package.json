@@ -1,0 +1,39 @@
+{
+  "name": "deepseek-coder-vscode",
+  "displayName": "deepseek-coder",
+  "description": "VS Code extension for deepseek-coder.",
+  "version": "0.1.0",
+  "private": true,
+  "license": "AGPL-3.0-or-later",
+  "publisher": "deepseek-coder",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22.0.0",
+    "vscode": "^1.100.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": ["onCommand:deepseek-coder.openChat"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "deepseek-coder.openChat",
+        "title": "deepseek-coder: Open Chat"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "package": "vsce package",
+    "test": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.100.0",
+    "@vscode/test-electron": "^2.4.0",
+    "@vscode/vsce": "^3.0.0",
+    "typescript": "^5.8.0"
+  }
+}

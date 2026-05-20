@@ -1,0 +1,20 @@
+{
+  "name": "deepseek-coder",
+  "version": "0.1.0",
+  "private": true,
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "packageManager": "pnpm@10.0.0",
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=10.0.0"
+  },
+  "scripts": {
+    "build": "cargo build --workspace && pnpm -r build",
+    "check": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && pnpm -r typecheck",
+    "format": "cargo fmt --all",
+    "lint": "cargo clippy --workspace --all-targets -- -D warnings && pnpm -r lint",
+    "test": "cargo test --workspace && pnpm -r test",
+    "typecheck": "pnpm -r typecheck"
+  }
+}
