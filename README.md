@@ -103,7 +103,7 @@ User
 ### 基础依赖
 
 - Rust：使用 stable toolchain，项目使用 Rust 2024 edition；MSRV 在首个可运行版本落地后锁定到 `rust-toolchain.toml`。
-- Node.js：使用当前 LTS 版本，最低要求暂定为 `>= 22`。
+- Node.js：使用当前 Active LTS 版本，最低要求暂定为 `>= 24`。
 - 包管理器：使用 `pnpm`，通过 Corepack 启用。
 - Git：用于工作区状态、diff、patch 审计和发布标签。
 - ripgrep：搜索工具优先使用 `rg`。
@@ -211,7 +211,7 @@ rustup component add rustfmt clippy
 
 #### Node.js 和 pnpm
 
-如果 `node --version` 已经显示 `v22` 或更高版本，可以继续使用当前 Node.js。
+如果 `node --version` 已经显示 `v24` 或更高版本，可以继续使用当前 Node.js。
 
 缺少 Node.js 或版本过低时，可用一种方式安装：
 
