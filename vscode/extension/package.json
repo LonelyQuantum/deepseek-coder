@@ -26,7 +26,7 @@
     "build": "tsc -p tsconfig.json",
     "lint": "tsc -p tsconfig.json --noEmit",
     "package": "vsce package",
-    "test": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.test.json && node --test \"out-test/**/*.test.js\"",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
