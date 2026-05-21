@@ -142,7 +142,7 @@ Request：
       "version": "0.1.0",
       "frontend": "vscode"
     },
-    "workspaceRoot": "C:/Users/Shenglin/Developer/deepseek-coder",
+    "workspaceRoot": "C:/workspace/deepseek-coder",
     "workspaceTrusted": true
   }
 }
@@ -601,7 +601,7 @@ Server 请求命令审批：
       "risk": "exec",
       "title": "Run tests",
       "detail": "Execute cargo test --workspace",
-      "cwd": "C:/Users/Shenglin/Developer/deepseek-coder",
+      "cwd": "C:/workspace/deepseek-coder",
       "command": "cargo test --workspace",
       "persistable": false
     }
