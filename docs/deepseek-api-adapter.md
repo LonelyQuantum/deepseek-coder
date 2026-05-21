@@ -50,7 +50,12 @@ POST /chat/completions
 }
 ```
 
-`thinking.type` 支持 `enabled` 和 `disabled`。`reasoning_effort` 在本项目中只发出 `high` 与 `max`，不主动使用会被服务端映射的兼容值。
+`thinking.type` 支持 `enabled` 和 `disabled`。`reasoning_effort` 在本项目中只发出 `high` 与 `max`，不主动使用会被服务端映射的兼容值。`reasoning_effort` 只在 `thinking.type = enabled` 时发送；当请求显式关闭 thinking 时，adapter 会移除 `reasoning_effort`，避免生成服务端拒绝的参数组合。
+
+DeepSeek V4 thinking mode 不支持 `tool_choice`。adapter 在发送请求前执行本地校验：
+
+- `thinking.type = disabled` 且仍带有 `reasoning_effort` 时失败。
+- `tool_choice` 存在且 thinking 未显式关闭时失败。
 
 Streaming 使用 data-only SSE。服务端可能发送：
 
