@@ -2,6 +2,7 @@
 
 pub mod approval;
 pub mod provider;
+pub mod reasoning;
 pub mod tool;
 
 pub const PROJECT_NAME: &str = "deepseek-coder";
