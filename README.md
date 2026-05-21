@@ -288,12 +288,14 @@ pnpm install
 
 ### 环境变量
 
-开发时可以复制 `.env.example` 到 `.env`，再填写 API Key。`.env` 已被 `.gitignore` 排除。
+开发时可以复制 `.env.example` 到 `.env`，用于选择 base URL、模型、本地状态目录和日志级别。`.env` 已被 `.gitignore` 排除。
 
 ```powershell
 Copy-Item .env.example .env
 notepad .env
 ```
+
+DeepSeek API Key 建议单独放在 `.secrets/deepseek-api-key`。`.secrets/` 已被 `.gitignore` 排除，这个文件只放 key 本身，不放 base URL 或模型名。
 
 也可以在当前 PowerShell 会话中临时设置：
 

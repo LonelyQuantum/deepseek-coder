@@ -98,12 +98,11 @@ DeepSeek streaming 返回 data-only SSE。网络层可能把一个 SSE event 切
 ## 环境变量
 
 ```text
-DEEPSEEK_API_KEY=<your-deepseek-api-key>
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-v4-pro
 ```
 
-`DEEPSEEK_API_KEY` 必须存在。`DEEPSEEK_BASE_URL` 和 `DEEPSEEK_MODEL` 有项目默认值，但默认值必须在配置快照中可见。
+运行时 adapter 仍然从 `DEEPSEEK_API_KEY` 读取密钥。真实联网测试额外支持从 `.secrets/deepseek-api-key` 读取本地密钥文件；这个文件只放 API Key，不放 base URL 或模型名。`DEEPSEEK_BASE_URL` 和 `DEEPSEEK_MODEL` 有项目默认值，也可以在外部测试配置或当前 shell 环境变量中选择。
 
 ## 错误处理
 
@@ -136,6 +135,8 @@ adapter 只负责序列化和反序列化 `reasoning_content` 字段。是否需
 - 配置 Debug 不泄露 API Key。
 - base URL 带路径时 endpoint 拼接正确。
 - thinking request 序列化。
+- `thinking.type = disabled` 时不会发送 `reasoning_effort`。
+- `tool_choice` 与 thinking mode 的不兼容组合会在本地校验失败。
 - 非流式响应中 `reasoning_content`、tool calls、usage 反序列化。
 - SSE keep-alive、chunk、usage chunk 和 `[DONE]` 解析。
 - SSE byte parser 的跨 chunk、CRLF、无效 UTF-8 和不完整事件处理。
@@ -155,20 +156,25 @@ crates/agent-core/tests/deepseek_api_live.rs
 
 - 测试被显式以 ignored test 方式运行。
 - `DEEPSEEK_CODER_LIVE_TESTS=1`。
-- `DEEPSEEK_API_KEY` 存在。
+- `DEEPSEEK_API_KEY` 存在，或 `.secrets/deepseek-api-key` 存在且内容为真实 DeepSeek API Key。
 - 当前网络可以访问 DeepSeek API。
+
+当前 ignored live tests 包括：
+
+- `live_chat_completion_smoke_test`：非流式基础可达性。
+- `live_chat_completion_stream_smoke_test`：流式基础可达性。
+- `live_reasoning_content_tool_replay_smoke_test`：thinking + tool call + `reasoning_content` 回传。
 
 Windows PowerShell 示例：
 
 ```powershell
 $env:DEEPSEEK_CODER_LIVE_TESTS = "1"
-$env:DEEPSEEK_API_KEY = "<your-deepseek-api-key>"
 $env:DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 $env:DEEPSEEK_MODEL = "deepseek-v4-pro"
 cargo test -p deepseek-coder-agent-core --test deepseek_api_live -- --ignored --nocapture
 ```
 
-不要把真实 API Key 写入 Git 跟踪文件。推荐只放在当前 shell 环境变量、系统密钥管理器、被 `.gitignore` 忽略的 `.env.local`，或 `.deepseek-coder/secrets/` / `.secrets/` 目录中。CI 默认不会运行这些 ignored live tests。
+不要把真实 API Key 写入 Git 跟踪文件。推荐只放在当前 shell 环境变量、系统密钥管理器，或被 `.gitignore` 忽略的 `.secrets/deepseek-api-key` 中。base URL 和模型名不属于密钥，可以通过 `DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL` 或外部测试配置选择。CI 默认不会运行这些 ignored live tests。
 
 ## 参考资料
 
