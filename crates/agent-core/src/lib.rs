@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod approval;
+pub mod provider;
 pub mod tool;
 
 pub const PROJECT_NAME: &str = "deepseek-coder";
