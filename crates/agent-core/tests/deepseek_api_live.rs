@@ -120,7 +120,99 @@ async fn live_chat_completion_smoke_test() -> Result<(), Box<dyn Error>> {
 }
 
 #[tokio::test]
-#[ignore = "requires DEEPSEEK_CODER_LIVE_TESTS=1, DEEPSEEK_API_KEY, and network access"]
+#[ignore = "requires DEEPSEEK_CODER_LIVE_TESTS=1, API key, and network access"]
+async fn live_reasoning_content_tool_replay_smoke_test() -> Result<(), Box<dyn Error>> {
+    let Some(adapter) = live_adapter()? else {
+        return Ok(());
+    };
+
+    let system_message = ChatMessage::system(
+        "For this live test, use the provided tool before giving the final answer.",
+    );
+    let user_message = ChatMessage::user(
+        "Call get_live_reasoning_fixture exactly once. After the tool result, reply with the exact token OK_REASONING_REPLAY.",
+    );
+    let request = adapter
+        .new_chat_request(vec![system_message.clone(), user_message.clone()])?
+        .with_thinking(ThinkingConfig::enabled())
+        .with_max_tokens(256)
+        .with_tools(vec![live_reasoning_probe_tool()]);
+
+    let response = adapter.create_chat_completion(request).await?;
+    let choice = response
+        .choices
+        .first()
+        .ok_or("live reasoning response must contain at least one choice")?;
+    let reasoning_content = choice
+        .message
+        .reasoning_content
+        .as_deref()
+        .ok_or("live reasoning tool-call response must include reasoning_content")?;
+    assert!(
+        !reasoning_content.trim().is_empty(),
+        "live reasoning_content should not be empty"
+    );
+
+    let tool_calls = choice
+        .message
+        .tool_calls
+        .clone()
+        .ok_or("live reasoning response must include a tool call")?;
+    assert_eq!(
+        tool_calls.len(),
+        1,
+        "live reasoning test expects one tool call"
+    );
+    assert_eq!(
+        tool_calls[0].function.name, "get_live_reasoning_fixture",
+        "live reasoning test should call the forced fixture tool"
+    );
+
+    let mut messages = vec![system_message, user_message];
+    messages.push(ChatMessage::assistant_with_tool_calls(
+        choice.message.content.clone(),
+        choice.message.reasoning_content.clone(),
+        tool_calls.clone(),
+    ));
+    messages.push(ChatMessage::tool_result(
+        tool_calls[0].id.clone(),
+        "fixture_token=OK_REASONING_REPLAY",
+    ));
+
+    let prepared = ReasoningContentStateMachine::thinking_enabled().prepare_messages(&messages)?;
+    assert_eq!(
+        prepared.state,
+        ReasoningContentState::ReplayRequired {
+            assistant_messages: 1
+        }
+    );
+    assert_eq!(
+        prepared.messages[2].reasoning_content.as_deref(),
+        Some(reasoning_content),
+        "state machine must preserve tool-call reasoning_content for replay"
+    );
+
+    let follow_up = adapter
+        .new_chat_request(prepared.messages)?
+        .with_thinking(ThinkingConfig::enabled())
+        .with_max_tokens(128);
+    let follow_up_response = adapter.create_chat_completion(follow_up).await?;
+    let final_content = follow_up_response
+        .choices
+        .first()
+        .and_then(|choice| choice.message.content.as_deref())
+        .ok_or("live reasoning follow-up response must include content")?;
+
+    assert!(
+        final_content.contains("OK_REASONING_REPLAY"),
+        "live reasoning follow-up should use the replayed tool result; got: {final_content}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires DEEPSEEK_CODER_LIVE_TESTS=1, API key, and network access"]
 async fn live_chat_completion_stream_smoke_test() -> Result<(), Box<dyn Error>> {
     let Some(adapter) = live_adapter()? else {
         return Ok(());
