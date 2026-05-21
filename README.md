@@ -6,7 +6,7 @@
 
 ## 为什么做
 
-DeepSeek V4 API 当前提供 `deepseek-v4-flash` 与 `deepseek-v4-pro`，支持 1M 上下文、最大 384K 输出、OpenAI/Anthropic 兼容接口、思考模式、Tool Calls、FIM 补全和上下文硬盘缓存。代码 Agent 可以把这些能力组合成一种更适合大仓库的软件维护方式：少做碎片化检索，多做可审计的整仓理解、计划、修改、验证和回放。
+DeepSeek V4 API 当前提供 `deepseek-v4-flash` 与 `deepseek-v4-pro`，支持 1M 上下文、最大 384K 输出、思考模式、Tool Calls、FIM 补全和上下文硬盘缓存。代码 Agent 可以把这些能力组合成一种更适合大仓库的软件维护方式：少做碎片化检索，多做可审计的整仓理解、计划、修改、验证和回放。
 
 DeepSeek-TUI 已经证明了一个方向：终端内的代码 Agent 可以读取代码、编辑文件、运行命令、调用 MCP，并通过沙箱与审批保护用户工作区。本项目会参考它的产品形态和工程边界，但把重点放在以下差异上：
 
@@ -22,7 +22,7 @@ DeepSeek-TUI 已经证明了一个方向：终端内的代码 Agent 可以读取
 - 长上下文不是无限信任：1M 上下文用于提供更多证据，不替代测试、类型检查、LSP 诊断和人工确认。
 - 显式失败优先：当上下文预算、权限、工具输出或模型响应不满足协议时，系统应停止并报告原因。
 - 本地优先：配置、日志、索引和缓存默认保存在用户机器；遥测默认关闭，不收集代码正文。
-- 兼容但不绑定：DeepSeek 是第一目标提供商，同时保留 OpenAI/Anthropic 兼容适配层，便于私有部署和未来模型切换。
+- 兼容但不绑定：DeepSeek 是第一目标提供商，provider API 保持足够表达性，便于未来适配私有部署、兼容协议和其他模型服务。
 - 前端一致：CLI/TUI 与 VS Code 展示同一份计划、同一份 diff、同一套审批与同一份验证状态。
 
 ## 许可证策略
@@ -54,9 +54,8 @@ User
                                       |   +-- Run Log
                                       |
                                       +-- Provider Adapters
-                                      |   +-- DeepSeek OpenAI API
-                                      |   +-- DeepSeek Anthropic API
-                                      |   +-- Local OpenAI-compatible API
+                                      |   +-- DeepSeek API
+                                      |   +-- Local compatible API
                                       |
                                       +-- Workspace Tools
                                           +-- file/read/search/edit
@@ -84,6 +83,7 @@ User
 
 - `docs/architecture.md`：总体架构。
 - `docs/agent-core.md`：Agent Core 回合与职责。
+- `docs/deepseek-api-adapter.md`：DeepSeek API adapter。
 - `docs/json-rpc-protocol.md`：内部 JSON-RPC 协议。
 - `docs/context-capsule.md`：长上下文构建。
 - `docs/tool-system.md`：工具系统。
@@ -297,7 +297,7 @@ notepad .env
 也可以在当前 PowerShell 会话中临时设置：
 
 ```powershell
-$env:DEEPSEEK_API_KEY = "sk-..."
+$env:DEEPSEEK_API_KEY = "<your-deepseek-api-key>"
 $env:DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 $env:DEEPSEEK_MODEL = "deepseek-v4-pro"
 $env:DEEPSEEK_CODER_HOME = ".deepseek-coder"
@@ -307,7 +307,7 @@ $env:RUST_LOG = "deepseek_coder=info"
 需要用户级持久环境变量时使用：
 
 ```powershell
-[Environment]::SetEnvironmentVariable("DEEPSEEK_API_KEY", "sk-...", "User")
+[Environment]::SetEnvironmentVariable("DEEPSEEK_API_KEY", "<your-deepseek-api-key>", "User")
 ```
 
 API Key 不应提交到仓库。本项目默认忽略 `.env`、本地缓存、run log 和密钥文件。
@@ -550,8 +550,8 @@ extension.ts
 
 ### Phase 1：Agent Core MVP
 
-- [ ] DeepSeek OpenAI API adapter。
-- [ ] 流式响应解析。
+- [x] DeepSeek API adapter。
+- [x] 流式响应解析。
 - [ ] `reasoning_content` 状态机。
 - [ ] read/search/apply_patch/shell/git 工具。
 - [ ] run log。
