@@ -500,7 +500,7 @@ impl ChatMessage {
     ) -> Self {
         Self {
             role: ChatRole::Assistant,
-            content,
+            content: Some(content.unwrap_or_default()),
             name: None,
             prefix: None,
             reasoning_content,
