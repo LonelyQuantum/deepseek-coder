@@ -84,6 +84,7 @@ User
 - `docs/architecture.md`：总体架构。
 - `docs/agent-core.md`：Agent Core 回合与职责。
 - `docs/deepseek-api-adapter.md`：DeepSeek API adapter。
+- `docs/reasoning-content.md`：`reasoning_content` 状态机。
 - `docs/json-rpc-protocol.md`：内部 JSON-RPC 协议。
 - `docs/context-capsule.md`：长上下文构建。
 - `docs/tool-system.md`：工具系统。
@@ -552,7 +553,7 @@ extension.ts
 
 - [x] DeepSeek API adapter。
 - [x] 流式响应解析。
-- [ ] `reasoning_content` 状态机。
+- [x] `reasoning_content` 状态机。
 - [ ] read/search/apply_patch/shell/git 工具。
 - [ ] run log。
 - [ ] 基础上下文构建与 token 统计。
