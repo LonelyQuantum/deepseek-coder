@@ -8,6 +8,7 @@
 
 - `architecture.md`：总体架构和 workspace 布局。
 - `agent-core.md`：Agent Core 职责和回合生命周期。
+- `deepseek-api-adapter.md`：DeepSeek API adapter 设计。
 - `json-rpc-protocol.md`：前端与 Rust RPC Server 之间的内部协议。
 - `context-capsule.md`：长上下文构建和缓存友好的 prompt 布局。
 - `tool-system.md`：内置工具注册、schema 和执行结果格式。

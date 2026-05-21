@@ -1,0 +1,180 @@
+# DeepSeek API Adapter
+
+状态：草案，Phase 1 首个实现。
+
+本文档定义 `deepseek-coder` 访问 DeepSeek API 的 Rust adapter。它属于 Agent Core 的 provider 边界，不直接处理 UI、审批、工具执行或 run log。
+
+## 目标
+
+- 使用 DeepSeek API 调用 `chat/completions`。
+- 默认支持 `deepseek-v4-pro`，同时保留 `deepseek-v4-flash`。
+- 显式表示 `thinking`、`reasoning_effort`、`reasoning_content`、tool calls、usage 和 cache token 字段。
+- 保持请求和响应类型的表达性，使未来适配不同 provider、私有部署或兼容协议时不丢失语义。
+- 解析 HTTP streaming 响应，包括分块 SSE、`: keep-alive`、`data: [DONE]` 和 `include_usage` 产生的空 choices usage chunk。
+- API Key 只来自环境变量或未来的安全配置来源，不进入 Debug 输出、run log 或错误上下文。
+
+## 非目标
+
+- 不在 adapter 内实现 Agent 回合循环。
+- 不在 adapter 内执行工具调用。
+- 不在 adapter 内决定审批策略。
+- 不在自动测试中真实调用 DeepSeek API。
+- 不把某个第三方兼容协议作为 adapter 的公开命名或主要抽象。
+- 不兼容即将弃用的 `deepseek-chat`、`deepseek-reasoner` 旧模型名，除非用户显式配置。
+
+## 官方接口约束
+
+DeepSeek API 默认 base URL：
+
+```text
+https://api.deepseek.com
+```
+
+Chat Completions endpoint：
+
+```text
+POST /chat/completions
+```
+
+当前主要模型：
+
+- `deepseek-v4-flash`
+- `deepseek-v4-pro`
+
+思考模式参数：
+
+```json
+{
+  "thinking": { "type": "enabled" },
+  "reasoning_effort": "high"
+}
+```
+
+`thinking.type` 支持 `enabled` 和 `disabled`。`reasoning_effort` 在本项目中只发出 `high` 与 `max`，不主动使用会被服务端映射的兼容值。
+
+Streaming 使用 data-only SSE。服务端可能发送：
+
+- `: keep-alive`
+- `data: {...chat.completion.chunk...}`
+- `data: [DONE]`
+
+当 `stream_options.include_usage = true` 时，结束前会额外返回一个 usage chunk，其 `choices` 为空。
+
+## Rust 模块
+
+实现位置：
+
+```text
+crates/agent-core/src/provider/deepseek_api.rs
+```
+
+核心类型：
+
+- `DeepSeekApiConfig`：base URL、模型、超时和 API Key。
+- `DeepSeekApiAdapter`：持有 `reqwest::Client`，负责发送 HTTP 请求。
+- `ChatCompletionRequest`：DeepSeek chat completion 请求体。
+- `ChatCompletionResponse`：非流式响应。
+- `ChatCompletionChunk`：流式 chunk。
+- `ChatCompletionStream`：HTTP streaming 响应转换后的事件流。
+- `SseEventParser`：增量解析 SSE byte chunks。
+- `StreamEvent`：`Chunk` 或 `Done`。
+- `parse_stream_event_block`：解析单个 SSE event block。
+
+## 流式响应解析
+
+DeepSeek streaming 返回 data-only SSE。网络层可能把一个 SSE event 切成多个 byte chunk，也可能把多个 event 放进同一个 byte chunk。因此 adapter 不直接按 HTTP chunk 边界解析 JSON，而是使用 `SseEventParser` 维护 byte buffer：
+
+1. `create_chat_completion_stream` 发送 `stream = true` 请求。
+2. 如果调用方没有显式设置 `stream_options`，adapter 默认设置 `include_usage = true`。
+3. HTTP 状态码非 2xx 时，读取响应 body 并返回 `DeepSeekApiError::Api`。
+4. 2xx 响应进入 byte stream，每次收到 bytes 后交给 `SseEventParser::push_bytes`。
+5. parser 只在遇到完整 SSE event 分隔符后解析事件，支持 `\n\n`、`\r\n\r\n` 和混合换行分隔符。
+6. `: keep-alive` 和空事件不产生 `StreamEvent`。
+7. `data: [DONE]` 产生 `StreamEvent::Done`，上层收到后结束流。
+8. HTTP stream 结束时如果仍有非空 byte buffer，返回 `IncompleteStreamEvent`，避免吞掉被截断的 JSON。
+
+`parse_stream_event_block` 只处理完整 event block。它支持多行 `data:`，会按 SSE 语义用换行拼接数据行；这让测试可以覆盖协议解析，而不需要真实 API 调用。
+
+## 环境变量
+
+```text
+DEEPSEEK_API_KEY=<your-deepseek-api-key>
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-v4-pro
+```
+
+`DEEPSEEK_API_KEY` 必须存在。`DEEPSEEK_BASE_URL` 和 `DEEPSEEK_MODEL` 有项目默认值，但默认值必须在配置快照中可见。
+
+## 错误处理
+
+adapter 使用显式错误枚举：
+
+- 缺少 API Key。
+- base URL 无效。
+- 模型 ID 为空。
+- 请求消息为空。
+- 非流式调用收到 streaming request。
+- HTTP 发送失败。
+- DeepSeek 返回非 2xx 状态。
+- JSON 响应或 SSE data 解析失败。
+
+非 2xx 响应保留 HTTP status 和响应 body，便于上层生成用户可读错误。API Key 不进入错误消息。
+
+## reasoning_content 规则
+
+adapter 只负责序列化和反序列化 `reasoning_content` 字段。是否需要在下一轮回传由 Agent Core 状态机决定：
+
+- 没有工具调用的普通多轮对话，可以不把上一轮 `reasoning_content` 放入后续上下文。
+- 发生工具调用后，后续所有相关 user 交互必须完整回传该 assistant 消息的 `reasoning_content`。
+
+这一规则后续应落在 `reasoning_content` 状态机，而不是 UI 或 provider adapter。
+
+## 测试策略
+
+当前测试不访问网络，覆盖：
+
+- 配置 Debug 不泄露 API Key。
+- base URL 带路径时 endpoint 拼接正确。
+- thinking request 序列化。
+- 非流式响应中 `reasoning_content`、tool calls、usage 反序列化。
+- SSE keep-alive、chunk、usage chunk 和 `[DONE]` 解析。
+- SSE byte parser 的跨 chunk、CRLF、无效 UTF-8 和不完整事件处理。
+- function tool schema 序列化。
+
+后续集成测试需要通过环境变量显式开启，并避免在 CI 中默认消耗 API 额度。
+
+## 真实联网测试
+
+真实联网测试位于：
+
+```text
+crates/agent-core/tests/deepseek_api_live.rs
+```
+
+这些测试默认不运行，必须同时满足：
+
+- 测试被显式以 ignored test 方式运行。
+- `DEEPSEEK_CODER_LIVE_TESTS=1`。
+- `DEEPSEEK_API_KEY` 存在。
+- 当前网络可以访问 DeepSeek API。
+
+Windows PowerShell 示例：
+
+```powershell
+$env:DEEPSEEK_CODER_LIVE_TESTS = "1"
+$env:DEEPSEEK_API_KEY = "<your-deepseek-api-key>"
+$env:DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+$env:DEEPSEEK_MODEL = "deepseek-v4-pro"
+cargo test -p deepseek-coder-agent-core --test deepseek_api_live -- --ignored --nocapture
+```
+
+不要把真实 API Key 写入 Git 跟踪文件。推荐只放在当前 shell 环境变量、系统密钥管理器、被 `.gitignore` 忽略的 `.env.local`，或 `.deepseek-coder/secrets/` / `.secrets/` 目录中。CI 默认不会运行这些 ignored live tests。
+
+## 参考资料
+
+- DeepSeek API 首次调用：https://api-docs.deepseek.com/zh-cn/
+- DeepSeek Chat Completions：https://api-docs.deepseek.com/api/create-chat-completion
+- DeepSeek 思考模式：https://api-docs.deepseek.com/zh-cn/guides/thinking_mode
+- DeepSeek 模型与价格：https://api-docs.deepseek.com/quick_start/pricing/
+- DeepSeek 限速说明：https://api-docs.deepseek.com/quick_start/rate_limit/
+- DeepSeek 错误码：https://api-docs.deepseek.com/quick_start/error_codes
