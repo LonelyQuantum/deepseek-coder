@@ -1,9 +1,9 @@
 import * as vscode from "vscode";
 
+import { registerOpenChatCommand } from "./commands";
+
 export function activate(context: vscode.ExtensionContext): void {
-  const openChat = vscode.commands.registerCommand("deepseek-coder.openChat", () => {
-    void vscode.window.showInformationMessage("deepseek-coder workspace is ready.");
-  });
+  const openChat = registerOpenChatCommand(vscode.commands, vscode.window);
 
   context.subscriptions.push(openChat);
 }
