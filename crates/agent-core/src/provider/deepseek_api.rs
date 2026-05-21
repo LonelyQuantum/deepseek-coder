@@ -27,6 +27,10 @@ pub enum DeepSeekApiError {
     UnsupportedBaseUrlScheme { scheme: String },
     #[error("chat completion request must include at least one message")]
     EmptyMessages,
+    #[error("reasoning_effort requires thinking.type = enabled")]
+    ReasoningEffortRequiresEnabledThinking,
+    #[error("tool_choice is not supported while DeepSeek thinking mode is enabled")]
+    ToolChoiceUnsupportedWithThinking,
     #[error("non-stream chat completion call received a streaming request")]
     StreamingRequestInNonStreamCall,
     #[error("DeepSeek API request failed: {0}")]
@@ -214,6 +218,7 @@ impl DeepSeekApiAdapter {
         &self,
         request: ChatCompletionRequest,
     ) -> Result<ChatCompletionResponse, DeepSeekApiError> {
+        request.validate_for_deepseek()?;
         if request.stream.unwrap_or(false) {
             return Err(DeepSeekApiError::StreamingRequestInNonStreamCall);
         }
@@ -233,11 +238,14 @@ impl DeepSeekApiAdapter {
         &self,
         request: ChatCompletionRequest,
     ) -> Result<ChatCompletionStream, DeepSeekApiError> {
+        let request = request.streaming_with_usage_by_default();
+        request.validate_for_deepseek()?;
+
         let response = self
             .client
             .post(self.config.endpoint(CHAT_COMPLETIONS_PATH)?)
             .bearer_auth(&self.config.api_key)
-            .json(&request.streaming_with_usage_by_default())
+            .json(&request)
             .send()
             .await?;
 
@@ -336,11 +344,15 @@ impl ChatCompletionRequest {
     }
 
     pub fn with_thinking(mut self, thinking: ThinkingConfig) -> Self {
+        if thinking.kind == ThinkingMode::Disabled {
+            self.reasoning_effort = None;
+        }
         self.thinking = Some(thinking);
         self
     }
 
     pub fn with_reasoning_effort(mut self, reasoning_effort: ReasoningEffort) -> Self {
+        self.thinking = Some(ThinkingConfig::enabled());
         self.reasoning_effort = Some(reasoning_effort);
         self
     }
@@ -355,10 +367,37 @@ impl ChatCompletionRequest {
         self
     }
 
+    pub fn with_tool_choice(mut self, tool_choice: ToolChoice) -> Self {
+        self.tool_choice = Some(tool_choice);
+        self
+    }
+
     pub fn streaming(mut self, include_usage: bool) -> Self {
         self.stream = Some(true);
         self.stream_options = Some(StreamOptions { include_usage });
         self
+    }
+
+    pub fn validate_for_deepseek(&self) -> Result<(), DeepSeekApiError> {
+        if self
+            .thinking
+            .as_ref()
+            .is_some_and(|thinking| thinking.kind == ThinkingMode::Disabled)
+            && self.reasoning_effort.is_some()
+        {
+            return Err(DeepSeekApiError::ReasoningEffortRequiresEnabledThinking);
+        }
+
+        if self.tool_choice.is_some()
+            && !self
+                .thinking
+                .as_ref()
+                .is_some_and(|thinking| thinking.kind == ThinkingMode::Disabled)
+        {
+            return Err(DeepSeekApiError::ToolChoiceUnsupportedWithThinking);
+        }
+
+        Ok(())
     }
 
     fn streaming_with_usage_by_default(mut self) -> Self {
@@ -538,6 +577,19 @@ pub struct ChatFunctionDefinition {
 pub enum ToolChoice {
     Mode(ToolChoiceMode),
     Function(ToolChoiceFunction),
+}
+
+impl ToolChoice {
+    pub fn mode(mode: ToolChoiceMode) -> Self {
+        Self::Mode(mode)
+    }
+
+    pub fn function(name: impl Into<String>) -> Self {
+        Self::Function(ToolChoiceFunction {
+            kind: ChatToolType::Function,
+            function: ToolChoiceFunctionName { name: name.into() },
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -789,7 +841,7 @@ mod tests {
     use super::{
         ChatCompletionRequest, ChatMessage, ChatTool, ChatToolCall, DeepSeekApiConfig,
         DeepSeekApiError, DeepSeekModelId, ReasoningEffort, SseEventParser, StreamEvent,
-        StreamOptions, ThinkingConfig, parse_stream_event_block,
+        StreamOptions, ThinkingConfig, ToolChoice, parse_stream_event_block,
     };
 
     #[test]
@@ -858,6 +910,60 @@ mod tests {
         assert_eq!(json["reasoning_effort"], "max");
         assert_eq!(json["stream"], true);
         assert_eq!(json["stream_options"]["include_usage"], true);
+    }
+
+    #[test]
+    fn disabling_thinking_omits_reasoning_effort() {
+        let request = ChatCompletionRequest::new(
+            DeepSeekModelId::new(DeepSeekModelId::V4_FLASH).expect("model should be valid"),
+            vec![ChatMessage::user("hello")],
+        )
+        .expect("request should be valid")
+        .with_thinking(ThinkingConfig::disabled());
+
+        let json = serde_json::to_value(request).expect("request should serialize");
+
+        assert_eq!(json["thinking"]["type"], "disabled");
+        assert!(
+            json.get("reasoning_effort").is_none(),
+            "reasoning_effort must not be sent with disabled thinking"
+        );
+    }
+
+    #[test]
+    fn reasoning_effort_enables_thinking() {
+        let request = ChatCompletionRequest::new(
+            DeepSeekModelId::new(DeepSeekModelId::V4_FLASH).expect("model should be valid"),
+            vec![ChatMessage::user("hello")],
+        )
+        .expect("request should be valid")
+        .with_thinking(ThinkingConfig::disabled())
+        .with_reasoning_effort(ReasoningEffort::Max);
+
+        let json = serde_json::to_value(request).expect("request should serialize");
+
+        assert_eq!(json["thinking"]["type"], "enabled");
+        assert_eq!(json["reasoning_effort"], "max");
+    }
+
+    #[test]
+    fn validation_rejects_reasoning_effort_with_disabled_thinking() {
+        let mut request = ChatCompletionRequest::new(
+            DeepSeekModelId::new(DeepSeekModelId::V4_FLASH).expect("model should be valid"),
+            vec![ChatMessage::user("hello")],
+        )
+        .expect("request should be valid")
+        .with_thinking(ThinkingConfig::disabled());
+        request.reasoning_effort = Some(ReasoningEffort::High);
+
+        let error = request
+            .validate_for_deepseek()
+            .expect_err("disabled thinking with reasoning_effort must fail");
+
+        assert!(matches!(
+            error,
+            DeepSeekApiError::ReasoningEffortRequiresEnabledThinking
+        ));
     }
 
     #[test]
@@ -1112,5 +1218,53 @@ data: [DONE]
             json["messages"][0]["tool_calls"][0]["function"]["name"],
             "read_file"
         );
+    }
+
+    #[test]
+    fn assistant_tool_call_helper_always_serializes_content() {
+        let message = ChatMessage::assistant_with_tool_calls(
+            None,
+            None,
+            vec![ChatToolCall::function(
+                "call_1",
+                "read_file",
+                "{\"path\":\"README.md\"}",
+            )],
+        );
+
+        let json = serde_json::to_value(message).expect("message should serialize");
+
+        assert_eq!(json["content"], "");
+        assert_eq!(json["tool_calls"][0]["function"]["name"], "read_file");
+    }
+
+    #[test]
+    fn named_tool_choice_requires_disabled_thinking_for_deepseek() {
+        let request = ChatCompletionRequest::new(
+            DeepSeekModelId::new(DeepSeekModelId::V4_FLASH).expect("model should be valid"),
+            vec![ChatMessage::user("hello")],
+        )
+        .expect("request should be valid")
+        .with_tool_choice(ToolChoice::function("read_file"));
+
+        let error = request
+            .validate_for_deepseek()
+            .expect_err("tool_choice with default thinking must fail");
+
+        assert!(matches!(
+            error,
+            DeepSeekApiError::ToolChoiceUnsupportedWithThinking
+        ));
+
+        let request = request.with_thinking(ThinkingConfig::disabled());
+        request
+            .validate_for_deepseek()
+            .expect("tool_choice is valid when thinking is disabled");
+
+        let json = serde_json::to_value(request).expect("request should serialize");
+
+        assert_eq!(json["thinking"]["type"], "disabled");
+        assert_eq!(json["tool_choice"]["type"], "function");
+        assert_eq!(json["tool_choice"]["function"]["name"], "read_file");
     }
 }
