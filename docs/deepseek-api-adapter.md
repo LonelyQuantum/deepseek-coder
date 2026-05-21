@@ -127,7 +127,7 @@ adapter 只负责序列化和反序列化 `reasoning_content` 字段。是否需
 - 没有工具调用的普通多轮对话，可以不把上一轮 `reasoning_content` 放入后续上下文。
 - 发生工具调用后，后续所有相关 user 交互必须完整回传该 assistant 消息的 `reasoning_content`。
 
-这一规则后续应落在 `reasoning_content` 状态机，而不是 UI 或 provider adapter。
+这一规则落在 Agent Core 的 `reasoning_content` 状态机，而不是 UI 或 provider adapter。详细设计见 `docs/reasoning-content.md`。
 
 ## 测试策略
 
