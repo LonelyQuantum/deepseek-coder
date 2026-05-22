@@ -638,8 +638,18 @@ Server 必须能够通过以下信息重建 run：
 
 Run log 持久化前必须脱敏密钥。
 
+当前 `crates/agent-core/src/run_log.rs` 已实现内部 JSONL 存储层。内部事件使用 `timeUnixMs`，后续 `crates/agent-rpc` 转换成 JSON-RPC notification 时再生成协议 envelope 中的 `time` 字符串。
+
 ## 实现说明
 
 - `packages/protocol` 定义与本文档匹配的 TypeScript 类型。
 - `crates/agent-rpc` 负责 Rust 协议结构和 JSON-RPC framing。
 - 后续应增加兼容性测试，验证 Rust 和 TypeScript 的协议定义一致。
+
+## 后续增强
+
+- 为 `tool.completed`、`patch.proposed`、`context.built` 等事件补齐与 Rust 结果类型一致的详细 payload schema。
+- 增加协议兼容性测试，确保 `docs/json-rpc-protocol.md`、`packages/protocol` 和 `crates/agent-rpc` 不分叉。
+- 明确事件重放规则：run resume 时哪些事件原样回放，哪些事件需要标记为历史事件。
+- 增加输出截断和脱敏字段约定，使前端能区分“没有输出”和“输出被安全策略截断”。
+- 在协议层表达 workspace trust、审批持久化能力和禁用工具原因，避免 UI 自行推断。

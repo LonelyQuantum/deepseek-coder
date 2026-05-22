@@ -97,3 +97,11 @@ cargo test -p deepseek-coder-agent-core --test deepseek_api_live live_reasoning_
 测试将第一轮 `max_tokens` 控制为 256，第二轮控制为 128。不要把它加入默认 CI。
 
 DeepSeek V4 thinking mode 不应发送 `tool_choice`，因此该测试不使用 `tool_choice` 强制调用工具。
+
+## 后续增强
+
+- 接入 Agent Turn Loop，在每次 provider 请求前自动准备消息，避免 CLI/TUI/VS Code 分别处理 `reasoning_content`。
+- 在 run log 中记录 replay 状态、安全摘要和关联 tool call id，但默认不把完整 provider-private reasoning 展示给 UI。
+- 增加多 assistant tool-call、多工具结果、工具失败后继续请求和取消回合的测试用例。
+- 增加跨 provider 能力判断：只有 provider 声明需要回传私有 reasoning 时才启用该状态机的严格规则。
+- 与上下文预算系统衔接，明确 `reasoning_content` 回放占用的 token 预算，并在超预算时显式失败。

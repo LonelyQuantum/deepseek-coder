@@ -1,6 +1,6 @@
 # 总体架构
 
-状态：草案。
+状态：草案，Phase 1 部分实现。
 
 `deepseek-coder` 分为 Rust 核心和 TypeScript 前端/共享包。
 
@@ -52,3 +52,16 @@ TypeScript workspace：
 - 审批记录
 
 密钥不得写入 run log。
+
+## 当前实现
+
+- Rust workspace、TypeScript workspace、VS Code 插件骨架和共享协议包已建立。
+- `agent-core` 已包含 provider adapter、流式解析、`reasoning_content` 状态机、工具/审批基础类型、read/search/apply_patch/shell/git 基础执行层和基础 run log。
+- `agent-rpc`、CLI 和 TUI 仍是骨架；完整 turn loop、Context Builder 和 RPC server 尚未实现。
+
+## 后续增强
+
+- 把 Agent Core 的各个独立模块串成完整回合：上下文构建、provider 调用、工具执行、审批、run log 写入和验证。
+- 实现 `crates/agent-rpc`，让 CLI/TUI/VS Code 通过同一套 JSON-RPC 协议调用 Agent Core。
+- 明确 `.deepseek-coder/` 本地状态的目录结构、版本迁移策略和脱敏规则。
+- 增加端到端测试，覆盖 CLI/TUI/VS Code 对同一任务产生一致 run log 的能力。

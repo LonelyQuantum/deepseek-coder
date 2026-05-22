@@ -1,6 +1,6 @@
 # DeepSeek API Adapter
 
-状态：草案，Phase 1 首个实现。
+状态：草案，Phase 1 基础实现已完成。
 
 本文档定义 `deepseek-coder` 访问 DeepSeek API 的 Rust adapter。它属于 Agent Core 的 provider 边界，不直接处理 UI、审批、工具执行或 run log。
 
@@ -147,7 +147,7 @@ adapter 只负责序列化和反序列化 `reasoning_content` 字段。是否需
 - SSE byte parser 的跨 chunk、CRLF、无效 UTF-8 和不完整事件处理。
 - function tool schema 序列化。
 
-后续集成测试需要通过环境变量显式开启，并避免在 CI 中默认消耗 API 额度。
+真实联网测试需要通过环境变量显式开启，并避免在 CI 中默认消耗 API 额度。
 
 ## 真实联网测试
 
@@ -180,6 +180,15 @@ cargo test -p deepseek-coder-agent-core --test deepseek_api_live -- --ignored --
 ```
 
 不要把真实 API Key 写入 Git 跟踪文件。推荐只放在当前 shell 环境变量、系统密钥管理器，或被 `.gitignore` 忽略的 `.secrets/deepseek-api-key` 中。base URL 和模型名不属于密钥，可以通过 `DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL` 或外部测试配置选择。CI 默认不会运行这些 ignored live tests。
+
+## 后续增强
+
+- 抽象 provider capability model，显式表达 thinking、tool_choice、FIM、stream usage、cache usage、最大上下文和最大输出长度等能力，而不是把规则散落在调用处。
+- 增加更细的错误分类，用于区分认证失败、限速、无效参数、服务端错误、网络中断和被截断的 stream；分类只用于明确提示和重试决策，不做静默兜底。
+- 为 streaming accumulator 增加上层事件转换，把 `reasoning_content` delta、content delta、tool call delta 和 usage chunk 转成 Agent Core 可消费的结构。
+- 增加针对 cache usage 字段的测试和上下文缓存统计记录。
+- 增加 provider 配置来源抽象：环境变量、本地配置文件、系统密钥管理器和测试专用 `.secrets/`，并统一保证 API Key 不进入 Debug、错误、run log 或文档示例。
+- 保持真实联网测试为手动 opt-in，并继续控制 `max_tokens`，避免 CI 或普通开发命令产生不可预期的 API 消耗。
 
 ## 参考资料
 
