@@ -82,10 +82,12 @@ User
 文档默认使用中文编写。协议方法名、事件名、错误码、命令、许可证标识等需要稳定机器读取或生态通用的内容保留英文，并在必要时附中文说明。
 
 - `docs/architecture.md`：总体架构。
+- `docs/roadmap.md`：详细路线图和阶段优先级。
 - `docs/agent-core.md`：Agent Core 回合与职责。
 - `docs/deepseek-api-adapter.md`：DeepSeek API adapter。
 - `docs/reasoning-content.md`：`reasoning_content` 状态机。
 - `docs/json-rpc-protocol.md`：内部 JSON-RPC 协议。
+- `docs/run-log.md`：本地运行日志。
 - `docs/context-capsule.md`：长上下文构建。
 - `docs/tool-system.md`：工具系统。
 - `docs/approval-model.md`：审批模型。
@@ -533,7 +535,7 @@ extension.ts
 
 ## 开发计划
 
-当前进度：Phase 0 已完成。下一步进入 Phase 1：Agent Core MVP 的具体实现。
+当前进度：Phase 1 进行中。DeepSeek API adapter、流式响应解析、`reasoning_content` 状态机、read/search/apply_patch/shell/git 基础工具执行层和基础 run log 已完成；下一步进入基础 Context Builder、Agent Turn Loop、RPC/CLI 最小闭环和端到端 smoke test。
 
 ### Phase 0：项目章程
 
@@ -556,15 +558,20 @@ extension.ts
 - [x] DeepSeek API adapter。
 - [x] 流式响应解析。
 - [x] `reasoning_content` 状态机。
-- [ ] read/search/apply_patch/shell/git 工具。
-- [ ] run log。
-- [ ] 基础上下文构建与 token 统计。
+- [x] read/search/apply_patch/shell/git 工具。
+- [x] 基础 run log。
+- [ ] 基础 Context Builder 与 token 统计。
+- [ ] Agent Turn Loop 基础编排。
+- [ ] Agent RPC Server stdio 事件桥接。
+- [ ] CLI `run` 最小闭环。
+- [ ] 端到端 smoke test。
 
 验收标准：
 
 - 能在一个小型 Rust/TypeScript 项目中读取代码、生成计划、修改文件、运行测试并报告结果。
 - 所有写入都经过 patch。
 - 所有命令都有 cwd、退出码和输出记录。
+- CLI 与 RPC 事件流能从同一份 run log 重建关键过程。
 
 ### Phase 2：1M Context Capsule
 
@@ -673,9 +680,14 @@ respect_gitignore = true
 │   └── tui/
 ├── docs/
 │   ├── adr/
+│   ├── README.md
 │   ├── architecture.md
+│   ├── roadmap.md
 │   ├── agent-core.md
+│   ├── deepseek-api-adapter.md
+│   ├── reasoning-content.md
 │   ├── json-rpc-protocol.md
+│   ├── run-log.md
 │   ├── context-capsule.md
 │   ├── tool-system.md
 │   ├── approval-model.md
