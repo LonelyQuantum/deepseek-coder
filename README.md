@@ -535,7 +535,7 @@ extension.ts
 
 ## 开发计划
 
-当前进度：Phase 1 进行中。DeepSeek API adapter、流式响应解析、`reasoning_content` 状态机、read/search/apply_patch/shell/git 基础工具执行层和基础 run log 已完成；下一步进入基础 Context Builder、Agent Turn Loop、RPC/CLI 最小闭环和端到端 smoke test。
+当前进度：Phase 1 进行中。DeepSeek API adapter、流式响应解析、`reasoning_content` 状态机、read/search/apply_patch/shell/git 基础工具执行层、基础 run log、基础 Context Builder 与 token 统计已完成；下一步进入 Agent Turn Loop、RPC/CLI 最小闭环和端到端 smoke test。
 
 ### Phase 0：项目章程
 
@@ -560,7 +560,7 @@ extension.ts
 - [x] `reasoning_content` 状态机。
 - [x] read/search/apply_patch/shell/git 工具。
 - [x] 基础 run log。
-- [ ] 基础 Context Builder 与 token 统计。
+- [x] 基础 Context Builder 与 token 统计。
 - [ ] Agent Turn Loop 基础编排。
 - [ ] Agent RPC Server stdio 事件桥接。
 - [ ] CLI `run` 最小闭环。

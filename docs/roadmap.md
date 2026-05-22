@@ -27,11 +27,15 @@
 - `reasoning_content` 状态机。
 - read/search/apply_patch/shell/git 基础工具执行层。
 - 基础 Run Log 存储层。
+- 基础 Context Builder 与 token 预算报告。
+- 基础工具注册表 Rust/TypeScript 兼容性 fixture。
 
 下一步：
 
-- 基础 Context Builder：读取任务、项目规则、git 状态、必要文件和工具结果，并记录 token 预算来源。
 - Agent Turn Loop：串联 provider streaming、tool call 收集、schema 校验、审批请求、工具执行、run log 写入和继续请求。
+- Fake provider 集成测试骨架：先用固定模型响应跑通 context -> provider -> tool -> run log 的事件流，再接入真实模型。
+- Run Log 写入串行化：Turn Loop / RPC 层必须保证同一 run 的事件由单 writer 或同步队列按顺序写入。
+- Run summary metadata：为 `agent.listRuns` 设计并实现 `summary.json` 或等价索引，避免每次列出 run 都扫描完整 JSONL。
 - Agent RPC Server 最小 stdio 桥接：把 run events 通过 JSON-RPC notification 传给前端。
 - CLI 最小闭环：`deepseek-coder run "<task>"` 能在小型仓库中执行一次“读取 -> 修改 -> 验证 -> 报告”。
 - 端到端 smoke test：使用 fake provider 或本地 fixture，验证 turn loop、工具、run log 和 CLI/RPC 事件一致。
@@ -57,6 +61,8 @@ P0 不追求：
 - 原生 diff editor 展示 patch。
 - Problems 面板诊断进入 Context Builder。
 - Terminal command approval 展示命令、cwd、风险等级和输出摘要。
+- 命令风险分类器：识别网络访问、依赖安装、远程 git、发布和破坏性命令，并在审批前升级风险。
+- Provider capability model：显式表达 thinking、tool choice、FIM、stream usage、cache usage、最大上下文和最大输出长度等能力。
 
 验收重点：
 
@@ -71,9 +77,12 @@ P0 不追求：
 
 - 1M Context Capsule。
 - 稳定前缀与缓存命中统计。
-- token 预算报告。
+- 真实 provider tokenizer 或经校准的 token estimator。
 - `reasoning_content` replay 状态摘要。
 - FIM completion preview。
+- 高频 JSON-RPC streaming 性能基准和必要的 delta 合并策略。
+- Run Log 轮转和导出体积控制。
+- 小型真实仓库 benchmark，验证 1M 上下文、缓存布局和可审计 run log 是否带来可度量收益。
 
 验收重点：
 

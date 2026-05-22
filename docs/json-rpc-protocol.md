@@ -388,13 +388,57 @@ interface PlanUpdated {
 interface ContextBuilt {
   inputTokens: number;
   maxInputTokens: number;
+  estimator: {
+    name: string;
+    exact: boolean;
+    description: string;
+  };
   cacheHitTokens?: number;
   cacheMissTokens?: number;
   includedSources: Array<{
-    kind: "file" | "command" | "manifest" | "summary";
+    kind:
+      | "system_policy"
+      | "project_rules"
+      | "user_task"
+      | "workspace_manifest"
+      | "git_status"
+      | "git_diff"
+      | "file"
+      | "tool_result"
+      | "plan"
+      | "acceptance_criteria"
+      | "previous_run_summary"
+      | "diagnostic"
+      | "other";
+    required: boolean;
     path?: string;
+    commandId?: string;
+    title?: string;
     tokens: number;
     reason: string;
+  }>;
+  omittedSources: Array<{
+    kind:
+      | "system_policy"
+      | "project_rules"
+      | "user_task"
+      | "workspace_manifest"
+      | "git_status"
+      | "git_diff"
+      | "file"
+      | "tool_result"
+      | "plan"
+      | "acceptance_criteria"
+      | "previous_run_summary"
+      | "diagnostic"
+      | "other";
+    required: boolean;
+    path?: string;
+    commandId?: string;
+    title?: string;
+    estimatedTokens: number;
+    inclusionReason: string;
+    omissionReason: "token_budget_exceeded";
   }>;
 }
 ```
@@ -644,12 +688,14 @@ Run log 持久化前必须脱敏密钥。
 
 - `packages/protocol` 定义与本文档匹配的 TypeScript 类型。
 - `crates/agent-rpc` 负责 Rust 协议结构和 JSON-RPC framing。
-- 后续应增加兼容性测试，验证 Rust 和 TypeScript 的协议定义一致。
+- `docs/protocol/tool-registry.v1.json` 当前用于校验 Rust 与 TypeScript 的基础工具注册表一致。
+- 后续应继续增加事件 payload 和 RPC method 的兼容性测试，验证 Rust 和 TypeScript 的协议定义一致。
 
 ## 后续增强
 
-- 为 `tool.completed`、`patch.proposed`、`context.built` 等事件补齐与 Rust 结果类型一致的详细 payload schema。
-- 增加协议兼容性测试，确保 `docs/json-rpc-protocol.md`、`packages/protocol` 和 `crates/agent-rpc` 不分叉。
+- 为 `tool.completed`、`patch.proposed` 等事件补齐与 Rust 结果类型一致的详细 payload schema。
+- 将现有工具注册表 fixture 扩展到事件 payload 和 RPC method，确保 `docs/json-rpc-protocol.md`、`packages/protocol` 和 `crates/agent-rpc` 不分叉。
+- 建立 `assistant.delta` 高频事件的批量发送、节流或合并策略，并用 benchmark 验证 stdio JSON-RPC 在 VS Code 扩展中的流畅度。
 - 明确事件重放规则：run resume 时哪些事件原样回放，哪些事件需要标记为历史事件。
 - 增加输出截断和脱敏字段约定，使前端能区分“没有输出”和“输出被安全策略截断”。
 - 在协议层表达 workspace trust、审批持久化能力和禁用工具原因，避免 UI 自行推断。

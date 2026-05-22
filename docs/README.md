@@ -25,6 +25,10 @@
 - `security-model.md`：安全边界和威胁模型。
 - `release.md`：发布、许可证和分发策略。
 
+## 协议 Fixture
+
+- `protocol/tool-registry.v1.json`：Rust 与 TypeScript 共同校验的工具注册表 fixture，用于降低双栈协议分叉风险。
+
 ## 架构决策记录
 
 ADR 位于 `adr/`。它们记录已经接受的重要决策，以及这些决策背后的原因。

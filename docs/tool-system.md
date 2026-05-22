@@ -263,8 +263,25 @@ pub struct ToolDefinition {
 - Rust 工具执行层：`crates/agent-core/src/tool_execution.rs`。
 - Rust 审批类型：`crates/agent-core/src/approval.rs`。
 - TypeScript 协议类型：`packages/protocol/src/index.ts`。
+- 共享协议 fixture：`docs/protocol/tool-registry.v1.json`。
 
 后续 `crates/agent-rpc` 应把 Rust 类型序列化为 `docs/json-rpc-protocol.md` 中定义的 JSON-RPC 事件。
+
+## 协议一致性测试
+
+Phase 1 已加入 `docs/protocol/tool-registry.v1.json`，作为 Rust 和 TypeScript 共同校验的工具注册表 fixture。当前 CI 会在两侧分别验证：
+
+- 工具名称、静态风险和默认审批要求一致。
+- 风险等级和默认审批映射一致。
+- fixture 版本与 package/crate 版本一致。
+
+这不是最终的 schema 生成方案，但能在短期内阻止 `crates/agent-core`、`packages/protocol` 和文档中的基础工具注册表分叉。
+
+## 工具结果脱敏
+
+`WorkspaceToolExecutor` 返回的结果对象保留原始工具输出，便于调用方做精确展示、错误诊断和后续验证。工具结果写入 run log、进入 prompt 或发送给前端历史回放前，应先调用 `redacted_tool_result_value` 转换为已脱敏 JSON。
+
+该函数复用 Run Log 的基础脱敏规则，当前覆盖敏感字段名和明显的 `sk-...` 形态密钥片段。它不是完整的安全边界；更丰富的环境变量、云服务 key、证书和大输出截断策略仍属于后续统一脱敏层。
 
 ## Phase 1 实现范围
 
@@ -292,13 +309,13 @@ pub struct ToolDefinition {
 ### 工具注册与协议一致性
 
 - 为 Rust 和 TypeScript 的每个工具补齐具体 `resultSchema`，替换当前通用 `statusResultSchema`。
-- 增加 Rust/TypeScript schema 兼容性测试，避免协议文档、Rust 类型和 `packages/protocol` 分叉。
+- 将当前 `docs/protocol/tool-registry.v1.json` 扩展为更完整的 schema fixture 或代码生成入口，避免协议文档、Rust 类型和 `packages/protocol` 分叉。
 - 在 `crates/agent-rpc` 中把工具请求、审批请求、工具结果和 patch 事件序列化为 `docs/json-rpc-protocol.md` 定义的事件。
 
 ### 路径与敏感信息
 
 - 将当前静态敏感路径拒绝规则扩展为可配置规则，合并 `.gitignore`、用户 ignore 配置、常见密钥文件名和平台密钥目录。
-- 在工具结果进入 run log 或 prompt 前增加统一脱敏层，覆盖 stdout、stderr、diff、搜索结果和读取文件内容。
+- 扩展 `redacted_tool_result_value` 背后的统一脱敏层，覆盖更多密钥形态、环境变量、stdout、stderr、diff、搜索结果和读取文件内容，并记录截断原因。
 - 对大文件、二进制文件和非 UTF-8 文件给出结构化错误或专门的 metadata 结果，而不是把它们交给文本工具处理。
 
 ### `read_file`

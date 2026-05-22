@@ -56,6 +56,12 @@ user turn
 
 Agent Core 不应通过启发式后处理掩盖失败。
 
+## Context Builder
+
+Phase 1 已实现基础 Context Builder，详见 `docs/context-capsule.md`。它能从用户任务、项目规则、git 状态、文件、工具结果和计划等片段生成稳定排序的上下文输入，并输出 token 预算报告。
+
+当前 token 统计使用 `utf8_bytes` 估算器，不是 DeepSeek tokenizer 的精确 token 数。Context Builder 仍是独立库能力，尚未接入完整 Agent 回合；接入后应把 `context.built` 事件写入 run log 并通过 JSON-RPC 发送给前端。
+
 ## 本地工具执行
 
 Phase 1 已实现 `WorkspaceToolExecutor`，作为 read/search/apply_patch/shell/git 工具的基础执行层。它负责 workspace 路径解析、敏感路径拒绝、命令超时和结构化工具结果。详细设计见 `docs/tool-system.md`。
@@ -66,23 +72,22 @@ Phase 1 已实现 `WorkspaceToolExecutor`，作为 read/search/apply_patch/shell
 
 Phase 1 已实现基础 Run Log 存储层，详见 `docs/run-log.md`。它提供 workspace 内 `.deepseek-coder/runs/<runId>/events.jsonl` 追加写入、按序读取、序列校验和基础脱敏。
 
-当前 Run Log 仍是独立库能力，尚未接入完整 Agent 回合。Agent Turn Loop 实现后，应把 user turn、provider 摘要、工具请求、审批、工具结果、patch 和验证命令都写入同一条事件流。
+当前 Run Log 仍是独立库能力，尚未接入完整 Agent 回合。`RunLog` 是单 writer 句柄，不提供内部跨任务同步；Agent Turn Loop / RPC 层接入时应串行化同一个 run 的所有写入。Agent Turn Loop 实现后，应把 user turn、provider 摘要、工具请求、审批、工具结果、patch 和验证命令都写入同一条事件流。
 
 ## Phase 1 收敛顺序
 
 当前最重要的目标不是继续扩展工具数量，而是把已有模块串成可运行闭环：
 
-1. 基础 Context Builder：从用户任务、项目规则、git 状态、选中文件和工具结果生成可审计输入包。
-2. Agent Turn Loop：调用 provider、收集 tool calls、校验 schema、请求审批、执行工具、写入 run log，并按工具结果继续下一次请求。
-3. Agent RPC Server：把同一条 run log 事件流转换成 JSON-RPC notifications。
-4. CLI 最小闭环：通过 `deepseek-coder run "<task>"` 跑通小型仓库上的读取、修改、验证和报告。
-5. 端到端 smoke test：使用 fake provider 或 fixture 验证 turn loop、工具执行、run log 和前端事件一致。
+1. Agent Turn Loop：调用 provider、收集 tool calls、校验 schema、请求审批、执行工具、写入 run log，并按工具结果继续下一次请求。
+2. Agent RPC Server：把同一条 run log 事件流转换成 JSON-RPC notifications。
+3. CLI 最小闭环：通过 `deepseek-coder run "<task>"` 跑通小型仓库上的读取、修改、验证和报告。
+4. 端到端 smoke test：使用 fake provider 或 fixture 验证 turn loop、工具执行、run log 和前端事件一致。
 
 ## 后续增强
 
 - 实现 Agent Turn Loop，把 provider streaming、tool call 收集、schema 校验、审批、工具执行和继续请求串成一个可取消的回合。
 - 将基础 Run Log 接入 Agent Turn Loop，并保证模型输入摘要、工具请求、审批、工具结果、patch 和验证命令都能被本地复现。
 - 在调用 provider 前统一运行 `ReasoningContentStateMachine`，确保 thinking + tool calls 的 `reasoning_content` 回放规则不分散到前端。
-- 接入 Context Capsule 构建器，把 workspace manifest、git 状态、选中文件、工具结果和计划步骤纳入 token 预算。
+- 将 Context Builder 接入 Agent Turn Loop，把 workspace manifest、git 状态、选中文件、工具结果和计划步骤纳入 provider 请求。
 - 在工具结果进入 run log 或下一轮 prompt 前增加统一脱敏与大小限制。
 - 把 Agent Core 事件通过 `crates/agent-rpc` 映射到 `docs/json-rpc-protocol.md`，供 CLI/TUI/VS Code 共享。

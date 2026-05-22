@@ -56,8 +56,8 @@ TypeScript workspace：
 ## 当前实现
 
 - Rust workspace、TypeScript workspace、VS Code 插件骨架和共享协议包已建立。
-- `agent-core` 已包含 provider adapter、流式解析、`reasoning_content` 状态机、工具/审批基础类型、read/search/apply_patch/shell/git 基础执行层和基础 run log。
-- `agent-rpc`、CLI 和 TUI 仍是骨架；完整 turn loop、Context Builder 和 RPC server 尚未实现。
+- `agent-core` 已包含 provider adapter、流式解析、`reasoning_content` 状态机、工具/审批基础类型、read/search/apply_patch/shell/git 基础执行层、基础 run log 和基础 Context Builder。
+- `agent-rpc`、CLI 和 TUI 仍是骨架；完整 turn loop、Context Builder 接入和 RPC server 尚未实现。
 
 ## 后续增强
 

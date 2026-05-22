@@ -37,6 +37,12 @@ crates/agent-core/src/run_log.rs
 - `RunLogEvent`：JSONL 中的一条事件。
 - `RunLogError`：路径、序列、JSON、I/O 和标识符错误。
 
+## 写入并发边界
+
+当前 `RunLog` 是单 writer 追加句柄，`append` 需要 `&mut self`，内部不提供跨任务同步。Phase 1 的 Agent Turn Loop 接入时，同一个 run 的事件写入必须由调用方串行化，例如通过单独的 writer task、队列或外层 `Mutex` 保证顺序。
+
+这样做可以保持当前存储层简单、可测试，并把并发策略留给真正拥有任务生命周期的 Turn Loop / RPC 层决定。后续如果允许多个前端请求同时写同一个 run，需要先明确事件顺序和取消语义，再选择同步实现。
+
 ## 事件格式
 
 当前内部事件使用 JSONL，每行一条 JSON：
@@ -87,7 +93,9 @@ crates/agent-core/src/run_log.rs
 ## 后续增强
 
 - 接入 Agent Turn Loop，自动记录 user turn、provider request 摘要、工具请求、审批、工具结果、patch 和验证命令。
-- 增加 run summary / metadata 文件，支持 `agent.listRuns` 快速读取标题、状态、开始时间和结束时间。
+- 增加 run summary / metadata 文件，支持 `agent.listRuns` 快速读取标题、状态、开始时间、结束时间和事件计数，避免每次列出 run 都扫描完整 JSONL。
 - 增加事件 payload 的强类型 schema，并与 `docs/json-rpc-protocol.md` 和 `packages/protocol` 做兼容性测试。
+- 在 Agent Turn Loop / RPC 层实现同一 run 的写入串行化策略，并补充并发写入顺序测试。
+- 增加日志轮转或分片策略，防止长时间运行和高频 streaming 事件让单个 `events.jsonl` 过大。
 - 增加输出截断信息，区分“字段不存在”“输出为空”和“输出因安全或大小限制被截断”。
 - 增加 run export 审计包，导出前再次做敏感信息扫描。
