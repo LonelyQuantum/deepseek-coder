@@ -132,6 +132,10 @@ impl RunLogStore {
     }
 }
 
+/// `RunLog` is a single-writer append handle.
+///
+/// It does not provide internal synchronization. Callers that share one run
+/// across async tasks or frontend requests must serialize writes externally.
 #[derive(Debug)]
 pub struct RunLog {
     run_id: String,
@@ -249,6 +253,8 @@ pub enum RunLogError {
     },
     #[error("system clock is before UNIX epoch")]
     SystemClockBeforeUnixEpoch,
+    #[error("system clock timestamp exceeds u64 milliseconds")]
+    TimestampOverflow,
     #[error("I/O error for {path}: {source}")]
     Io { path: PathBuf, source: io::Error },
     #[error("serialization failed for {path}: {source}")]
@@ -340,7 +346,7 @@ fn unix_time_millis() -> Result<u64, RunLogError> {
     let elapsed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| RunLogError::SystemClockBeforeUnixEpoch)?;
-    Ok(u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
+    u64::try_from(elapsed.as_millis()).map_err(|_| RunLogError::TimestampOverflow)
 }
 
 fn validate_id(kind: &'static str, value: String) -> Result<String, RunLogError> {
@@ -394,9 +400,13 @@ pub fn redact_value(value: Value) -> Value {
     match value {
         Value::Object(map) => Value::Object(redact_object(map)),
         Value::Array(values) => Value::Array(values.into_iter().map(redact_value).collect()),
-        Value::String(text) => Value::String(redact_sensitive_string(&text)),
+        Value::String(text) => Value::String(redact_text(&text)),
         other => other,
     }
+}
+
+pub fn redact_text(text: &str) -> String {
+    redact_secret_like_tokens(text)
 }
 
 fn redact_object(map: Map<String, Value>) -> Map<String, Value> {
@@ -433,10 +443,6 @@ fn is_sensitive_key(key: &str) -> bool {
             | "credentials"
             | "privatekey"
     )
-}
-
-fn redact_sensitive_string(text: &str) -> String {
-    redact_secret_like_tokens(text)
 }
 
 fn redact_secret_like_tokens(text: &str) -> String {
