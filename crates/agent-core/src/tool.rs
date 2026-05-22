@@ -258,9 +258,12 @@ pub fn find_builtin_tool(name: &str) -> Option<&'static ToolDefinition> {
 
 #[cfg(test)]
 mod tests {
-    use crate::approval::{ApprovalRequirement, RiskLevel};
+    use std::collections::BTreeMap;
+
+    use serde::Deserialize;
 
     use super::{BUILTIN_TOOLS, ToolName, find_builtin_tool};
+    use crate::approval::{ALL_RISK_LEVELS, ApprovalRequirement, RiskLevel};
 
     #[test]
     fn all_builtin_tools_have_matching_default_approval() {
@@ -301,5 +304,62 @@ mod tests {
                 tool.name.as_str()
             );
         }
+    }
+
+    #[test]
+    fn builtin_tools_match_protocol_fixture() {
+        let fixture: ToolRegistryFixture = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/protocol/tool-registry.v1.json"
+        )))
+        .expect("tool registry fixture should parse");
+
+        assert_eq!(fixture.version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            fixture.risk_levels,
+            ALL_RISK_LEVELS
+                .iter()
+                .map(|risk| risk.as_str().to_owned())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            fixture.risk_default_approval,
+            ALL_RISK_LEVELS
+                .iter()
+                .map(|risk| {
+                    (
+                        risk.as_str().to_owned(),
+                        risk.default_approval().as_str().to_owned(),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>()
+        );
+        assert_eq!(
+            fixture.tools,
+            BUILTIN_TOOLS
+                .iter()
+                .map(|tool| ToolFixture {
+                    name: tool.name.as_str().to_owned(),
+                    risk: tool.risk.as_str().to_owned(),
+                    approval: tool.approval.as_str().to_owned(),
+                })
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ToolRegistryFixture {
+        version: String,
+        risk_levels: Vec<String>,
+        risk_default_approval: BTreeMap<String, String>,
+        tools: Vec<ToolFixture>,
+    }
+
+    #[derive(Debug, PartialEq, Eq, Deserialize)]
+    struct ToolFixture {
+        name: String,
+        risk: String,
+        approval: String,
     }
 }

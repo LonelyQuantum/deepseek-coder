@@ -1,0 +1,58 @@
+{
+  "version": "0.1.0",
+  "riskLevels": ["read", "write", "exec", "network", "destructive"],
+  "riskDefaultApproval": {
+    "read": "none",
+    "write": "required",
+    "exec": "required",
+    "network": "required",
+    "destructive": "always_required"
+  },
+  "tools": [
+    {
+      "name": "workspace_manifest",
+      "risk": "read",
+      "approval": "none"
+    },
+    {
+      "name": "read_file",
+      "risk": "read",
+      "approval": "none"
+    },
+    {
+      "name": "search",
+      "risk": "read",
+      "approval": "none"
+    },
+    {
+      "name": "apply_patch",
+      "risk": "write",
+      "approval": "required"
+    },
+    {
+      "name": "shell",
+      "risk": "exec",
+      "approval": "required"
+    },
+    {
+      "name": "git_status",
+      "risk": "read",
+      "approval": "none"
+    },
+    {
+      "name": "git_diff",
+      "risk": "read",
+      "approval": "none"
+    },
+    {
+      "name": "lsp_diagnostics",
+      "risk": "read",
+      "approval": "none"
+    },
+    {
+      "name": "plan_update",
+      "risk": "read",
+      "approval": "none"
+    }
+  ]
+}

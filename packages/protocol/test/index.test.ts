@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -6,11 +7,30 @@ import {
   canTransitionApprovalState,
   findToolDefinition,
   isApprovalRequired,
+  protocolVersion,
   riskDefaultApproval,
   riskLevels,
   toolDefinitions,
   toolNames,
 } from "../src/index.js";
+
+interface ToolRegistryFixture {
+  readonly version: string;
+  readonly riskLevels: readonly string[];
+  readonly riskDefaultApproval: Readonly<Record<string, string>>;
+  readonly tools: ReadonlyArray<{
+    readonly name: string;
+    readonly risk: string;
+    readonly approval: string;
+  }>;
+}
+
+const toolRegistryFixture = JSON.parse(
+  readFileSync(
+    new URL("../../../../docs/protocol/tool-registry.v1.json", import.meta.url),
+    "utf8",
+  ),
+) as ToolRegistryFixture;
 
 test("risk defaults stay aligned with approval requirement helper", () => {
   assert.deepEqual(riskDefaultApproval, {
@@ -51,6 +71,20 @@ test("tool registry contains every declared tool exactly once", () => {
     assert.equal(findToolDefinition(name)?.name, name);
   }
   assert.equal(findToolDefinition("missing"), undefined);
+});
+
+test("tool registry stays aligned with shared protocol fixture", () => {
+  assert.equal(toolRegistryFixture.version, protocolVersion);
+  assert.deepEqual(toolRegistryFixture.riskLevels, [...riskLevels]);
+  assert.deepEqual(toolRegistryFixture.riskDefaultApproval, riskDefaultApproval);
+  assert.deepEqual(
+    toolRegistryFixture.tools,
+    toolDefinitions.map((tool) => ({
+      name: tool.name,
+      risk: tool.risk,
+      approval: tool.approval,
+    })),
+  );
 });
 
 test("tool approval defaults match risk defaults", () => {
