@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod approval;
+pub mod context;
 pub mod provider;
 pub mod reasoning;
 pub mod run_log;

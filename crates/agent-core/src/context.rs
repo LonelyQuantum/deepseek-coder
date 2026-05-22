@@ -1,0 +1,835 @@
+use std::collections::HashSet;
+
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use thiserror::Error;
+
+use crate::run_log::redact_text;
+
+const DEFAULT_MAX_INPUT_TOKENS: u64 = 1_000_000;
+const UTF8_BYTE_ESTIMATOR: &str = "utf8_bytes";
+
+#[derive(Debug, Clone)]
+pub struct ContextBuilder {
+    config: ContextBuilderConfig,
+    items: Vec<ContextItem>,
+}
+
+impl ContextBuilder {
+    pub fn new(config: ContextBuilderConfig) -> Self {
+        Self {
+            config,
+            items: Vec::new(),
+        }
+    }
+
+    pub fn add_item(&mut self, item: ContextItem) -> &mut Self {
+        self.items.push(item);
+        self
+    }
+
+    pub fn with_item(mut self, item: ContextItem) -> Self {
+        self.items.push(item);
+        self
+    }
+
+    pub fn build(&self) -> Result<ContextCapsule, ContextBuildError> {
+        if self.config.max_input_tokens == 0 {
+            return Err(ContextBuildError::InvalidMaxInputTokens);
+        }
+
+        let mut indexed_items = self
+            .items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| IndexedContextItem { index, item })
+            .collect::<Vec<_>>();
+        indexed_items.sort_by_key(|item| (item.item.kind.priority(), item.index));
+
+        let mut content = String::new();
+        let mut input_tokens = 0_u64;
+        let mut included_sources = Vec::new();
+        let mut omitted_sources = Vec::new();
+        let mut seen_singletons = HashSet::new();
+        let mut seen_file_paths = HashSet::new();
+        let mut seen_command_ids = HashSet::new();
+
+        for indexed_item in indexed_items {
+            let prepared = prepare_item(indexed_item.item)?;
+            validate_unique_source(
+                &prepared.source,
+                &mut seen_singletons,
+                &mut seen_file_paths,
+                &mut seen_command_ids,
+            )?;
+            let rendered = render_item(&prepared);
+            let item_tokens = estimate_token_proxy(&rendered)?;
+            let separator_tokens = if content.is_empty() {
+                0
+            } else {
+                estimate_token_proxy("\n")?
+            };
+            let next_input_tokens = input_tokens
+                .checked_add(separator_tokens)
+                .ok_or(ContextBuildError::TokenCountOverflow)?
+                .checked_add(item_tokens)
+                .ok_or(ContextBuildError::TokenCountOverflow)?;
+
+            if next_input_tokens > self.config.max_input_tokens {
+                if prepared.source.required {
+                    return Err(ContextBuildError::RequiredContextExceedsBudget {
+                        max_input_tokens: self.config.max_input_tokens,
+                        used_tokens: input_tokens,
+                        required_tokens: next_input_tokens,
+                        context_source: prepared.source,
+                    });
+                }
+
+                omitted_sources.push(ContextOmittedSource {
+                    source: prepared.source,
+                    estimated_tokens: item_tokens,
+                    inclusion_reason: prepared.inclusion_reason,
+                    omission_reason: ContextOmissionReason::TokenBudgetExceeded,
+                });
+                continue;
+            }
+
+            if !content.is_empty() {
+                content.push('\n');
+            }
+            content.push_str(&rendered);
+            input_tokens = next_input_tokens;
+            included_sources.push(ContextIncludedSource {
+                source: prepared.source,
+                tokens: item_tokens,
+                reason: prepared.inclusion_reason,
+            });
+        }
+
+        Ok(ContextCapsule {
+            content,
+            token_report: ContextTokenReport {
+                input_tokens,
+                max_input_tokens: self.config.max_input_tokens,
+                estimator: TokenEstimatorReport::utf8_bytes(),
+                included_sources,
+                omitted_sources,
+            },
+        })
+    }
+}
+
+impl Default for ContextBuilder {
+    fn default() -> Self {
+        Self::new(ContextBuilderConfig::default())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextBuilderConfig {
+    pub max_input_tokens: u64,
+}
+
+impl ContextBuilderConfig {
+    pub const fn new(max_input_tokens: u64) -> Self {
+        Self { max_input_tokens }
+    }
+}
+
+impl Default for ContextBuilderConfig {
+    fn default() -> Self {
+        Self {
+            max_input_tokens: DEFAULT_MAX_INPUT_TOKENS,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextCapsule {
+    pub content: String,
+    pub token_report: ContextTokenReport,
+}
+
+impl ContextCapsule {
+    pub fn context_built_payload(&self) -> Value {
+        json!({
+            "inputTokens": self.token_report.input_tokens,
+            "maxInputTokens": self.token_report.max_input_tokens,
+            "estimator": self.token_report.estimator,
+            "includedSources": self.token_report.included_sources,
+            "omittedSources": self.token_report.omitted_sources,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextTokenReport {
+    pub input_tokens: u64,
+    pub max_input_tokens: u64,
+    pub estimator: TokenEstimatorReport,
+    pub included_sources: Vec<ContextIncludedSource>,
+    pub omitted_sources: Vec<ContextOmittedSource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenEstimatorReport {
+    pub name: String,
+    pub exact: bool,
+    pub description: String,
+}
+
+impl TokenEstimatorReport {
+    fn utf8_bytes() -> Self {
+        Self {
+            name: UTF8_BYTE_ESTIMATOR.to_owned(),
+            exact: false,
+            description:
+                "UTF-8 byte count used as a deterministic proxy estimate; not a provider tokenizer."
+                    .to_owned(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextIncludedSource {
+    #[serde(flatten)]
+    pub source: ContextSourceRef,
+    pub tokens: u64,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextOmittedSource {
+    #[serde(flatten)]
+    pub source: ContextSourceRef,
+    pub estimated_tokens: u64,
+    pub inclusion_reason: String,
+    pub omission_reason: ContextOmissionReason,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextOmissionReason {
+    TokenBudgetExceeded,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextSourceRef {
+    pub kind: ContextItemKind,
+    pub required: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextItem {
+    pub kind: ContextItemKind,
+    pub content: String,
+    pub reason: String,
+    pub required: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+impl ContextItem {
+    pub fn required(
+        kind: ContextItemKind,
+        content: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind,
+            content: content.into(),
+            reason: reason.into(),
+            required: true,
+            path: None,
+            command_id: None,
+            title: None,
+        }
+    }
+
+    pub fn optional(
+        kind: ContextItemKind,
+        content: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            required: false,
+            ..Self::required(kind, content, reason)
+        }
+    }
+
+    pub fn user_task(content: impl Into<String>) -> Self {
+        Self::required(
+            ContextItemKind::UserTask,
+            content,
+            "current user task for this agent turn",
+        )
+    }
+
+    pub fn project_rules(content: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self::required(ContextItemKind::ProjectRules, content, reason)
+    }
+
+    pub fn file(
+        path: impl Into<String>,
+        content: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self::required(ContextItemKind::File, content, reason).with_path(path)
+    }
+
+    pub fn tool_result(
+        command_id: impl Into<String>,
+        content: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self::required(ContextItemKind::ToolResult, content, reason).with_command_id(command_id)
+    }
+
+    pub fn with_required(mut self, required: bool) -> Self {
+        self.required = required;
+        self
+    }
+
+    pub fn with_path(mut self, path: impl Into<String>) -> Self {
+        self.path = Some(path.into());
+        self
+    }
+
+    pub fn with_command_id(mut self, command_id: impl Into<String>) -> Self {
+        self.command_id = Some(command_id.into());
+        self
+    }
+
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextItemKind {
+    SystemPolicy,
+    ProjectRules,
+    UserTask,
+    WorkspaceManifest,
+    GitStatus,
+    GitDiff,
+    File,
+    ToolResult,
+    Plan,
+    AcceptanceCriteria,
+    PreviousRunSummary,
+    Diagnostic,
+    Other,
+}
+
+impl ContextItemKind {
+    fn priority(self) -> u8 {
+        match self {
+            Self::SystemPolicy => 0,
+            Self::ProjectRules => 1,
+            Self::UserTask => 2,
+            Self::WorkspaceManifest => 3,
+            Self::GitStatus => 4,
+            Self::GitDiff => 5,
+            Self::File => 6,
+            Self::ToolResult => 7,
+            Self::Plan => 8,
+            Self::AcceptanceCriteria => 9,
+            Self::PreviousRunSummary => 10,
+            Self::Diagnostic => 11,
+            Self::Other => 12,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::SystemPolicy => "System Policy",
+            Self::ProjectRules => "Project Rules",
+            Self::UserTask => "User Task",
+            Self::WorkspaceManifest => "Workspace Manifest",
+            Self::GitStatus => "Git Status",
+            Self::GitDiff => "Git Diff",
+            Self::File => "File",
+            Self::ToolResult => "Tool Result",
+            Self::Plan => "Plan",
+            Self::AcceptanceCriteria => "Acceptance Criteria",
+            Self::PreviousRunSummary => "Previous Run Summary",
+            Self::Diagnostic => "Diagnostic",
+            Self::Other => "Other",
+        }
+    }
+
+    fn is_singleton(self) -> bool {
+        matches!(
+            self,
+            Self::SystemPolicy
+                | Self::UserTask
+                | Self::WorkspaceManifest
+                | Self::GitStatus
+                | Self::GitDiff
+                | Self::Plan
+                | Self::AcceptanceCriteria
+                | Self::PreviousRunSummary
+        )
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum ContextBuildError {
+    #[error("max input tokens must be greater than zero")]
+    InvalidMaxInputTokens,
+    #[error("context item reason must not be empty")]
+    EmptyReason,
+    #[error("context item path must be workspace-relative: {path}")]
+    InvalidPath { path: String },
+    #[error("context item command id is invalid: {command_id}")]
+    InvalidCommandId { command_id: String },
+    #[error("context item kind may appear at most once: {kind:?}")]
+    DuplicateSingletonItem { kind: ContextItemKind },
+    #[error("duplicate context file path: {path}")]
+    DuplicateFilePath { path: String },
+    #[error("duplicate context command id: {command_id}")]
+    DuplicateCommandId { command_id: String },
+    #[error(
+        "required context exceeds token budget: used {used_tokens}, required {required_tokens}, max {max_input_tokens}"
+    )]
+    RequiredContextExceedsBudget {
+        max_input_tokens: u64,
+        used_tokens: u64,
+        required_tokens: u64,
+        context_source: ContextSourceRef,
+    },
+    #[error("context token count overflowed")]
+    TokenCountOverflow,
+}
+
+struct IndexedContextItem<'a> {
+    index: usize,
+    item: &'a ContextItem,
+}
+
+struct PreparedContextItem {
+    source: ContextSourceRef,
+    content: String,
+    inclusion_reason: String,
+}
+
+fn prepare_item(item: &ContextItem) -> Result<PreparedContextItem, ContextBuildError> {
+    if item.reason.trim().is_empty() {
+        return Err(ContextBuildError::EmptyReason);
+    }
+
+    let path = item
+        .path
+        .as_deref()
+        .map(normalize_workspace_relative_path)
+        .transpose()?;
+    let command_id = item
+        .command_id
+        .as_deref()
+        .map(validate_command_id)
+        .transpose()?;
+    let title = item
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .map(redact_text);
+
+    Ok(PreparedContextItem {
+        source: ContextSourceRef {
+            kind: item.kind,
+            required: item.required,
+            path,
+            command_id,
+            title,
+        },
+        content: redact_text(&item.content),
+        inclusion_reason: redact_text(item.reason.trim()),
+    })
+}
+
+fn validate_unique_source(
+    source: &ContextSourceRef,
+    seen_singletons: &mut HashSet<ContextItemKind>,
+    seen_file_paths: &mut HashSet<String>,
+    seen_command_ids: &mut HashSet<String>,
+) -> Result<(), ContextBuildError> {
+    if source.kind.is_singleton() && !seen_singletons.insert(source.kind) {
+        return Err(ContextBuildError::DuplicateSingletonItem { kind: source.kind });
+    }
+
+    if source.kind == ContextItemKind::File
+        && let Some(path) = &source.path
+        && !seen_file_paths.insert(path.clone())
+    {
+        return Err(ContextBuildError::DuplicateFilePath { path: path.clone() });
+    }
+
+    if let Some(command_id) = &source.command_id
+        && !seen_command_ids.insert(command_id.clone())
+    {
+        return Err(ContextBuildError::DuplicateCommandId {
+            command_id: command_id.clone(),
+        });
+    }
+
+    Ok(())
+}
+
+fn render_item(item: &PreparedContextItem) -> String {
+    let mut rendered = String::new();
+    rendered.push_str("## ");
+    rendered.push_str(
+        item.source
+            .title
+            .as_deref()
+            .unwrap_or(item.source.kind.label()),
+    );
+    rendered.push('\n');
+    rendered.push_str("Kind: ");
+    rendered.push_str(kind_name(item.source.kind));
+    rendered.push('\n');
+    rendered.push_str("Required: ");
+    rendered.push_str(if item.source.required {
+        "true"
+    } else {
+        "false"
+    });
+    rendered.push('\n');
+    rendered.push_str("Reason: ");
+    rendered.push_str(&item.inclusion_reason);
+    rendered.push('\n');
+
+    if let Some(path) = &item.source.path {
+        rendered.push_str("Path: ");
+        rendered.push_str(path);
+        rendered.push('\n');
+    }
+    if let Some(command_id) = &item.source.command_id {
+        rendered.push_str("Command-Id: ");
+        rendered.push_str(command_id);
+        rendered.push('\n');
+    }
+
+    rendered.push('\n');
+    rendered.push_str(&item.content);
+    rendered.push('\n');
+    rendered
+}
+
+fn kind_name(kind: ContextItemKind) -> &'static str {
+    match kind {
+        ContextItemKind::SystemPolicy => "system_policy",
+        ContextItemKind::ProjectRules => "project_rules",
+        ContextItemKind::UserTask => "user_task",
+        ContextItemKind::WorkspaceManifest => "workspace_manifest",
+        ContextItemKind::GitStatus => "git_status",
+        ContextItemKind::GitDiff => "git_diff",
+        ContextItemKind::File => "file",
+        ContextItemKind::ToolResult => "tool_result",
+        ContextItemKind::Plan => "plan",
+        ContextItemKind::AcceptanceCriteria => "acceptance_criteria",
+        ContextItemKind::PreviousRunSummary => "previous_run_summary",
+        ContextItemKind::Diagnostic => "diagnostic",
+        ContextItemKind::Other => "other",
+    }
+}
+
+fn estimate_token_proxy(text: &str) -> Result<u64, ContextBuildError> {
+    u64::try_from(text.len()).map_err(|_| ContextBuildError::TokenCountOverflow)
+}
+
+fn normalize_workspace_relative_path(path: &str) -> Result<String, ContextBuildError> {
+    let trimmed = path.trim();
+    if trimmed.is_empty()
+        || trimmed.starts_with('/')
+        || trimmed.starts_with('\\')
+        || has_windows_drive_prefix(trimmed)
+    {
+        return Err(ContextBuildError::InvalidPath {
+            path: path.to_owned(),
+        });
+    }
+
+    let mut parts = Vec::new();
+    for part in trimmed.split(['/', '\\']) {
+        match part {
+            "" | "." => {}
+            ".." => {
+                return Err(ContextBuildError::InvalidPath {
+                    path: path.to_owned(),
+                });
+            }
+            value => parts.push(value),
+        }
+    }
+
+    if parts.is_empty() {
+        return Err(ContextBuildError::InvalidPath {
+            path: path.to_owned(),
+        });
+    }
+
+    Ok(parts.join("/"))
+}
+
+fn has_windows_drive_prefix(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
+}
+
+fn validate_command_id(command_id: &str) -> Result<String, ContextBuildError> {
+    let trimmed = command_id.trim();
+    if trimmed.is_empty()
+        || !trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' || ch == '.')
+    {
+        return Err(ContextBuildError::InvalidCommandId {
+            command_id: command_id.to_owned(),
+        });
+    }
+
+    Ok(trimmed.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ContextBuildError, ContextBuilder, ContextBuilderConfig, ContextItem, ContextItemKind,
+        ContextOmissionReason,
+    };
+    use crate::run_log::REDACTED_VALUE;
+
+    #[test]
+    fn context_builder_orders_sources_and_reports_tokens() {
+        let capsule = ContextBuilder::new(ContextBuilderConfig::new(10_000))
+            .with_item(ContextItem::file(
+                "src\\lib.rs",
+                "pub mod context;",
+                "selected file",
+            ))
+            .with_item(ContextItem::user_task("implement context builder"))
+            .with_item(ContextItem::project_rules(
+                "keep docs in Chinese",
+                "project instructions",
+            ))
+            .build()
+            .expect("context should build");
+
+        let project_rules_index = capsule
+            .content
+            .find("## Project Rules")
+            .expect("project rules should be rendered");
+        let user_task_index = capsule
+            .content
+            .find("## User Task")
+            .expect("user task should be rendered");
+        let file_index = capsule
+            .content
+            .find("## File")
+            .expect("file should be rendered");
+
+        assert!(project_rules_index < user_task_index);
+        assert!(user_task_index < file_index);
+        assert_eq!(
+            capsule.token_report.input_tokens,
+            u64::try_from(capsule.content.len()).expect("content length should fit u64")
+        );
+        assert_eq!(capsule.token_report.estimator.name, "utf8_bytes");
+        assert!(!capsule.token_report.estimator.exact);
+        assert_eq!(capsule.token_report.included_sources.len(), 3);
+        assert_eq!(
+            capsule.token_report.included_sources[2]
+                .source
+                .path
+                .as_deref(),
+            Some("src/lib.rs")
+        );
+    }
+
+    #[test]
+    fn context_builder_omits_optional_items_over_budget() {
+        let required =
+            ContextItem::required(ContextItemKind::SystemPolicy, "short", "needed every turn");
+        let optional = ContextItem::optional(
+            ContextItemKind::ToolResult,
+            "this optional tool result is intentionally too large for the remaining budget",
+            "nice to have",
+        )
+        .with_command_id("search.1");
+        let required_only = ContextBuilder::new(ContextBuilderConfig::new(10_000))
+            .with_item(required.clone())
+            .build()
+            .expect("required item should fit");
+        let max_input_tokens = required_only.token_report.input_tokens + 1;
+
+        let capsule = ContextBuilder::new(ContextBuilderConfig::new(max_input_tokens))
+            .with_item(required)
+            .with_item(optional)
+            .build()
+            .expect("optional item should be omitted");
+
+        assert_eq!(capsule.token_report.included_sources.len(), 1);
+        assert_eq!(capsule.token_report.omitted_sources.len(), 1);
+        assert_eq!(
+            capsule.token_report.omitted_sources[0].omission_reason,
+            ContextOmissionReason::TokenBudgetExceeded
+        );
+        assert_eq!(
+            capsule.token_report.omitted_sources[0]
+                .source
+                .command_id
+                .as_deref(),
+            Some("search.1")
+        );
+    }
+
+    #[test]
+    fn context_builder_fails_when_required_item_exceeds_budget() {
+        let err = ContextBuilder::new(ContextBuilderConfig::new(16))
+            .with_item(ContextItem::required(
+                ContextItemKind::UserTask,
+                "this required task cannot fit",
+                "user task",
+            ))
+            .build()
+            .expect_err("required item should exceed budget");
+
+        assert!(matches!(
+            err,
+            ContextBuildError::RequiredContextExceedsBudget { .. }
+        ));
+    }
+
+    #[test]
+    fn context_builder_rejects_absolute_or_parent_paths() {
+        let parent_path_err = ContextBuilder::default()
+            .with_item(ContextItem::file("../secret", "content", "unsafe path"))
+            .build()
+            .expect_err("parent paths should be rejected");
+        assert!(matches!(
+            parent_path_err,
+            ContextBuildError::InvalidPath { .. }
+        ));
+
+        let absolute_path_err = ContextBuilder::default()
+            .with_item(ContextItem::file(
+                "C:\\absolute\\secret",
+                "content",
+                "unsafe path",
+            ))
+            .build()
+            .expect_err("absolute paths should be rejected");
+        assert!(matches!(
+            absolute_path_err,
+            ContextBuildError::InvalidPath { .. }
+        ));
+    }
+
+    #[test]
+    fn context_builder_rejects_duplicate_singleton_items() {
+        let err = ContextBuilder::default()
+            .with_item(ContextItem::user_task("first task"))
+            .with_item(ContextItem::user_task("second task"))
+            .build()
+            .expect_err("duplicate singleton should fail");
+
+        assert!(matches!(
+            err,
+            ContextBuildError::DuplicateSingletonItem {
+                kind: ContextItemKind::UserTask
+            }
+        ));
+    }
+
+    #[test]
+    fn context_builder_rejects_duplicate_file_paths_after_normalization() {
+        let err = ContextBuilder::default()
+            .with_item(ContextItem::file("src\\lib.rs", "first", "selected file"))
+            .with_item(ContextItem::file("src/lib.rs", "second", "same file"))
+            .build()
+            .expect_err("duplicate file path should fail");
+
+        assert!(matches!(
+            err,
+            ContextBuildError::DuplicateFilePath { path } if path == "src/lib.rs"
+        ));
+    }
+
+    #[test]
+    fn context_builder_rejects_duplicate_command_ids() {
+        let err = ContextBuilder::default()
+            .with_item(ContextItem::tool_result(
+                "search.1",
+                "first",
+                "search result",
+            ))
+            .with_item(ContextItem::tool_result(
+                "search.1",
+                "second",
+                "same command",
+            ))
+            .build()
+            .expect_err("duplicate command id should fail");
+
+        assert!(matches!(
+            err,
+            ContextBuildError::DuplicateCommandId { command_id } if command_id == "search.1"
+        ));
+    }
+
+    #[test]
+    fn context_builder_redacts_secret_like_text() {
+        let secret = format!("sk-{}", "not-a-real-secret-value-123");
+        let capsule = ContextBuilder::default()
+            .with_item(ContextItem::tool_result(
+                "shell.1",
+                format!("stdout contains {secret}"),
+                "tool output may include credentials",
+            ))
+            .build()
+            .expect("context should build");
+
+        assert!(!capsule.content.contains(&secret));
+        assert!(capsule.content.contains(REDACTED_VALUE));
+    }
+
+    #[test]
+    fn context_built_payload_matches_token_report_shape() {
+        let capsule = ContextBuilder::default()
+            .with_item(ContextItem::user_task("summarize this repository"))
+            .build()
+            .expect("context should build");
+        let payload = capsule.context_built_payload();
+
+        assert_eq!(payload["inputTokens"], capsule.token_report.input_tokens);
+        assert_eq!(payload["maxInputTokens"], 1_000_000);
+        assert_eq!(payload["estimator"]["name"], "utf8_bytes");
+        assert_eq!(
+            payload["includedSources"][0]["kind"],
+            serde_json::json!("user_task")
+        );
+    }
+}
