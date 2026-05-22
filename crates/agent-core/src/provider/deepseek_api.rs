@@ -500,6 +500,8 @@ impl ChatMessage {
     ) -> Self {
         Self {
             role: ChatRole::Assistant,
+            // Keep content present for assistant tool-call replay; provider responses may omit
+            // text, but the replay message should still serialize a stable content field.
             content: Some(content.unwrap_or_default()),
             name: None,
             prefix: None,

@@ -3,7 +3,9 @@
 pub mod approval;
 pub mod provider;
 pub mod reasoning;
+pub mod run_log;
 pub mod tool;
+pub mod tool_execution;
 
 pub const PROJECT_NAME: &str = "deepseek-coder";
 pub const DEFAULT_STATE_DIR: &str = ".deepseek-coder";
