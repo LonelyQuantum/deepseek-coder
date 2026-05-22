@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::run_log::redact_value;
+
 const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
 const DEFAULT_SEARCH_MAX_RESULTS: usize = 100;
 
@@ -571,6 +573,12 @@ pub struct GitDiffResult {
     pub files: Vec<String>,
 }
 
+pub fn redacted_tool_result_value<T: Serialize>(result: &T) -> Result<Value, ToolExecutionError> {
+    let value = serde_json::to_value(result)
+        .map_err(|source| ToolExecutionError::Serialization { source })?;
+    Ok(redact_value(value))
+}
+
 #[derive(Debug, Error)]
 pub enum ToolExecutionError {
     #[error("workspace root is not a directory: {path}")]
@@ -611,6 +619,8 @@ pub enum ToolExecutionError {
     },
     #[error("command `{program}` timed out after {timeout_ms}ms")]
     CommandTimedOut { program: String, timeout_ms: u128 },
+    #[error("tool result serialization failed: {source}")]
+    Serialization { source: serde_json::Error },
     #[error("I/O error at {path}: {source}")]
     Io { path: PathBuf, source: io::Error },
     #[error("I/O error while running `{program}`: {source}")]
@@ -1133,8 +1143,10 @@ mod tests {
 
     use super::{
         ApplyPatchArgs, GitDiffArgs, GitStatusArgs, ReadFileArgs, SearchArgs, ShellArgs,
-        ToolExecutionError, ToolStatus, WorkspaceToolExecutor,
+        ShellResult, ToolExecutionError, ToolStatus, WorkspaceToolExecutor,
+        redacted_tool_result_value,
     };
+    use crate::run_log::REDACTED_VALUE;
 
     #[test]
     fn read_file_reads_full_file_and_line_range() {
@@ -1279,6 +1291,27 @@ mod tests {
 
         assert_eq!(result.status, ToolStatus::Ok);
         assert!(result.stdout.contains("hello"));
+    }
+
+    #[test]
+    fn redacted_tool_result_value_redacts_shell_output_for_logs() {
+        let secret = format!("sk-{}", "not-a-real-tool-output-secret-123");
+        let result = ShellResult {
+            status: ToolStatus::Ok,
+            summary: "Command completed.".to_owned(),
+            error_code: None,
+            exit_code: Some(0),
+            stdout: format!("stdout contains {secret}"),
+            stderr: format!("stderr contains {secret}"),
+            duration_ms: 1,
+        };
+
+        let value =
+            redacted_tool_result_value(&result).expect("tool result should serialize and redact");
+
+        assert_eq!(value["stdout"], format!("stdout contains {REDACTED_VALUE}"));
+        assert_eq!(value["stderr"], format!("stderr contains {REDACTED_VALUE}"));
+        assert!(!value.to_string().contains(&secret));
     }
 
     #[test]
