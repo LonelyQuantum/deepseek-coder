@@ -7,6 +7,7 @@ pub mod reasoning;
 pub mod run_log;
 pub mod tool;
 pub mod tool_execution;
+pub mod turn_loop;
 
 pub const PROJECT_NAME: &str = "deepseek-coder";
 pub const DEFAULT_STATE_DIR: &str = ".deepseek-coder";
