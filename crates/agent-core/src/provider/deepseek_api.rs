@@ -1,4 +1,4 @@
-use std::{env, fmt, pin::Pin, str, time::Duration};
+use std::{collections::BTreeMap, env, fmt, pin::Pin, str, time::Duration};
 
 use futures_util::{Stream, StreamExt};
 use reqwest::StatusCode;
@@ -646,6 +646,166 @@ pub struct ChatFunctionCall {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct ChatToolCallDelta {
+    pub index: u32,
+    pub id: Option<String>,
+    #[serde(rename = "type")]
+    pub kind: Option<ChatToolType>,
+    pub function: Option<ChatFunctionCallDelta>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ChatFunctionCallDelta {
+    pub name: Option<String>,
+    pub arguments: Option<String>,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct ChatToolCallAccumulator {
+    entries: BTreeMap<u32, ChatToolCallAccumulatorEntry>,
+}
+
+impl ChatToolCallAccumulator {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn append_delta(
+        &mut self,
+        delta: ChatToolCallDelta,
+    ) -> Result<(), ChatToolCallAccumulatorError> {
+        let index = delta.index;
+        let entry = self.entries.entry(index).or_default();
+
+        if let Some(id) = delta.id {
+            if id.is_empty() {
+                return Err(ChatToolCallAccumulatorError::EmptyToolCallId { index });
+            }
+
+            match &entry.id {
+                Some(existing) if existing != &id => {
+                    return Err(ChatToolCallAccumulatorError::ConflictingToolCallId {
+                        index,
+                        existing: existing.clone(),
+                        incoming: id,
+                    });
+                }
+                Some(_) => {}
+                None => entry.id = Some(id),
+            }
+        }
+
+        if let Some(kind) = delta.kind {
+            match entry.kind {
+                Some(existing) if existing != kind => {
+                    return Err(ChatToolCallAccumulatorError::ConflictingToolCallType {
+                        index,
+                        existing,
+                        incoming: kind,
+                    });
+                }
+                Some(_) => {}
+                None => entry.kind = Some(kind),
+            }
+        }
+
+        if let Some(function) = delta.function {
+            if let Some(name) = function.name {
+                if name.is_empty() {
+                    return Err(ChatToolCallAccumulatorError::EmptyFunctionName { index });
+                }
+
+                match &entry.function_name {
+                    Some(existing) if existing != &name => {
+                        return Err(ChatToolCallAccumulatorError::ConflictingFunctionName {
+                            index,
+                            existing: existing.clone(),
+                            incoming: name,
+                        });
+                    }
+                    Some(_) => {}
+                    None => entry.function_name = Some(name),
+                }
+            }
+
+            if let Some(arguments) = function.arguments {
+                entry.arguments.push_str(&arguments);
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn finish(self) -> Result<Vec<ChatToolCall>, ChatToolCallAccumulatorError> {
+        self.entries
+            .into_iter()
+            .map(|(index, entry)| {
+                let id = entry
+                    .id
+                    .ok_or(ChatToolCallAccumulatorError::MissingToolCallId { index })?;
+                let kind = entry
+                    .kind
+                    .ok_or(ChatToolCallAccumulatorError::MissingToolCallType { index })?;
+                let name = entry
+                    .function_name
+                    .ok_or(ChatToolCallAccumulatorError::MissingFunctionName { index })?;
+
+                Ok(ChatToolCall {
+                    id,
+                    kind,
+                    function: ChatFunctionCall {
+                        name,
+                        arguments: entry.arguments,
+                    },
+                })
+            })
+            .collect()
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+struct ChatToolCallAccumulatorEntry {
+    id: Option<String>,
+    kind: Option<ChatToolType>,
+    function_name: Option<String>,
+    arguments: String,
+}
+
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum ChatToolCallAccumulatorError {
+    #[error("tool call delta at index {index} has an empty id")]
+    EmptyToolCallId { index: u32 },
+    #[error("tool call delta at index {index} has an empty function name")]
+    EmptyFunctionName { index: u32 },
+    #[error("tool call delta at index {index} changed id from `{existing}` to `{incoming}`")]
+    ConflictingToolCallId {
+        index: u32,
+        existing: String,
+        incoming: String,
+    },
+    #[error("tool call delta at index {index} changed type from `{existing:?}` to `{incoming:?}`")]
+    ConflictingToolCallType {
+        index: u32,
+        existing: ChatToolType,
+        incoming: ChatToolType,
+    },
+    #[error(
+        "tool call delta at index {index} changed function name from `{existing}` to `{incoming}`"
+    )]
+    ConflictingFunctionName {
+        index: u32,
+        existing: String,
+        incoming: String,
+    },
+    #[error("tool call stream ended before index {index} emitted an id")]
+    MissingToolCallId { index: u32 },
+    #[error("tool call stream ended before index {index} emitted a type")]
+    MissingToolCallType { index: u32 },
+    #[error("tool call stream ended before index {index} emitted a function name")]
+    MissingFunctionName { index: u32 },
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct ChatCompletionResponse {
     pub id: String,
     pub choices: Vec<ChatCompletionChoice>,
@@ -694,7 +854,7 @@ pub struct ChatCompletionDelta {
     pub role: Option<ChatRole>,
     pub content: Option<String>,
     pub reasoning_content: Option<String>,
-    pub tool_calls: Option<Vec<ChatToolCall>>,
+    pub tool_calls: Option<Vec<ChatToolCallDelta>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -841,9 +1001,10 @@ pub fn parse_stream_event_block(block: &str) -> Result<Option<StreamEvent>, Deep
 #[cfg(test)]
 mod tests {
     use super::{
-        ChatCompletionRequest, ChatMessage, ChatTool, ChatToolCall, DeepSeekApiConfig,
-        DeepSeekApiError, DeepSeekModelId, ReasoningEffort, SseEventParser, StreamEvent,
-        StreamOptions, ThinkingConfig, ToolChoice, parse_stream_event_block,
+        ChatCompletionRequest, ChatFunctionCallDelta, ChatMessage, ChatTool, ChatToolCall,
+        ChatToolCallAccumulator, ChatToolCallAccumulatorError, ChatToolCallDelta, ChatToolType,
+        DeepSeekApiConfig, DeepSeekApiError, DeepSeekModelId, ReasoningEffort, SseEventParser,
+        StreamEvent, StreamOptions, ThinkingConfig, ToolChoice, parse_stream_event_block,
     };
 
     #[test]
@@ -1106,6 +1267,146 @@ mod tests {
     }
 
     #[test]
+    fn stream_parser_deserializes_tool_call_delta() {
+        let event = parse_stream_event_block(
+            r#"data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":1710000000,"model":"deepseek-v4-pro","system_fingerprint":null,"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\"path\""}}]},"finish_reason":null}],"usage":null}"#,
+        )
+        .expect("tool call chunk should parse");
+
+        match event {
+            Some(StreamEvent::Chunk(chunk)) => {
+                let tool_calls = chunk.choices[0]
+                    .delta
+                    .tool_calls
+                    .as_ref()
+                    .expect("tool call delta should be present");
+                assert_eq!(tool_calls.len(), 1);
+                assert_eq!(tool_calls[0].index, 0);
+                assert_eq!(tool_calls[0].id.as_deref(), Some("call_1"));
+                assert_eq!(tool_calls[0].kind, Some(ChatToolType::Function));
+                let function = tool_calls[0]
+                    .function
+                    .as_ref()
+                    .expect("function delta should be present");
+                assert_eq!(function.name.as_deref(), Some("read_file"));
+                assert_eq!(function.arguments.as_deref(), Some(r#"{"path""#));
+            }
+            Some(StreamEvent::Done) | None => panic!("expected stream chunk"),
+        }
+    }
+
+    #[test]
+    fn tool_call_accumulator_builds_complete_calls_from_fragments() {
+        let mut accumulator = ChatToolCallAccumulator::new();
+        accumulator
+            .append_delta(tool_call_delta(
+                0,
+                Some("call_read"),
+                Some(ChatToolType::Function),
+                Some("read_file"),
+                Some("{\"path\""),
+            ))
+            .expect("first delta should append");
+        accumulator
+            .append_delta(tool_call_delta(
+                0,
+                None,
+                None,
+                None,
+                Some(":\"README.md\"}"),
+            ))
+            .expect("argument delta should append");
+
+        let tool_calls = accumulator.finish().expect("tool call should complete");
+
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].id, "call_read");
+        assert_eq!(tool_calls[0].kind, ChatToolType::Function);
+        assert_eq!(tool_calls[0].function.name, "read_file");
+        assert_eq!(tool_calls[0].function.arguments, r#"{"path":"README.md"}"#);
+    }
+
+    #[test]
+    fn tool_call_accumulator_preserves_index_order() {
+        let mut accumulator = ChatToolCallAccumulator::new();
+        accumulator
+            .append_delta(tool_call_delta(
+                1,
+                Some("call_second"),
+                Some(ChatToolType::Function),
+                Some("shell"),
+                Some("{\"command\":\""),
+            ))
+            .expect("second call first delta should append");
+        accumulator
+            .append_delta(tool_call_delta(
+                0,
+                Some("call_first"),
+                Some(ChatToolType::Function),
+                Some("read_file"),
+                Some("{\"path\":\"README.md\"}"),
+            ))
+            .expect("first call delta should append");
+        accumulator
+            .append_delta(tool_call_delta(1, None, None, None, Some("pwd\"}")))
+            .expect("second call argument delta should append");
+
+        let tool_calls = accumulator
+            .finish()
+            .expect("interleaved tool calls should complete");
+
+        assert_eq!(tool_calls[0].id, "call_first");
+        assert_eq!(tool_calls[1].id, "call_second");
+        assert_eq!(tool_calls[1].function.arguments, r#"{"command":"pwd"}"#);
+    }
+
+    #[test]
+    fn tool_call_accumulator_rejects_conflicting_ids() {
+        let mut accumulator = ChatToolCallAccumulator::new();
+        accumulator
+            .append_delta(tool_call_delta(
+                0,
+                Some("call_1"),
+                Some(ChatToolType::Function),
+                Some("read_file"),
+                Some("{}"),
+            ))
+            .expect("first delta should append");
+
+        let error = accumulator
+            .append_delta(tool_call_delta(0, Some("call_2"), None, None, None))
+            .expect_err("conflicting id should fail");
+
+        assert!(matches!(
+            error,
+            ChatToolCallAccumulatorError::ConflictingToolCallId { .. }
+        ));
+    }
+
+    #[test]
+    fn tool_call_accumulator_rejects_missing_required_metadata() {
+        let mut accumulator = ChatToolCallAccumulator::new();
+        accumulator
+            .append_delta(tool_call_delta(
+                0,
+                None,
+                Some(ChatToolType::Function),
+                Some("read_file"),
+                Some("{}"),
+            ))
+            .expect("delta with missing id should be buffered until finish");
+
+        let error = accumulator
+            .finish()
+            .expect_err("missing id should fail at finish");
+
+        assert!(matches!(
+            error,
+            ChatToolCallAccumulatorError::MissingToolCallId { .. }
+        ));
+    }
+
+    #[test]
     fn sse_byte_parser_handles_events_split_across_chunks() {
         let mut parser = SseEventParser::new();
         let first = parser
@@ -1268,5 +1569,23 @@ data: [DONE]
         assert_eq!(json["thinking"]["type"], "disabled");
         assert_eq!(json["tool_choice"]["type"], "function");
         assert_eq!(json["tool_choice"]["function"]["name"], "read_file");
+    }
+
+    fn tool_call_delta(
+        index: u32,
+        id: Option<&str>,
+        kind: Option<ChatToolType>,
+        name: Option<&str>,
+        arguments: Option<&str>,
+    ) -> ChatToolCallDelta {
+        ChatToolCallDelta {
+            index,
+            id: id.map(str::to_owned),
+            kind,
+            function: (name.is_some() || arguments.is_some()).then(|| ChatFunctionCallDelta {
+                name: name.map(str::to_owned),
+                arguments: arguments.map(str::to_owned),
+            }),
+        }
     }
 }
