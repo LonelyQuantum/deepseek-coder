@@ -11,7 +11,9 @@ use std::{
 use deepseek_coder_agent_core::{
     AGENT_METADATA,
     provider::deepseek_api::{
-        ChatFunctionDefinition, ChatTool, ChatToolCall, DeepSeekApiAdapter, DeepSeekApiConfig,
+        ChatCompletionStream, ChatFunctionDefinition, ChatTool, ChatToolCall,
+        ChatToolCallAccumulator, DeepSeekApiAdapter, DeepSeekApiConfig, StreamEvent,
+        ThinkingConfig,
     },
     run_log::{RunLog, RunLogError, RunLogStore},
     tool::{BUILTIN_TOOLS, ToolImplementationStatus},
@@ -22,10 +24,13 @@ use deepseek_coder_agent_core::{
     turn_loop::{
         AgentRunMode, AgentTurnInput, AgentTurnLoop, AgentTurnLoopConfig, AgentTurnLoopError,
         AgentTurnOutcome, ApprovalPolicy, AutoApprovePolicy, RejectAllApprovalPolicy, TurnProvider,
-        TurnProviderError, TurnProviderRequest, TurnProviderResponse,
+        TurnProviderDelta, TurnProviderError, TurnProviderEvent, TurnProviderFuture,
+        TurnProviderRequest, TurnProviderResponse, TurnProviderStream,
+        turn_provider_response_stream,
     },
 };
 use deepseek_coder_agent_rpc::{AgentRpcError, StdioEventBridge};
+use futures_util::StreamExt;
 use serde_json::json;
 use thiserror::Error;
 
@@ -91,6 +96,7 @@ struct RunCommand {
     max_input_tokens: u64,
     max_model_turns: usize,
     max_output_tokens: u32,
+    thinking: ThinkingKind,
 }
 
 impl RunCommand {
@@ -108,6 +114,7 @@ impl RunCommand {
         let mut max_input_tokens = AgentTurnLoopConfig::default().max_input_tokens;
         let mut max_model_turns = AgentTurnLoopConfig::default().max_model_turns;
         let mut max_output_tokens = DEFAULT_MAX_OUTPUT_TOKENS;
+        let mut thinking = ThinkingKind::Enabled;
         let mut task_parts = Vec::new();
         let mut index = 0;
 
@@ -160,6 +167,9 @@ impl RunCommand {
                     max_output_tokens =
                         parse_u32(&next_value(&args, &mut index, "--max-output-tokens")?)?;
                 }
+                "--thinking" => {
+                    thinking = parse_thinking(&next_value(&args, &mut index, "--thinking")?)?;
+                }
                 "--" => {
                     task_parts.extend(args[index + 1..].iter().cloned());
                     break;
@@ -200,6 +210,7 @@ impl RunCommand {
             max_input_tokens,
             max_model_turns,
             max_output_tokens,
+            thinking,
         })
     }
 }
@@ -222,25 +233,29 @@ where
     };
     let input =
         AgentTurnInput::new(command.turn_id.clone(), command.task.clone()).with_mode(command.mode);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .thread_name("deepseek-coder-cli")
+        .build()?;
 
     let turn_result = if command.auto_approve {
-        run_with_policy(
+        runtime.block_on(run_with_policy(
             &workspace,
             provider,
             AutoApprovePolicy,
             config,
             input,
             &mut run_log,
-        )
+        ))
     } else {
-        run_with_policy(
+        runtime.block_on(run_with_policy(
             &workspace,
             provider,
             RejectAllApprovalPolicy,
             config,
             input,
             &mut run_log,
-        )
+        ))
     };
 
     let verification_result = match (&turn_result, &command.verify_command) {
@@ -280,7 +295,7 @@ where
     Ok(())
 }
 
-fn run_with_policy<A>(
+async fn run_with_policy<A>(
     workspace: &Path,
     provider: CliTurnProvider,
     approval_policy: A,
@@ -294,7 +309,7 @@ where
     let mut loop_runner =
         AgentTurnLoop::with_approval_policy(workspace, provider, approval_policy)?
             .with_config(config);
-    loop_runner.run_turn(input, run_log)
+    loop_runner.run_turn(input, run_log).await
 }
 
 fn run_verification(
@@ -405,7 +420,7 @@ where
 fn create_provider(command: &RunCommand) -> Result<CliTurnProvider, CliError> {
     match command.provider {
         ProviderKind::DeepSeek => Ok(CliTurnProvider::DeepSeek(Box::new(
-            DeepSeekTurnProvider::new(command.max_output_tokens)?,
+            DeepSeekTurnProvider::new(command.max_output_tokens, command.thinking)?,
         ))),
         ProviderKind::Fixture => Ok(CliTurnProvider::Fixture(FixtureProvider::new(
             command.fixture,
@@ -420,68 +435,121 @@ enum CliTurnProvider {
 }
 
 impl TurnProvider for CliTurnProvider {
-    fn complete(
-        &mut self,
-        request: TurnProviderRequest,
-    ) -> Result<TurnProviderResponse, TurnProviderError> {
-        match self {
-            Self::DeepSeek(provider) => provider.complete(request),
-            Self::Fixture(provider) => provider.complete(request),
-        }
+    fn complete_stream(&mut self, request: TurnProviderRequest) -> TurnProviderFuture<'_> {
+        Box::pin(async move {
+            match self {
+                Self::DeepSeek(provider) => provider.complete_stream(request).await,
+                Self::Fixture(provider) => provider.complete_stream(request).await,
+            }
+        })
     }
 }
 
 #[derive(Debug)]
 struct DeepSeekTurnProvider {
     adapter: DeepSeekApiAdapter,
-    runtime: tokio::runtime::Runtime,
     max_output_tokens: u32,
+    thinking: ThinkingKind,
 }
 
 impl DeepSeekTurnProvider {
-    fn new(max_output_tokens: u32) -> Result<Self, CliError> {
+    fn new(max_output_tokens: u32, thinking: ThinkingKind) -> Result<Self, CliError> {
         let config = DeepSeekApiConfig::from_env()?;
         let adapter = DeepSeekApiAdapter::new(config)?;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .thread_name("deepseek-coder-cli-provider")
-            .build()?;
 
         Ok(Self {
             adapter,
-            runtime,
             max_output_tokens,
+            thinking,
         })
     }
 }
 
 impl TurnProvider for DeepSeekTurnProvider {
-    fn complete(
-        &mut self,
-        request: TurnProviderRequest,
-    ) -> Result<TurnProviderResponse, TurnProviderError> {
-        let mut chat_request = self
-            .adapter
-            .new_chat_request(request.messages)
-            .map_err(|error| TurnProviderError::new(error.to_string()))?
-            .with_max_tokens(self.max_output_tokens);
-        chat_request = chat_request.with_tools(executable_chat_tools()?);
+    fn complete_stream(&mut self, request: TurnProviderRequest) -> TurnProviderFuture<'_> {
+        Box::pin(async move {
+            let mut chat_request = self
+                .adapter
+                .new_chat_request(request.messages)
+                .map_err(|error| TurnProviderError::new(error.to_string()))?
+                .with_max_tokens(self.max_output_tokens);
+            chat_request = match self.thinking {
+                ThinkingKind::Enabled => chat_request.with_thinking(ThinkingConfig::enabled()),
+                ThinkingKind::Disabled => chat_request.with_thinking(ThinkingConfig::disabled()),
+            };
+            chat_request = chat_request.with_tools(executable_chat_tools()?);
 
-        let response = self
-            .runtime
-            .block_on(self.adapter.create_chat_completion(chat_request))
-            .map_err(|error| TurnProviderError::new(error.to_string()))?;
-        let choice =
-            response.choices.into_iter().next().ok_or_else(|| {
-                TurnProviderError::new("DeepSeek response did not include choices")
-            })?;
+            let stream = self
+                .adapter
+                .create_chat_completion_stream(chat_request)
+                .await
+                .map_err(|error| TurnProviderError::new(error.to_string()))?;
 
-        Ok(TurnProviderResponse::tool_calls(
-            choice.message.content,
-            choice.message.reasoning_content,
-            choice.message.tool_calls.unwrap_or_default(),
-        ))
+            Ok(deepseek_chat_stream_to_turn_provider_stream(stream))
+        })
     }
+}
+
+fn deepseek_chat_stream_to_turn_provider_stream(
+    mut stream: ChatCompletionStream,
+) -> TurnProviderStream {
+    Box::pin(async_stream::try_stream! {
+        let mut content = String::new();
+        let mut reasoning_content = String::new();
+        let mut tool_call_accumulator = ChatToolCallAccumulator::new();
+
+        while let Some(event) = stream.next().await {
+            match event.map_err(|error| TurnProviderError::new(error.to_string()))? {
+                StreamEvent::Chunk(chunk) => {
+                    for choice in chunk.choices {
+                        let delta = choice.delta;
+                        let mut provider_delta = TurnProviderDelta::new(None, None);
+
+                        if let Some(delta_content) = delta.content
+                            && !delta_content.is_empty()
+                        {
+                            content.push_str(&delta_content);
+                            provider_delta.content = Some(delta_content);
+                        }
+
+                        if let Some(delta_reasoning_content) = delta.reasoning_content
+                            && !delta_reasoning_content.is_empty()
+                        {
+                            reasoning_content.push_str(&delta_reasoning_content);
+                            provider_delta.reasoning_content = Some(delta_reasoning_content);
+                        }
+
+                        if !provider_delta.is_empty() {
+                            yield TurnProviderEvent::AssistantDelta(provider_delta);
+                        }
+
+                        if let Some(delta_tool_calls) = delta.tool_calls {
+                            for tool_call_delta in delta_tool_calls {
+                                tool_call_accumulator
+                                    .append_delta(tool_call_delta)
+                                    .map_err(|error| TurnProviderError::new(error.to_string()))?;
+                            }
+                        }
+                    }
+                }
+                StreamEvent::Done => break,
+            }
+        }
+
+        let tool_calls = tool_call_accumulator
+            .finish()
+            .map_err(|error| TurnProviderError::new(error.to_string()))?;
+
+        yield TurnProviderEvent::Completed(TurnProviderResponse::tool_calls(
+            non_empty_string(content),
+            non_empty_string(reasoning_content),
+            tool_calls,
+        ));
+    })
+}
+
+fn non_empty_string(value: String) -> Option<String> {
+    if value.is_empty() { None } else { Some(value) }
 }
 
 fn executable_chat_tools() -> Result<Vec<ChatTool>, TurnProviderError> {
@@ -569,13 +637,14 @@ impl FixtureProvider {
 }
 
 impl TurnProvider for FixtureProvider {
-    fn complete(
-        &mut self,
-        _request: TurnProviderRequest,
-    ) -> Result<TurnProviderResponse, TurnProviderError> {
-        self.responses
-            .pop_front()
-            .ok_or_else(|| TurnProviderError::new("fixture provider has no response"))
+    fn complete_stream(&mut self, _request: TurnProviderRequest) -> TurnProviderFuture<'_> {
+        Box::pin(async move {
+            let response = self
+                .responses
+                .pop_front()
+                .ok_or_else(|| TurnProviderError::new("fixture provider has no response"))?;
+            Ok(turn_provider_response_stream(response))
+        })
     }
 }
 
@@ -583,6 +652,12 @@ impl TurnProvider for FixtureProvider {
 enum ProviderKind {
     DeepSeek,
     Fixture,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ThinkingKind {
+    Enabled,
+    Disabled,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -649,6 +724,14 @@ fn parse_fixture(value: &str) -> Result<FixtureKind, CliError> {
     }
 }
 
+fn parse_thinking(value: &str) -> Result<ThinkingKind, CliError> {
+    match value {
+        "enabled" => Ok(ThinkingKind::Enabled),
+        "disabled" => Ok(ThinkingKind::Disabled),
+        _ => Err(CliError::Usage(format!("unsupported thinking `{value}`"))),
+    }
+}
+
 fn parse_u64(value: &str) -> Result<u64, CliError> {
     value
         .parse()
@@ -701,6 +784,7 @@ fn run_help_text() -> String {
         "  --max-input-tokens <n>",
         "  --max-model-turns <n>",
         "  --max-output-tokens <n>",
+        "  --thinking <enabled|disabled>",
     ]
     .join("\n")
 }
@@ -709,11 +793,20 @@ fn run_help_text() -> String {
 mod tests {
     use std::fs;
 
-    use deepseek_coder_agent_core::run_log::REDACTED_VALUE;
-    use deepseek_coder_agent_core::run_log::RunLogStore;
+    use deepseek_coder_agent_core::{
+        provider::deepseek_api::{
+            ChatCompletionChunk, ChatCompletionChunkChoice, ChatCompletionDelta,
+            ChatFunctionCallDelta, ChatToolCallDelta, ChatToolType, StreamEvent,
+        },
+        run_log::{REDACTED_VALUE, RunLogStore},
+        turn_loop::TurnProviderEvent,
+    };
+    use futures_util::{StreamExt, stream};
     use serde_json::Value;
 
-    use super::{CliCommand, ProviderKind, RunCommand, run_cli};
+    use super::{
+        CliCommand, ProviderKind, RunCommand, deepseek_chat_stream_to_turn_provider_stream, run_cli,
+    };
 
     #[test]
     fn parses_run_command_options() {
@@ -726,6 +819,8 @@ mod tests {
             "readme".to_owned(),
             "--mode".to_owned(),
             "ask".to_owned(),
+            "--thinking".to_owned(),
+            "disabled".to_owned(),
             "--run-id".to_owned(),
             "run_test".to_owned(),
             "Read".to_owned(),
@@ -739,11 +834,13 @@ mod tests {
                 task,
                 provider,
                 run_id,
+                thinking,
                 ..
             }) => {
                 assert_eq!(task, "Read README");
                 assert_eq!(provider, ProviderKind::Fixture);
                 assert_eq!(run_id, "run_test");
+                assert_eq!(thinking, super::ThinkingKind::Disabled);
             }
             CliCommand::Help => panic!("expected run command"),
         }
@@ -855,6 +952,178 @@ mod tests {
                     .as_str()
                     .is_some_and(|stdout| stdout.contains(REDACTED_VALUE))
         }));
+    }
+
+    #[test]
+    fn deepseek_stream_wrapper_aggregates_deltas() {
+        let stream = Box::pin(stream::iter([
+            Ok(StreamEvent::Chunk(chat_chunk(Some("hel"), Some("think")))),
+            Ok(StreamEvent::Chunk(chat_chunk(Some("lo"), None))),
+            Ok(StreamEvent::Done),
+        ]));
+        let mut stream = deepseek_chat_stream_to_turn_provider_stream(stream);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("test runtime should build");
+
+        let events = runtime.block_on(async {
+            let mut events = Vec::new();
+            while let Some(event) = stream.next().await {
+                events.push(event.expect("provider stream event should be ok"));
+            }
+            events
+        });
+
+        assert_eq!(events.len(), 3);
+        assert!(matches!(
+            &events[0],
+            TurnProviderEvent::AssistantDelta(delta)
+                if delta.content.as_deref() == Some("hel")
+                    && delta.reasoning_content.as_deref() == Some("think")
+        ));
+        assert!(matches!(
+            &events[1],
+            TurnProviderEvent::AssistantDelta(delta)
+                if delta.content.as_deref() == Some("lo")
+                    && delta.reasoning_content.is_none()
+        ));
+        assert!(matches!(
+            &events[2],
+            TurnProviderEvent::Completed(response)
+                if response.content.as_deref() == Some("hello")
+                    && response.reasoning_content.as_deref() == Some("think")
+        ));
+    }
+
+    #[test]
+    fn deepseek_stream_wrapper_accumulates_tool_call_deltas() {
+        let stream = Box::pin(stream::iter([
+            Ok(StreamEvent::Chunk(chat_tool_call_chunk(vec![
+                tool_call_delta(
+                    0,
+                    Some("call_read"),
+                    Some(ChatToolType::Function),
+                    Some("read_file"),
+                    Some("{\"path\""),
+                ),
+            ]))),
+            Ok(StreamEvent::Chunk(chat_tool_call_chunk(vec![
+                tool_call_delta(0, None, None, None, Some(":\"README.md\"}")),
+            ]))),
+            Ok(StreamEvent::Done),
+        ]));
+        let mut stream = deepseek_chat_stream_to_turn_provider_stream(stream);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("test runtime should build");
+
+        let events = runtime.block_on(async {
+            let mut events = Vec::new();
+            while let Some(event) = stream.next().await {
+                events.push(event.expect("provider stream event should be ok"));
+            }
+            events
+        });
+
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0],
+            TurnProviderEvent::Completed(response)
+                if response.tool_calls.len() == 1
+                    && response.tool_calls[0].id == "call_read"
+                    && response.tool_calls[0].function.name == "read_file"
+                    && response.tool_calls[0].function.arguments == r#"{"path":"README.md"}"#
+        ));
+    }
+
+    #[test]
+    fn deepseek_stream_wrapper_rejects_incomplete_tool_call_delta() {
+        let stream = Box::pin(stream::iter([
+            Ok(StreamEvent::Chunk(chat_tool_call_chunk(vec![
+                tool_call_delta(
+                    0,
+                    None,
+                    Some(ChatToolType::Function),
+                    Some("read_file"),
+                    Some("{}"),
+                ),
+            ]))),
+            Ok(StreamEvent::Done),
+        ]));
+        let mut stream = deepseek_chat_stream_to_turn_provider_stream(stream);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("test runtime should build");
+
+        let error = runtime
+            .block_on(async { stream.next().await.expect("stream should yield an error") })
+            .expect_err("incomplete tool call must fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("tool call stream ended before index 0 emitted an id")
+        );
+    }
+
+    fn chat_chunk(content: Option<&str>, reasoning_content: Option<&str>) -> ChatCompletionChunk {
+        ChatCompletionChunk {
+            id: "chunk_test".to_owned(),
+            object: "chat.completion.chunk".to_owned(),
+            created: 1,
+            model: "deepseek-v4-pro".to_owned(),
+            system_fingerprint: None,
+            choices: vec![ChatCompletionChunkChoice {
+                index: 0,
+                delta: ChatCompletionDelta {
+                    role: None,
+                    content: content.map(str::to_owned),
+                    reasoning_content: reasoning_content.map(str::to_owned),
+                    tool_calls: None,
+                },
+                finish_reason: None,
+            }],
+            usage: None,
+        }
+    }
+
+    fn chat_tool_call_chunk(tool_calls: Vec<ChatToolCallDelta>) -> ChatCompletionChunk {
+        ChatCompletionChunk {
+            id: "chunk_test".to_owned(),
+            object: "chat.completion.chunk".to_owned(),
+            created: 1,
+            model: "deepseek-v4-pro".to_owned(),
+            system_fingerprint: None,
+            choices: vec![ChatCompletionChunkChoice {
+                index: 0,
+                delta: ChatCompletionDelta {
+                    role: None,
+                    content: None,
+                    reasoning_content: None,
+                    tool_calls: Some(tool_calls),
+                },
+                finish_reason: None,
+            }],
+            usage: None,
+        }
+    }
+
+    fn tool_call_delta(
+        index: u32,
+        id: Option<&str>,
+        kind: Option<ChatToolType>,
+        name: Option<&str>,
+        arguments: Option<&str>,
+    ) -> ChatToolCallDelta {
+        ChatToolCallDelta {
+            index,
+            id: id.map(str::to_owned),
+            kind,
+            function: (name.is_some() || arguments.is_some()).then(|| ChatFunctionCallDelta {
+                name: name.map(str::to_owned),
+                arguments: arguments.map(str::to_owned),
+            }),
+        }
     }
 
     const VERIFICATION_SECRET_PREFIX: &str = "sk";
