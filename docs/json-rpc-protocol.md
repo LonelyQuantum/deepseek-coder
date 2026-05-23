@@ -215,7 +215,7 @@ interface SendTurnResult {
 
 Result 返回后，进度通过 `agent.event` notification 持续到达。
 
-当前 Rust request loop 已能解析 `agent.sendTurn` 并分发给 `AgentRpcRequestHandler`。具体如何创建 run、选择 provider、驱动 Turn Loop、持续发送实时事件由 handler 实现；Phase 1 的基础 request loop 只保证协议分发、错误响应和 handler 返回事件的有序写出。
+当前 Rust request loop 已能解析 `agent.sendTurn` 并分发给 `AgentRpcRequestHandler`。`crates/agent-rpc::StdioEventBridge` 已实现 Core 的 `TurnEventSink`，可以把 Turn Loop 写入后的事件实时转换为 `agent.event`。具体如何创建 run、选择 provider、驱动 Turn Loop、在发送 accepted response 后持续运行真实任务，仍由后续真实 handler 实现。
 
 ### `agent.approve`
 
@@ -226,6 +226,12 @@ interface ApproveParams {
   approvalId: string;
   persist?: "never" | "session" | "workspace";
 }
+
+interface ApproveResult {
+  approvalId: string;
+  state: "approved";
+  persist: "never" | "session" | "workspace";
+}
 ```
 
 规则：
@@ -233,6 +239,7 @@ interface ApproveParams {
 - `persist` 默认是 `never`。
 - 只有明确标记为 persistable 的审批类型才能使用 `workspace` 持久化。
 - 批准已过期或未知审批时返回 `E_APPROVAL_NOT_FOUND`。
+- 当前 Rust request loop 已能解析 `agent.approve` 并分发给 `AgentRpcRequestHandler`；真实 pending approval 队列由后续真实 Turn Loop handler 实现。
 
 ### `agent.reject`
 
@@ -243,6 +250,12 @@ interface RejectParams {
   approvalId: string;
   reason?: string;
 }
+
+interface RejectResult {
+  approvalId: string;
+  state: "rejected";
+  reason?: string;
+}
 ```
 
 规则：
@@ -250,6 +263,7 @@ interface RejectParams {
 - Agent Core 将拒绝记录到 run log。
 - Agent Core 不得用等价操作绕过拒绝。
 - 拒绝后，Agent Core 要么请求新路径，要么继续只读工作，要么停止 run。
+- 当前 Rust request loop 已能解析 `agent.reject` 并分发给 `AgentRpcRequestHandler`；真实 pending approval 队列由后续真实 Turn Loop handler 实现。
 
 ### `agent.cancel`
 
@@ -388,7 +402,7 @@ interface AssistantDelta {
 }
 ```
 
-`stream: true` 表示该事件来自 provider streaming delta；省略或为 false 时，通常表示非 streaming provider 或完成后回放出的完整文本片段。Provider-private reasoning 不通过该事件发送。如果 provider 要求后续请求携带 reasoning state，由 Agent Core 内部处理；除非显式开启 debug logging，否则只记录安全摘要。
+`stream: true` 表示该事件来自 provider streaming delta；省略或为 false 时，通常表示非 streaming provider 在 `Completed` 后补写的一次完整可见文本片段，或 resume 时按原 payload 回放的历史事件。Provider-private reasoning 不通过该事件发送。如果 provider 要求后续请求携带 reasoning state，由 Agent Core 内部处理；除非显式开启 debug logging，否则只记录安全摘要。
 
 ### `plan.updated`
 
@@ -488,6 +502,7 @@ interface ToolRequested {
 interface ToolApprovalRequired {
   approvalId: string;
   toolCallId: string;
+  toolName: ToolName;
   risk: RiskLevel;
   title: string;
   detail: string;
@@ -497,6 +512,20 @@ interface ToolApprovalRequired {
   persistable: boolean;
 }
 ```
+
+### `tool.approvalResolved`
+
+```ts
+interface ToolApprovalResolved {
+  approvalId: string;
+  toolCallId: string;
+  toolName: ToolName;
+  decision: "approved" | "rejected";
+  reason?: string;
+}
+```
+
+该事件记录用户或策略对审批请求的决定。`decision: "approved"` 后续应进入 `tool.started`；`decision: "rejected"` 后当前工具调用不得执行，run 可以失败、继续只读工作或让模型请求不同操作。CLI 当前会把 prompt 的批准/拒绝写入该事件；RPC handler 接入后也必须写入同等事件。
 
 ### `tool.started`
 
@@ -727,7 +756,7 @@ Run log 持久化前必须脱敏密钥。
 ## 实现说明
 
 - `packages/protocol` 定义与本文档匹配的 TypeScript 类型。
-- `crates/agent-rpc` 负责 Rust 协议结构和 JSON-RPC framing；当前已实现 Run Log 事件到 `agent.event` notification 的最小桥接。
+- `crates/agent-rpc` 负责 Rust 协议结构和 JSON-RPC framing；当前已实现 Run Log 事件到 `agent.event` notification 的桥接，并让 `StdioEventBridge` 直接实现 `TurnEventSink`。
 - `docs/protocol/tool-registry.v1.json` 当前用于校验 Rust 与 TypeScript 的基础工具注册表一致，包含工具风险、默认审批和当前实现状态。
 - 后续应继续增加事件 payload 和 RPC method 的兼容性测试，验证 Rust 和 TypeScript 的协议定义一致。
 

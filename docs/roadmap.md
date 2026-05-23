@@ -40,14 +40,18 @@
 - 真实 provider streaming 联网验收：`deepseek_cli_live` 从编译出的 CLI 二进制启动真实 DeepSeek provider，验证 `stream: true` 的 `assistant.delta` 和最终 `run.completed`。
 - streaming tool call 增量拼装验证：adapter 已区分 `ChatToolCallDelta` 与完整 `ChatToolCall`，`ChatToolCallAccumulator` 会按 `index` 拼接 arguments 并拒绝缺失或冲突元数据；`live_streaming_tool_call_accumulator_smoke_test` 已用真实 DeepSeek streaming 验收工具调用 delta 形态。
 - Agent RPC Server 双向 request loop：`agent-rpc` 已支持 newline-delimited JSON-RPC request 读取、初始化顺序检查、`agent.initialize` / `agent.sendTurn` / `agent.resume` 分发、response/error 写回，以及 handler 返回事件的 `agent.event` 有序输出。
+- RPC/CLI 实时事件输出：`AgentTurnLoop::run_turn_with_event_sink` 会在 Run Log 事件追加成功后立即调用 `TurnEventSink`；`StdioEventBridge` 已实现该接口，CLI `--json` 输出顺序与本地 `events.jsonl` 的 `seq` 一致，不再等 run 完成后批量回放。
+- CLI/RPC/TUI/VS Code 审批基础：Turn Loop 会写入 `tool.approvalRequired` 和 `tool.approvalResolved`；CLI 二进制支持 stdin/stderr 交互式 y/n 审批；RPC request loop 已分发 `agent.approve` / `agent.reject`；TypeScript 协议类型已补齐；TUI prompt 状态机和 VS Code modal approval adapter 已有测试覆盖。
 
 下一步：
 
 - Run Log 写入串行化：Turn Loop / RPC 层必须保证同一 run 的事件由单 writer 或同步队列按顺序写入。
 - Run summary metadata：为 `agent.listRuns` 设计并实现 `summary.json` 或等价索引，避免每次列出 run 都扫描完整 JSONL。
-- RPC/CLI 实时事件输出：当前 CLI `--json` 仍是 run 完成后重放 run log；后续需要在执行过程中持续发送 `agent.event`。
 - 真实 RPC Turn Loop handler：把 CLI 当前 provider / Turn Loop 选择逻辑抽成 `AgentRpcRequestHandler` 实现，让 `agent.sendTurn` 真正创建 run 并驱动 Core。
-- 交互式审批：CLI/TUI/VS Code 能等待用户批准或拒绝 `tool.approvalRequired`。
+- RPC 真实审批等待：把 `tool.approvalRequired` 暂存为 pending approval，等待 `agent.approve` / `agent.reject` 唤醒对应 run。
+- VS Code RPC server 管理：插件启动并监管 Rust Agent RPC Server，处理进程退出、版本不匹配、workspace trust 和启动失败提示。
+- TUI RPC 入口：TUI 不直接初始化 Turn Loop，而是连接同一套 RPC request loop，消费 `agent.event` 并把审批决定发送为 `agent.approve` / `agent.reject`。
+- TUI/VS Code 审批 UI：把已实现的审批交互原语接入真实 RPC pending 队列。
 - CLI JSON error response：让 `--json` 失败路径输出结构化 JSON-RPC error，而不是只写人类可读 stderr。
 - 真实仓库验收：使用 DeepSeek provider 在小型仓库中执行一次“读取 -> 修改 -> 验证 -> 报告”。
 - 测试替身收敛：如果 CLI fixture 场景继续增加，把 CLI fixture 与 Agent Core scripted provider 抽成共享测试 harness。

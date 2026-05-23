@@ -1,6 +1,6 @@
 # Agent Turn Loop
 
-状态：Phase 1 基础编排、TurnProvider async / streaming 边界、真实 DeepSeek 文本 streaming 联网验收、streaming tool call 增量拼装验证、基础 RPC 事件桥接和双向 request loop 已实现；真实 RPC Turn Loop handler、实时事件转发和交互式审批尚未实现。
+状态：Phase 1 基础编排、TurnProvider async / streaming 边界、真实 DeepSeek 文本 streaming 联网验收、streaming tool call 增量拼装验证、基础 RPC 事件桥接、双向 request loop、`TurnEventSink` 实时事件输出和 CLI 交互式审批已实现；TUI/VS Code 已有审批交互原语；真实 RPC Turn Loop handler 和 RPC pending approval 队列尚未实现。
 
 Agent Turn Loop 是 Agent Core 的回合编排层。它负责把已经实现的 Context Builder、`reasoning_content` 状态机、provider 边界、工具执行、审批和 Run Log 串成同一条可复现事件流。
 
@@ -15,10 +15,11 @@ crates/agent-core/src/turn_loop.rs
 - `AgentTurnLoop`：持有 provider、审批策略、工具执行器、reasoning 状态机和回合配置。
 - `TurnProvider`：异步 streaming provider trait。`complete_stream` 返回 `TurnProviderEvent` 流，provider 可以先发送 `AssistantDelta`，再发送唯一的 `Completed` 响应。
 - `TurnProviderEvent`：当前包含 `AssistantDelta` 和 `Completed`。`AssistantDelta` 只用于前端展示和 run log 增量；`Completed` 必须包含完整 content、`reasoning_content` 和 tool calls，供后续 reasoning replay 与工具执行使用。
-- `ApprovalPolicy`：审批策略 trait。
+- `ApprovalPolicy`：审批策略 trait。策略可以批准、拒绝，或返回策略错误；Turn Loop 会把批准/拒绝写入 `tool.approvalResolved`。
 - `RejectAllApprovalPolicy`：默认拒绝所有需要审批的工具，避免写入和命令被静默执行。
 - `AutoApprovePolicy`：测试用策略，用于验证已批准工具的执行路径。
 - `AgentTurnInput` / `AgentTurnOutcome`：最小 turn 输入与结果。
+- `TurnEventSink` / `NoopTurnEventSink`：Run Log 事件追加成功后的实时输出出口。默认 `run_turn` 使用 no-op sink；CLI/RPC 可以调用 `run_turn_with_event_sink` 接入 JSON-RPC notification writer。
 
 ## 当前回合流程
 
@@ -55,6 +56,7 @@ AgentTurnInput
 - `assistant.delta`
 - `tool.requested`
 - `tool.approvalRequired`
+- `tool.approvalResolved`
 - `tool.started`
 - `tool.completed`
 - `run.completed`
@@ -76,7 +78,7 @@ DeepSeek streaming tool call delta 在 CLI provider wrapper 内通过 `ChatToolC
 
 `apply_patch` 和 `shell` 当前根据工具定义触发审批：
 
-- 默认策略 `RejectAllApprovalPolicy` 会拒绝执行，Turn Loop 写入 `tool.approvalRequired` 后以 `E_APPROVAL_REJECTED` 失败。
+- 默认策略 `RejectAllApprovalPolicy` 会拒绝执行，Turn Loop 写入 `tool.approvalRequired` 和 `tool.approvalResolved` 后以 `E_APPROVAL_REJECTED` 失败。
 - 测试可使用 `AutoApprovePolicy` 验证已批准路径。
 
 命令风险分类器尚未实现。也就是说，`shell` 当前只按静态 `exec` 风险处理，不会识别 `git push`、依赖安装、删除或发布命令并升级为 `network` / `destructive`。该能力应在审批链路接入 CLI/RPC 后实现。
@@ -89,6 +91,7 @@ DeepSeek streaming tool call delta 在 CLI provider wrapper 内通过 `ChatToolC
 - provider 请求 `shell`，默认审批策略拒绝执行，run 失败且不会写入 `tool.started`。
 - provider 请求 `apply_patch`，测试审批策略批准后修改文件、记录 `changedFiles`，并完成 run。
 - provider 发送多个 streaming content delta，Turn Loop 写入多条 `assistant.delta`，并避免在 `Completed` 时重复写入完整文本。
+- Turn Loop 每次成功追加 Run Log 事件后，会把同一条事件交给 `TurnEventSink`，sink 看到的事件序列与本地 `events.jsonl` 一致。
 - DeepSeek wrapper 能把 streaming tool call delta 拼成完整工具调用，并在缺少必要 metadata 时失败。
 
 这些测试验证的是模块集成骨架，不需要真实 DeepSeek API Key，也不会联网。真实 tool call delta 形态由 `live_streaming_tool_call_accumulator_smoke_test` 作为手动 opt-in live test 验收。
@@ -96,9 +99,9 @@ DeepSeek streaming tool call delta 在 CLI provider wrapper 内通过 `ChatToolC
 ## 尚未实现
 
 - tool call 参数的 JSON Schema 校验层；当前由具体 Rust 参数类型反序列化保证基础结构。
-- 真实 RPC Turn Loop handler；当前 `agent-rpc` 已有 `AgentRpcRequestHandler` 边界，但尚未把 CLI provider / Turn Loop 选择逻辑抽成共享实现。
-- Agent RPC Server 对 approval request 的异步等待和取消。
-- Agent RPC Server 实时转发 run events；当前 CLI `--json` 仍在 run 完成后重放 run log。
+- 真实 RPC Turn Loop handler；当前 `agent-rpc` 已有 `AgentRpcRequestHandler` 边界和 `agent.approve` / `agent.reject` 分发，但尚未把 CLI provider / Turn Loop 选择逻辑抽成共享实现。
+- Agent RPC Server 对 approval request 的真实 pending 队列、异步等待和取消。
+- 真实 RPC Turn Loop handler 的事件发送队列；当前 `StdioEventBridge` 已可作为 `TurnEventSink` 使用，但 request loop 还没有把 provider / Turn Loop 选择逻辑抽成共享 handler。
 - run summary metadata。
 - 命令风险分类器和更强 sandbox。
 - RPC request loop 里的 verification 编排；CLI `run` 已支持用户显式 `--verify`。

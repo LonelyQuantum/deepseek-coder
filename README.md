@@ -537,7 +537,7 @@ extension.ts
 
 ## 开发计划
 
-当前进度：Phase 1 进行中。DeepSeek API adapter、流式响应解析、`reasoning_content` 状态机、read/search/apply_patch/shell/git 基础工具执行层、基础 run log、基础 Context Builder 与 token 统计、Agent Turn Loop 基础编排、TurnProvider async / streaming 边界、CLI DeepSeek streaming wrapper、真实 DeepSeek provider streaming 联网验收、streaming tool call 增量拼装验证、Agent RPC Server stdio 事件桥接、Agent RPC Server 双向 request loop、CLI `run` 最小闭环、本地 fixture smoke test 和进程级 CLI fixture smoke test 已完成；当前 CLI 审查修复已覆盖 provider runtime、fixture 队列和 verification 输出脱敏。下一步进入 RPC/CLI 实时事件输出、交互式审批和更完整的真实仓库验收。
+当前进度：Phase 1 进行中。DeepSeek API adapter、流式响应解析、`reasoning_content` 状态机、read/search/apply_patch/shell/git 基础工具执行层、基础 run log、基础 Context Builder 与 token 统计、Agent Turn Loop 基础编排、TurnProvider async / streaming 边界、CLI DeepSeek streaming wrapper、真实 DeepSeek provider streaming 联网验收、streaming tool call 增量拼装验证、Agent RPC Server stdio 事件桥接、Agent RPC Server 双向 request loop、CLI `run` 最小闭环、RPC/CLI 实时事件输出、CLI/RPC/TUI/VS Code 审批基础、本地 fixture smoke test 和进程级 CLI fixture smoke test 已完成；当前 CLI 审查修复已覆盖 provider runtime、fixture 队列和 verification 输出脱敏。下一步进入真实 RPC Turn Loop handler、RPC 真实审批等待、VS Code RPC server 管理、TUI RPC 入口、CLI JSON-RPC 错误输出和更完整的真实仓库验收。
 
 ### Phase 0：项目章程
 
@@ -573,8 +573,13 @@ extension.ts
 - [x] 真实 DeepSeek provider streaming 联网验收。
 - [x] streaming tool call 增量拼装验证。
 - [x] Agent RPC Server 双向 request loop。
-- [ ] RPC/CLI 实时事件输出。
-- [ ] CLI/TUI/VS Code 交互式审批。
+- [x] RPC/CLI 实时事件输出。
+- [x] CLI/RPC/TUI/VS Code 审批基础：CLI prompt、`tool.approvalResolved`、`agent.approve` / `agent.reject` 分发、TypeScript 协议类型、TUI prompt 状态机和 VS Code modal approval adapter。
+- [ ] 真实 RPC Turn Loop handler。
+- [ ] RPC 真实审批等待队列。
+- [ ] VS Code 插件启动并监管 Rust Agent RPC Server。
+- [ ] TUI RPC 入口和事件流消费。
+- [ ] TUI/VS Code 审批 UI 接入真实 RPC pending 队列。
 - [ ] CLI JSON-RPC 错误输出。
 - [ ] 小型真实仓库 CLI 验收。
 
@@ -601,6 +606,7 @@ extension.ts
 
 ### Phase 3：TUI
 
+- [ ] RPC 入口和事件流消费。
 - [ ] Chat/Plan/Diff/Tools/Context/Settings 页面。
 - [ ] hunk 级审批。
 - [ ] run resume。
