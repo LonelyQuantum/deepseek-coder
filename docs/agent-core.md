@@ -78,16 +78,17 @@ Phase 1 已实现基础 Run Log 存储层，详见 `docs/run-log.md`。它提供
 
 Phase 1 已实现基础 Agent Turn Loop，详见 `docs/turn-loop.md`。当前编排层可以用 fake provider 跑通 Context Builder、`ReasoningContentStateMachine`、工具请求、审批、工具执行、脱敏工具结果、Run Log 写入和继续 provider 请求。
 
-当前 Turn Loop 仍是同步 provider trait；CLI 已通过非 streaming DeepSeek provider wrapper 和 fixture provider 接入它，完整 Agent RPC request loop 和真实 DeepSeek streaming 尚未接入。它的价值是先固定模块协作边界和 run log 事件顺序，为后续 RPC/前端接入提供可测试核心。
+当前 Turn Loop 仍是同步 provider trait；CLI 已通过非 streaming DeepSeek provider wrapper 和 fixture provider 接入它，完整 Agent RPC request loop 和真实 DeepSeek streaming 尚未接入。下一步需要把 provider 边界演进为 async / streaming，使 CLI/TUI/VS Code 能实时接收 delta、审批等待和取消信号。
 
 ## Phase 1 收敛顺序
 
 当前最重要的目标不是继续扩展工具数量，而是把已有模块串成可运行闭环：
 
-1. 真实 provider streaming 接入：把 DeepSeek adapter 的流式响应适配到 Turn Loop。
-2. RPC request loop：在 `agent.initialize` / `agent.sendTurn` 中创建 run、驱动 Turn Loop 并发送事件。
-3. 交互式审批：让 CLI/TUI/VS Code 能对 `tool.approvalRequired` 做真实批准或拒绝。
-4. 真实仓库验收：通过 `deepseek-coder run "<task>"` 跑通小型仓库上的读取、修改、验证和报告。
+1. TurnProvider async / streaming 设计：先固定 provider 事件边界，避免真实 streaming、RPC request loop 和交互式审批各自设计一套异步模型。
+2. 真实 provider streaming 接入：把 DeepSeek adapter 的流式响应适配到 Turn Loop。
+3. RPC request loop：在 `agent.initialize` / `agent.sendTurn` 中创建 run、驱动 Turn Loop 并发送事件。
+4. 交互式审批：让 CLI/TUI/VS Code 能对 `tool.approvalRequired` 做真实批准或拒绝。
+5. 真实仓库验收：通过 `deepseek-coder run "<task>"` 跑通小型仓库上的读取、修改、验证和报告。
 
 ## 后续增强
 

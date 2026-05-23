@@ -26,7 +26,7 @@ deepseek-coder run [options] <task>
 
 ### `deepseek`
 
-默认 provider。它读取 `DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL` 和 `DEEPSEEK_MODEL`，通过现有 DeepSeek API adapter 发起非 streaming chat completion。CLI 为 provider 创建一个专用的 Tokio multi-thread runtime，并启用 I/O 与 timer driver，避免把 HTTP 调用和主线程输出逻辑绑在同一个执行上下文里。
+默认 provider。它读取 `DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL` 和 `DEEPSEEK_MODEL`，通过现有 DeepSeek API adapter 发起非 streaming chat completion。CLI 为 provider 创建一个专用的 Tokio current-thread runtime，并启用 I/O 与 timer driver；当前 CLI 每次只驱动一个 run，这比 multi-thread runtime 更贴合串行命令行场景。后续接入 async streaming TurnProvider 后，再由统一运行时策略决定是否需要多线程。
 
 当前 CLI provider 会把 executor 已实现的工具注册给模型：
 
@@ -87,6 +87,7 @@ final: ...
 - DeepSeek provider 当前使用非 streaming completion；streaming delta 到 `assistant.delta` 的实时映射仍属于后续工作。
 - CLI 没有交互式审批 UI；默认拒绝写入/命令，`--auto-approve` 是显式非交互模式。
 - `--json` 当前在 run 完成后从 run log 重放事件，而不是边执行边实时输出。
+- `--json` 当前的失败路径仍输出人类可读错误；JSON-RPC error response 需要随 RPC request loop 一起设计。
 - verification 只支持用户显式提供的单条 shell command。
 - CLI 尚未接入 `agent-rpc` request loop；它直接调用 Agent Core，用于先完成本地最小闭环。
 - 如果 fixture 场景继续增加，应把 CLI fixture 与 `agent-core` 的 scripted provider 抽成共享测试 harness，减少两套测试替身并行维护。
@@ -111,6 +112,8 @@ deepseek-coder run --provider fixture --fixture patch --auto-approve --verify "i
 ```powershell
 deepseek-coder run --provider fixture --fixture readme --json "Read README"
 ```
+
+仓库测试中已经包含进程级 fixture smoke test，会从编译出的 `deepseek-coder` 二进制启动，验证 `--json` 输出和 run log 都包含 `run.started`、`tool.completed` 和 `run.completed`。
 
 真实 DeepSeek provider：
 

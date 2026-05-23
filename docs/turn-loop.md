@@ -13,7 +13,7 @@ crates/agent-core/src/turn_loop.rs
 当前实现提供：
 
 - `AgentTurnLoop`：持有 provider、审批策略、工具执行器、reasoning 状态机和回合配置。
-- `TurnProvider`：同步 provider trait，当前用于 fake provider / fixture 测试；真实 DeepSeek streaming 适配将在后续接入。
+- `TurnProvider`：同步 provider trait，当前用于 fake provider、CLI fixture provider 和 CLI 非 streaming DeepSeek wrapper；async / streaming provider 边界是下一步 P0 设计任务。
 - `ApprovalPolicy`：审批策略 trait。
 - `RejectAllApprovalPolicy`：默认拒绝所有需要审批的工具，避免写入和命令被静默执行。
 - `AutoApprovePolicy`：测试用策略，用于验证已批准工具的执行路径。
@@ -84,18 +84,19 @@ AgentTurnInput
 
 ## 尚未实现
 
-- 真实 DeepSeek adapter 接入 `TurnProvider`。
-- streaming delta 到 `assistant.delta` 的逐块事件映射。
+- `TurnProvider` async / streaming 边界：当前同步 trait 无法向 CLI/TUI/VS Code 实时发送 provider delta。
+- 真实 DeepSeek streaming 接入：需要把 DeepSeek adapter 的 stream event 映射到 `assistant.delta`、tool call 收集和最终响应。
 - tool call 参数的 JSON Schema 校验层；当前由具体 Rust 参数类型反序列化保证基础结构。
 - Agent RPC Server 对 approval request 的异步等待和取消。
-- CLI `run` 最小闭环。
 - run summary metadata。
 - 命令风险分类器和更强 sandbox。
-- verification command 编排。
+- RPC request loop 里的 verification 编排；CLI `run` 已支持用户显式 `--verify`。
+- `--json` 失败路径的 JSON-RPC error response。
 
 ## 后续增强
 
-- 用真实 DeepSeek provider 适配 `TurnProvider`，并保留 fake provider fixture 作为确定性集成测试。
+- 将 `TurnProvider` 演进为 async / streaming 边界，并保留 fake provider fixture 作为确定性集成测试。
+- 用真实 DeepSeek streaming provider 适配新的 `TurnProvider` 边界。
 - 将 `provider.requested`、`tool.completed` 和 `run.completed` payload schema 与 `docs/json-rpc-protocol.md` / `packages/protocol` 对齐。
 - 在 Turn Loop 中加入可取消执行模型，确保 provider streaming、工具执行和审批等待都能被 CLI/RPC 中止。
 - 将 `ReasoningContentState::ReplayRequired` 的摘要写入更稳定的 run log schema，并关联 tool call id。

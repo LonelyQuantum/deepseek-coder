@@ -33,15 +33,18 @@
 - Agent RPC Server 最小 stdio 事件桥接。
 - CLI `run` 最小闭环，支持 DeepSeek provider、fixture provider、run log 摘要、JSON event 重放和显式 verification command。
 - 本地 fixture 端到端 smoke test，覆盖 CLI、Turn Loop、工具执行、Run Log 和 JSON-RPC event 输出。
-- CLI 审查修复：DeepSeek provider 改为专用 multi-thread runtime，fixture provider 改为响应队列，verification 输出在写入 run log 前脱敏。
+- CLI 审查修复：DeepSeek provider 改为专用 current-thread runtime，fixture provider 改为响应队列，verification 输出在写入 run log 前脱敏。
+- 进程级 CLI fixture smoke test：从编译出的 `deepseek-coder` 二进制启动，验证 CLI、Turn Loop、Run Log 和 JSON-RPC event 输出的最小闭环。
 
 下一步：
 
-- 真实 provider streaming 接入：把 DeepSeek adapter 适配到 Turn Loop，并把流式 delta / tool call 收集映射到 run log。
+- TurnProvider async / streaming 设计：把当前同步 `complete` 演进为能产生实时 delta、tool call 和最终响应的 provider 边界。
+- 真实 provider streaming 接入：把 DeepSeek adapter 适配到新的 Turn Loop provider 边界，并把流式 delta / tool call 收集映射到 run log。
 - Run Log 写入串行化：Turn Loop / RPC 层必须保证同一 run 的事件由单 writer 或同步队列按顺序写入。
 - Run summary metadata：为 `agent.listRuns` 设计并实现 `summary.json` 或等价索引，避免每次列出 run 都扫描完整 JSONL。
 - RPC request loop：实现 `agent.initialize`、`agent.sendTurn`、`agent.resume` 和基础错误响应。
 - 交互式审批：CLI/TUI/VS Code 能等待用户批准或拒绝 `tool.approvalRequired`。
+- CLI JSON error response：让 `--json` 失败路径输出结构化 JSON-RPC error，而不是只写人类可读 stderr。
 - 真实仓库验收：使用 DeepSeek provider 在小型仓库中执行一次“读取 -> 修改 -> 验证 -> 报告”。
 - 测试替身收敛：如果 CLI fixture 场景继续增加，把 CLI fixture 与 Agent Core scripted provider 抽成共享测试 harness。
 
