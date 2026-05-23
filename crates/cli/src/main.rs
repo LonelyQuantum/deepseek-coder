@@ -1,10 +1,16 @@
 #![forbid(unsafe_code)]
 
-use deepseek_coder_agent_core::AGENT_METADATA;
+use std::{env, io, process::ExitCode};
 
-fn main() {
-    println!(
-        "{} workspace initialized; local state directory: {}",
-        AGENT_METADATA.name, AGENT_METADATA.state_dir
-    );
+fn main() -> ExitCode {
+    let mut stdout = io::stdout();
+    let mut stderr = io::stderr();
+
+    match deepseek_coder_cli::run_cli(env::args(), &mut stdout, &mut stderr) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
+        }
+    }
 }
