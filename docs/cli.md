@@ -21,12 +21,15 @@ deepseek-coder run [options] <task>
 - `--verify <command>`：回合成功后运行显式验证命令。因为它执行 shell command，必须同时传 `--auto-approve`。
 - `--json`：输出 newline-delimited `agent.event` JSON-RPC notifications。
 - `--max-input-tokens <n>`、`--max-model-turns <n>`、`--max-output-tokens <n>`：预算与轮次限制。
+- `--thinking <enabled|disabled>`：控制 DeepSeek thinking mode，默认 `enabled`。
 
 ## Provider
 
 ### `deepseek`
 
-默认 provider。它读取 `DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL` 和 `DEEPSEEK_MODEL`，通过现有 DeepSeek API adapter 发起非 streaming chat completion。CLI 为 provider 创建一个专用的 Tokio current-thread runtime，并启用 I/O 与 timer driver；当前 CLI 每次只驱动一个 run，这比 multi-thread runtime 更贴合串行命令行场景。后续接入 async streaming TurnProvider 后，再由统一运行时策略决定是否需要多线程。
+默认 provider。它读取 `DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL` 和 `DEEPSEEK_MODEL`，通过现有 DeepSeek API adapter 发起 streaming chat completion。CLI 为整个 run 创建一个专用的 Tokio current-thread runtime，并启用 I/O 与 timer driver；当前 CLI 每次只驱动一个 run，这比 multi-thread runtime 更贴合串行命令行场景。
+
+CLI DeepSeek provider 会把 streaming chunk 聚合成 Turn Loop 需要的完整 `Completed` 响应，同时把 content delta 转成 `AssistantDelta` 事件。`reasoning_content` delta 不作为用户可见输出写入 `assistant.delta`，只聚合后用于 thinking + tool calls 的 replay 校验。tool call delta 通过 adapter 的 `ChatToolCallAccumulator` 按 `index` 严格拼装：arguments 逐片追加，id、type 和 function name 必须在 stream 结束前出现且不能冲突。
 
 当前 CLI provider 会把 executor 已实现的工具注册给模型：
 
@@ -84,10 +87,10 @@ final: ...
 
 ## 当前限制
 
-- DeepSeek provider 当前使用非 streaming completion；streaming delta 到 `assistant.delta` 的实时映射仍属于后续工作。
+- DeepSeek provider 已使用 streaming completion，但 CLI `--json` 当前仍在 run 完成后从 run log 重放事件；也就是说 run log 中会有增量 `assistant.delta`，用户暂时还不会在执行中实时看到它们。
 - CLI 没有交互式审批 UI；默认拒绝写入/命令，`--auto-approve` 是显式非交互模式。
-- `--json` 当前在 run 完成后从 run log 重放事件，而不是边执行边实时输出。
 - `--json` 当前的失败路径仍输出人类可读错误；JSON-RPC error response 需要随 RPC request loop 一起设计。
+- CLI DeepSeek provider 已能聚合 streaming tool call delta；但复杂工具调用的端到端 CLI live test 还没有覆盖真实写入、审批和继续请求。
 - verification 只支持用户显式提供的单条 shell command。
 - CLI 尚未接入 `agent-rpc` request loop；它直接调用 Agent Core，用于先完成本地最小闭环。
 - 如果 fixture 场景继续增加，应把 CLI fixture 与 `agent-core` 的 scripted provider 抽成共享测试 harness，减少两套测试替身并行维护。
@@ -120,3 +123,14 @@ deepseek-coder run --provider fixture --fixture readme --json "Read README"
 ```powershell
 deepseek-coder run --provider deepseek --mode ask "Summarize this workspace"
 ```
+
+真实 DeepSeek streaming 验收：
+
+```powershell
+$env:DEEPSEEK_CODER_LIVE_TESTS = "1"
+cargo test -p deepseek-coder-cli --test deepseek_cli_live live_deepseek_cli_streaming_smoke_test -- --ignored --exact --nocapture
+```
+
+该测试会从编译出的 `deepseek-coder` 二进制启动真实 `deepseek` provider，使用 streaming completion，并断言 JSON event 中存在 `stream: true` 的 `assistant.delta` 和最终 `run.completed`。模型默认使用项目默认的 `deepseek-v4-pro`；如果要临时改为其他模型，可以在当前 shell 设置 `DEEPSEEK_MODEL`。API Key 仍只来自当前环境变量或被忽略的 `.secrets/deepseek-api-key`。
+
+当前已在 Windows 本机通过该 live smoke test。普通文本 streaming 由 CLI 二进制测试覆盖；真实 tool call delta 形态由 `agent-core` 的 `live_streaming_tool_call_accumulator_smoke_test` 覆盖。

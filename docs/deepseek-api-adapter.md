@@ -84,6 +84,10 @@ crates/agent-core/src/provider/deepseek_api.rs
 - `SseEventParser`：增量解析 SSE byte chunks。
 - `StreamEvent`：`Chunk` 或 `Done`。
 - `parse_stream_event_block`：解析单个 SSE event block。
+- `ChatToolCallDelta`：streaming delta 中的工具调用片段，包含 `index`、可选 id/type 和可选 function 片段。
+- `ChatToolCallAccumulator`：把同一 `index` 的 tool call delta 拼装成完整 `ChatToolCall`，并显式拒绝缺失 id/type/function name 或冲突元数据。
+
+Adapter 本身仍只暴露 DeepSeek 原始请求、响应和 stream 结构，不直接写 run log。CLI DeepSeek provider wrapper 已在 `TurnProvider::complete_stream` 边界上消费 `ChatCompletionStream`，把 content delta 转为 `TurnProviderEvent::AssistantDelta`，并把完整 content、`reasoning_content` 和通过 accumulator 拼装后的 tool calls 聚合进最终 `TurnProviderEvent::Completed`。
 
 ## 流式响应解析
 
@@ -99,6 +103,14 @@ DeepSeek streaming 返回 data-only SSE。网络层可能把一个 SSE event 切
 8. HTTP stream 结束时如果仍有非空 byte buffer，返回 `IncompleteStreamEvent`，避免吞掉被截断的 JSON。
 
 `parse_stream_event_block` 只处理完整 event block。它支持多行 `data:`，会按 SSE 语义用换行拼接数据行；这让测试可以覆盖协议解析，而不需要真实 API 调用。
+
+tool call streaming 不能按普通完整 `ChatToolCall` 处理。真实响应可能把同一个工具调用拆成多片：
+
+1. 第一片通常携带 `index`、id、type、function name 和 arguments 前缀。
+2. 后续片使用相同 `index`，只继续携带 `function.arguments` 片段。
+3. stream 结束后 accumulator 按 `index` 排序输出完整 `ChatToolCall`。
+
+Accumulator 不补造缺失字段，不改写 arguments，也不尝试修复无效 JSON。缺 id、缺 type、缺 function name 或同一 `index` 出现冲突元数据时直接报错；arguments 是否满足工具 JSON Schema 仍由后续工具校验层负责。
 
 ## 环境变量
 
@@ -145,6 +157,7 @@ adapter 只负责序列化和反序列化 `reasoning_content` 字段。是否需
 - 非流式响应中 `reasoning_content`、tool calls、usage 反序列化。
 - SSE keep-alive、chunk、usage chunk 和 `[DONE]` 解析。
 - SSE byte parser 的跨 chunk、CRLF、无效 UTF-8 和不完整事件处理。
+- streaming tool call delta 反序列化、arguments 分片拼接、并行 index 排序、冲突 id 拒绝和缺失元数据拒绝。
 - function tool schema 序列化。
 
 真实联网测试需要通过环境变量显式开启，并避免在 CI 中默认消耗 API 额度。
@@ -169,6 +182,8 @@ crates/agent-core/tests/deepseek_api_live.rs
 - `live_chat_completion_smoke_test`：非流式基础可达性。
 - `live_chat_completion_stream_smoke_test`：流式基础可达性。
 - `live_reasoning_content_tool_replay_smoke_test`：thinking + tool call + `reasoning_content` 回传。
+- `live_streaming_tool_call_accumulator_smoke_test`：强制真实 streaming tool call，验证 delta 可由 `ChatToolCallAccumulator` 拼装为完整工具调用，并确认 include_usage chunk 存在。
+- `crates/cli/tests/deepseek_cli_live.rs` 中的 `live_deepseek_cli_streaming_smoke_test`：从 CLI 二进制启动真实 DeepSeek provider，验收 TurnProvider streaming wrapper、run log 和 JSON event 输出。
 
 Windows PowerShell 示例：
 
@@ -185,7 +200,7 @@ cargo test -p deepseek-coder-agent-core --test deepseek_api_live -- --ignored --
 
 - 抽象 provider capability model，显式表达 thinking、tool_choice、FIM、stream usage、cache usage、最大上下文和最大输出长度等能力，而不是把规则散落在调用处。
 - 增加更细的错误分类，用于区分认证失败、限速、无效参数、服务端错误、网络中断和被截断的 stream；分类只用于明确提示和重试决策，不做静默兜底。
-- 为 streaming accumulator 增加上层事件转换，把 `reasoning_content` delta、content delta、tool call delta 和 usage chunk 转成 Agent Core 可消费的结构。
+- 继续收集不同模型、不同工具 schema 和 thinking/tool-call 组合下的 streaming delta 形态，必要时补更细的兼容性测试。
 - 增加针对 cache usage 字段的测试和上下文缓存统计记录。
 - 增加 provider 配置来源抽象：环境变量、本地配置文件、系统密钥管理器和测试专用 `.secrets/`，并统一保证 API Key 不进入 Debug、错误、run log 或文档示例。
 - 保持真实联网测试为手动 opt-in，并继续控制 `max_tokens`，避免 CI 或普通开发命令产生不可预期的 API 消耗。

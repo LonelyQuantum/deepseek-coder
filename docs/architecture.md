@@ -56,13 +56,13 @@ TypeScript workspace：
 ## 当前实现
 
 - Rust workspace、TypeScript workspace、VS Code 插件骨架和共享协议包已建立。
-- `agent-core` 已包含 provider adapter、流式解析、`reasoning_content` 状态机、工具/审批基础类型、read/search/apply_patch/shell/git 基础执行层、基础 run log、基础 Context Builder 和基础 Agent Turn Loop。
-- `agent-rpc` 已实现 Run Log 事件到 `agent.event` JSON-RPC notification 的基础 stdio 桥接；完整 request loop、真实 provider streaming 接入和 CLI 最小闭环尚未实现。
-- CLI 已实现 `run` 最小闭环，能直接调用 Agent Core 并重放 JSON-RPC event；TUI 仍是骨架。
+- `agent-core` 已包含 provider adapter、流式解析、streaming tool call delta accumulator、`reasoning_content` 状态机、工具/审批基础类型、read/search/apply_patch/shell/git 基础执行层、基础 run log、基础 Context Builder、基础 Agent Turn Loop 和 async / streaming `TurnProvider` 边界。
+- `agent-rpc` 已实现 Run Log 事件到 `agent.event` JSON-RPC notification 的基础 stdio 桥接，以及 `agent.initialize` / `agent.sendTurn` / `agent.resume` 的双向 request loop；真实 Turn Loop handler、实时事件转发和交互式审批尚未实现。
+- CLI 已实现 `run` 最小闭环，能直接调用 Agent Core、通过 DeepSeek streaming wrapper 驱动真实 provider，并在 run 完成后重放 JSON-RPC event；TUI 仍是骨架。
 
 ## 后续增强
 
-- 把 Agent Core 的基础 Turn Loop 接入真实 provider streaming、RPC request loop 和交互式审批。
+- 补齐真实 RPC Turn Loop handler、实时事件转发和交互式审批。
 - 扩展 `crates/agent-rpc`，让 CLI/TUI/VS Code 通过同一套 JSON-RPC 协议调用 Agent Core。
 - 明确 `.deepseek-coder/` 本地状态的目录结构、版本迁移策略和脱敏规则。
 - 增加端到端测试，覆盖 CLI/TUI/VS Code 对同一任务产生一致 run log 的能力。

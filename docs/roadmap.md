@@ -35,14 +35,18 @@
 - 本地 fixture 端到端 smoke test，覆盖 CLI、Turn Loop、工具执行、Run Log 和 JSON-RPC event 输出。
 - CLI 审查修复：DeepSeek provider 改为专用 current-thread runtime，fixture provider 改为响应队列，verification 输出在写入 run log 前脱敏。
 - 进程级 CLI fixture smoke test：从编译出的 `deepseek-coder` 二进制启动，验证 CLI、Turn Loop、Run Log 和 JSON-RPC event 输出的最小闭环。
+- TurnProvider async / streaming 边界：`TurnProvider::complete_stream` 返回异步事件流，支持 `assistant.delta` 与最终 `Completed` 响应。
+- CLI DeepSeek provider streaming wrapper：CLI provider 通过 `create_chat_completion_stream` 聚合 content、`reasoning_content` 和 tool calls，并把 content delta 写入 run log。
+- 真实 provider streaming 联网验收：`deepseek_cli_live` 从编译出的 CLI 二进制启动真实 DeepSeek provider，验证 `stream: true` 的 `assistant.delta` 和最终 `run.completed`。
+- streaming tool call 增量拼装验证：adapter 已区分 `ChatToolCallDelta` 与完整 `ChatToolCall`，`ChatToolCallAccumulator` 会按 `index` 拼接 arguments 并拒绝缺失或冲突元数据；`live_streaming_tool_call_accumulator_smoke_test` 已用真实 DeepSeek streaming 验收工具调用 delta 形态。
+- Agent RPC Server 双向 request loop：`agent-rpc` 已支持 newline-delimited JSON-RPC request 读取、初始化顺序检查、`agent.initialize` / `agent.sendTurn` / `agent.resume` 分发、response/error 写回，以及 handler 返回事件的 `agent.event` 有序输出。
 
 下一步：
 
-- TurnProvider async / streaming 设计：把当前同步 `complete` 演进为能产生实时 delta、tool call 和最终响应的 provider 边界。
-- 真实 provider streaming 接入：把 DeepSeek adapter 适配到新的 Turn Loop provider 边界，并把流式 delta / tool call 收集映射到 run log。
 - Run Log 写入串行化：Turn Loop / RPC 层必须保证同一 run 的事件由单 writer 或同步队列按顺序写入。
 - Run summary metadata：为 `agent.listRuns` 设计并实现 `summary.json` 或等价索引，避免每次列出 run 都扫描完整 JSONL。
-- RPC request loop：实现 `agent.initialize`、`agent.sendTurn`、`agent.resume` 和基础错误响应。
+- RPC/CLI 实时事件输出：当前 CLI `--json` 仍是 run 完成后重放 run log；后续需要在执行过程中持续发送 `agent.event`。
+- 真实 RPC Turn Loop handler：把 CLI 当前 provider / Turn Loop 选择逻辑抽成 `AgentRpcRequestHandler` 实现，让 `agent.sendTurn` 真正创建 run 并驱动 Core。
 - 交互式审批：CLI/TUI/VS Code 能等待用户批准或拒绝 `tool.approvalRequired`。
 - CLI JSON error response：让 `--json` 失败路径输出结构化 JSON-RPC error，而不是只写人类可读 stderr。
 - 真实仓库验收：使用 DeepSeek provider 在小型仓库中执行一次“读取 -> 修改 -> 验证 -> 报告”。

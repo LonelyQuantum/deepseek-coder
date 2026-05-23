@@ -537,7 +537,7 @@ extension.ts
 
 ## 开发计划
 
-当前进度：Phase 1 进行中。DeepSeek API adapter、流式响应解析、`reasoning_content` 状态机、read/search/apply_patch/shell/git 基础工具执行层、基础 run log、基础 Context Builder 与 token 统计、Agent Turn Loop 基础编排、Agent RPC Server stdio 事件桥接、CLI `run` 最小闭环、本地 fixture smoke test 和进程级 CLI fixture smoke test 已完成；当前 CLI 审查修复已覆盖 provider runtime、fixture 队列和 verification 输出脱敏。下一步进入 TurnProvider async / streaming 设计、真实 provider streaming 接入、RPC request loop、交互式审批和更完整的真实仓库验收。
+当前进度：Phase 1 进行中。DeepSeek API adapter、流式响应解析、`reasoning_content` 状态机、read/search/apply_patch/shell/git 基础工具执行层、基础 run log、基础 Context Builder 与 token 统计、Agent Turn Loop 基础编排、TurnProvider async / streaming 边界、CLI DeepSeek streaming wrapper、真实 DeepSeek provider streaming 联网验收、streaming tool call 增量拼装验证、Agent RPC Server stdio 事件桥接、Agent RPC Server 双向 request loop、CLI `run` 最小闭环、本地 fixture smoke test 和进程级 CLI fixture smoke test 已完成；当前 CLI 审查修复已覆盖 provider runtime、fixture 队列和 verification 输出脱敏。下一步进入 RPC/CLI 实时事件输出、交互式审批和更完整的真实仓库验收。
 
 ### Phase 0：项目章程
 
@@ -568,9 +568,12 @@ extension.ts
 - [x] CLI `run` 最小闭环。
 - [x] 本地 fixture 端到端 smoke test。
 - [x] 进程级 CLI fixture smoke test。
-- [ ] TurnProvider async / streaming 设计。
-- [ ] 真实 DeepSeek provider streaming 接入 Turn Loop。
-- [ ] Agent RPC Server 双向 request loop。
+- [x] TurnProvider async / streaming 设计。
+- [x] CLI DeepSeek provider streaming wrapper。
+- [x] 真实 DeepSeek provider streaming 联网验收。
+- [x] streaming tool call 增量拼装验证。
+- [x] Agent RPC Server 双向 request loop。
+- [ ] RPC/CLI 实时事件输出。
 - [ ] CLI/TUI/VS Code 交互式审批。
 - [ ] CLI JSON-RPC 错误输出。
 - [ ] 小型真实仓库 CLI 验收。

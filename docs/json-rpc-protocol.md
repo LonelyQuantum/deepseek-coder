@@ -171,8 +171,10 @@ Result：
 规则：
 
 - `agent.initialize` 必须是第一条 request。
+- `agent.initialize` 必须带 `id`。作为 notification 发送时，server 不返回 response，也不会改变初始化状态。
 - 如果 `workspaceTrusted` 为 false，则禁用 write、exec、network 和 destructive 工具。
 - 协议不匹配时返回 `E_UNSUPPORTED_PROTOCOL`。
+- 当前 Rust request loop 已实现初始化顺序检查、协议版本检查和 response/error 写回；真实 workspace trust 工具降级策略会随审批 handler 接入。
 
 ### `agent.sendTurn`
 
@@ -212,6 +214,8 @@ interface SendTurnResult {
 ```
 
 Result 返回后，进度通过 `agent.event` notification 持续到达。
+
+当前 Rust request loop 已能解析 `agent.sendTurn` 并分发给 `AgentRpcRequestHandler`。具体如何创建 run、选择 provider、驱动 Turn Loop、持续发送实时事件由 handler 实现；Phase 1 的基础 request loop 只保证协议分发、错误响应和 handler 返回事件的有序写出。
 
 ### `agent.approve`
 
@@ -285,6 +289,7 @@ interface ResumeResult {
 
 - 如果提供 `replayFromSeq`，server 从该 seq 重新发送事件。
 - 如果本地 run log 不存在，返回 `E_RUN_NOT_FOUND`。
+- 当前 Rust request loop 已能解析 `agent.resume` 并分发给 handler；真实 Run Log 重放策略由后续 handler 实现。
 
 ### `agent.listRuns`
 
@@ -378,10 +383,12 @@ interface TurnStarted {
 ```ts
 interface AssistantDelta {
   text: string;
+  iteration?: number;
+  stream?: boolean;
 }
 ```
 
-Provider-private reasoning 不通过该事件发送。如果 provider 要求后续请求携带 reasoning state，由 Agent Core 内部处理；除非显式开启 debug logging，否则只记录安全摘要。
+`stream: true` 表示该事件来自 provider streaming delta；省略或为 false 时，通常表示非 streaming provider 或完成后回放出的完整文本片段。Provider-private reasoning 不通过该事件发送。如果 provider 要求后续请求携带 reasoning state，由 Agent Core 内部处理；除非显式开启 debug logging，否则只记录安全摘要。
 
 ### `plan.updated`
 
@@ -587,6 +594,15 @@ pending
 ## 错误模型
 
 JSON-RPC 标准错误保留标准语义。项目特定错误使用 `-32000` 到 `-32099` 范围。
+
+当前 request loop 已使用的 JSON-RPC 标准错误：
+
+| Code | Name | 含义 |
+| --- | --- | --- |
+| -32700 | Parse error | 单行消息不是合法 JSON。 |
+| -32600 | Invalid Request | 消息不是 JSON-RPC object、版本错误或初始化顺序错误。 |
+| -32601 | Method not found | method 尚未被当前 request loop 支持。 |
+| -32602 | Invalid params | params 无法反序列化为对应方法参数。 |
 
 | Code | Name | 含义 |
 | --- | --- | --- |
