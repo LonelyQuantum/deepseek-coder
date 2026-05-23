@@ -12,47 +12,56 @@
     {
       "name": "workspace_manifest",
       "risk": "read",
-      "approval": "none"
+      "approval": "none",
+      "status": "schema_only"
     },
     {
       "name": "read_file",
       "risk": "read",
-      "approval": "none"
+      "approval": "none",
+      "status": "executor_implemented"
     },
     {
       "name": "search",
       "risk": "read",
-      "approval": "none"
+      "approval": "none",
+      "status": "executor_implemented"
     },
     {
       "name": "apply_patch",
       "risk": "write",
-      "approval": "required"
+      "approval": "required",
+      "status": "executor_implemented"
     },
     {
       "name": "shell",
       "risk": "exec",
-      "approval": "required"
+      "approval": "required",
+      "status": "executor_implemented"
     },
     {
       "name": "git_status",
       "risk": "read",
-      "approval": "none"
+      "approval": "none",
+      "status": "executor_implemented"
     },
     {
       "name": "git_diff",
       "risk": "read",
-      "approval": "none"
+      "approval": "none",
+      "status": "executor_implemented"
     },
     {
       "name": "lsp_diagnostics",
       "risk": "read",
-      "approval": "none"
+      "approval": "none",
+      "status": "schema_only"
     },
     {
       "name": "plan_update",
       "risk": "read",
-      "approval": "none"
+      "approval": "none",
+      "status": "schema_only"
     }
   ]
 }
