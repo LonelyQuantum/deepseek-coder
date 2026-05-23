@@ -1,4 +1,7 @@
 export const protocolVersion = "0.1.0" as const;
+export const jsonRpcVersion = "2.0" as const;
+export const agentEventMethod = "agent.event" as const;
+export const agentInitializeMethod = "agent.initialize" as const;
 
 export const riskLevels = ["read", "write", "exec", "network", "destructive"] as const;
 export type RiskLevel = (typeof riskLevels)[number];
@@ -281,6 +284,27 @@ export interface ApprovalRequest {
   readonly paths?: readonly string[];
   readonly persistable: boolean;
 }
+
+export interface JsonRpcNotification<TParams = unknown> {
+  readonly jsonrpc: typeof jsonRpcVersion;
+  readonly method: string;
+  readonly params: TParams;
+}
+
+export interface AgentEventEnvelope<TPayload = unknown> {
+  readonly seq: number;
+  readonly time: string;
+  readonly type: string;
+  readonly runId: string;
+  readonly turnId?: string;
+  readonly payload: TPayload;
+}
+
+export type AgentEventNotification<TPayload = unknown> = JsonRpcNotification<
+  AgentEventEnvelope<TPayload>
+> & {
+  readonly method: typeof agentEventMethod;
+};
 
 export type AgentEvent =
   | {

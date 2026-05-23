@@ -3,8 +3,11 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
+  agentEventMethod,
+  agentInitializeMethod,
   approvalStateTransitions,
   canTransitionApprovalState,
+  jsonRpcVersion,
   findToolDefinition,
   isApprovalRequired,
   protocolVersion,
@@ -62,6 +65,12 @@ test("approval state transitions allow only documented next states", () => {
   for (const terminal of ["completed", "failed", "rejected", "canceled", "expired"] as const) {
     assert.deepEqual(approvalStateTransitions[terminal], []);
   }
+});
+
+test("JSON-RPC method constants match protocol document", () => {
+  assert.equal(jsonRpcVersion, "2.0");
+  assert.equal(agentInitializeMethod, "agent.initialize");
+  assert.equal(agentEventMethod, "agent.event");
 });
 
 test("tool registry contains every declared tool exactly once", () => {
