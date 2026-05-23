@@ -1,6 +1,6 @@
 # 运行日志（Run Log）
 
-状态：Phase 1 基础存储层已实现，Agent Turn Loop 接入尚未实现。
+状态：Phase 1 基础存储层已实现，并已接入基础 Agent Turn Loop；RPC/CLI 接入尚未实现。
 
 Run Log 是 Agent Core 的本地审计记录。它记录一次 run 中发生的事件，使 CLI、TUI、VS Code 和后续调试工具能够读取同一份事实来源。Run Log 不等同于模型上下文；进入上下文前仍需要 Context Capsule 做筛选、摘要、脱敏和 token 预算。
 
@@ -92,7 +92,7 @@ crates/agent-core/src/run_log.rs
 
 ## 后续增强
 
-- 接入 Agent Turn Loop，自动记录 user turn、provider request 摘要、工具请求、审批、工具结果、patch 和验证命令。
+- 扩展 Agent Turn Loop 接入，自动记录 provider streaming 摘要、patch proposal、验证命令、取消和恢复事件。
 - 增加 run summary / metadata 文件，支持 `agent.listRuns` 快速读取标题、状态、开始时间、结束时间和事件计数，避免每次列出 run 都扫描完整 JSONL。
 - 增加事件 payload 的强类型 schema，并与 `docs/json-rpc-protocol.md` 和 `packages/protocol` 做兼容性测试。
 - 在 Agent Turn Loop / RPC 层实现同一 run 的写入串行化策略，并补充并发写入顺序测试。

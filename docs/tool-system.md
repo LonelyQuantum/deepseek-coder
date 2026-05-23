@@ -35,6 +35,7 @@ interface ToolDefinition {
   description: string;
   risk: RiskLevel;
   approval: ApprovalRequirement;
+  implementationStatus: "schema_only" | "executor_implemented";
   argumentSchema: JsonSchema;
   resultSchema: JsonSchema;
 }
@@ -48,10 +49,16 @@ pub struct ToolDefinition {
     pub description: &'static str,
     pub risk: RiskLevel,
     pub approval: ApprovalRequirement,
+    pub implementation_status: ToolImplementationStatus,
     pub argument_schema: &'static str,
     pub result_schema: &'static str,
 }
 ```
+
+`implementationStatus` / `implementation_status` 只描述当前仓库是否已有基础执行器实现：
+
+- `executor_implemented`：已接入 `WorkspaceToolExecutor`，可被基础 Agent Turn Loop 调用。
+- `schema_only`：协议名称、参数 schema、风险和审批策略已注册，但执行器尚未实现；如果模型在当前阶段请求这类工具，Turn Loop 必须返回显式 unsupported tool 错误。
 
 ## 通用结果字段
 
@@ -271,9 +278,11 @@ pub struct ToolDefinition {
 
 Phase 1 已加入 `docs/protocol/tool-registry.v1.json`，作为 Rust 和 TypeScript 共同校验的工具注册表 fixture。当前 CI 会在两侧分别验证：
 
-- 工具名称、静态风险和默认审批要求一致。
+- 工具名称、静态风险、默认审批要求和实现状态一致。
 - 风险等级和默认审批映射一致。
 - fixture 版本与 package/crate 版本一致。
+
+fixture 中的 `tools` 被当作无序集合校验；测试会按工具名规整后比较，并拒绝重复工具名。这避免了文档调整排序时造成无意义失败，也能及时发现 Rust/TypeScript 任一侧缺失工具定义。
 
 这不是最终的 schema 生成方案，但能在短期内阻止 `crates/agent-core`、`packages/protocol` 和文档中的基础工具注册表分叉。
 
@@ -302,7 +311,7 @@ Phase 1 已加入 `docs/protocol/tool-registry.v1.json`，作为 Rust 和 TypeSc
 
 当前实现暂不包含 workspace manifest、LSP diagnostics 和 plan update 的执行逻辑；它们仍只有 schema 和静态风险定义。
 
-当前执行层还没有接入 Agent Turn Loop、审批引擎、run log 或 JSON-RPC 事件流。写入、命令执行和网络风险升级仍需要在编排层实现后才能对用户开放自动化流程。
+当前执行层已接入基础 Agent Turn Loop、审批策略和 run log。写入与命令执行会触发审批请求；默认审批策略拒绝执行，测试可使用显式 auto-approve 策略验证已批准路径。JSON-RPC 事件流、真实用户审批等待和网络/破坏性风险升级仍需要在 RPC/CLI 接入后实现。
 
 ## 后续增强
 
@@ -310,6 +319,7 @@ Phase 1 已加入 `docs/protocol/tool-registry.v1.json`，作为 Rust 和 TypeSc
 
 - 为 Rust 和 TypeScript 的每个工具补齐具体 `resultSchema`，替换当前通用 `statusResultSchema`。
 - 将当前 `docs/protocol/tool-registry.v1.json` 扩展为更完整的 schema fixture 或代码生成入口，避免协议文档、Rust 类型和 `packages/protocol` 分叉。
+- 如果 fixture 或代码生成入口继续扩展，再引入 workspace 级路径元数据或 build script，避免多个 crate 复制相对路径。
 - 在 `crates/agent-rpc` 中把工具请求、审批请求、工具结果和 patch 事件序列化为 `docs/json-rpc-protocol.md` 定义的事件。
 
 ### 路径与敏感信息

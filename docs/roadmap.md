@@ -29,11 +29,11 @@
 - 基础 Run Log 存储层。
 - 基础 Context Builder 与 token 预算报告。
 - 基础工具注册表 Rust/TypeScript 兼容性 fixture。
+- Agent Turn Loop 基础编排和 fake provider 集成测试骨架。
 
 下一步：
 
-- Agent Turn Loop：串联 provider streaming、tool call 收集、schema 校验、审批请求、工具执行、run log 写入和继续请求。
-- Fake provider 集成测试骨架：先用固定模型响应跑通 context -> provider -> tool -> run log 的事件流，再接入真实模型。
+- 真实 provider streaming 接入：把 DeepSeek adapter 适配到 Turn Loop，并把流式 delta / tool call 收集映射到 run log。
 - Run Log 写入串行化：Turn Loop / RPC 层必须保证同一 run 的事件由单 writer 或同步队列按顺序写入。
 - Run summary metadata：为 `agent.listRuns` 设计并实现 `summary.json` 或等价索引，避免每次列出 run 都扫描完整 JSONL。
 - Agent RPC Server 最小 stdio 桥接：把 run events 通过 JSON-RPC notification 传给前端。

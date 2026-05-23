@@ -56,12 +56,12 @@ TypeScript workspace：
 ## 当前实现
 
 - Rust workspace、TypeScript workspace、VS Code 插件骨架和共享协议包已建立。
-- `agent-core` 已包含 provider adapter、流式解析、`reasoning_content` 状态机、工具/审批基础类型、read/search/apply_patch/shell/git 基础执行层、基础 run log 和基础 Context Builder。
-- `agent-rpc`、CLI 和 TUI 仍是骨架；完整 turn loop、Context Builder 接入和 RPC server 尚未实现。
+- `agent-core` 已包含 provider adapter、流式解析、`reasoning_content` 状态机、工具/审批基础类型、read/search/apply_patch/shell/git 基础执行层、基础 run log、基础 Context Builder 和基础 Agent Turn Loop。
+- `agent-rpc`、CLI 和 TUI 仍是骨架；真实 provider streaming 接入、RPC server 和 CLI 最小闭环尚未实现。
 
 ## 后续增强
 
-- 把 Agent Core 的各个独立模块串成完整回合：上下文构建、provider 调用、工具执行、审批、run log 写入和验证。
+- 把 Agent Core 的基础 Turn Loop 接入真实 provider streaming、RPC server、CLI 和验证命令。
 - 实现 `crates/agent-rpc`，让 CLI/TUI/VS Code 通过同一套 JSON-RPC 协议调用 Agent Core。
 - 明确 `.deepseek-coder/` 本地状态的目录结构、版本迁移策略和脱敏规则。
 - 增加端到端测试，覆盖 CLI/TUI/VS Code 对同一任务产生一致 run log 的能力。

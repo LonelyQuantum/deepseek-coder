@@ -15,6 +15,7 @@
 - `agent-core.md`：Agent Core 职责和回合生命周期。
 - `deepseek-api-adapter.md`：DeepSeek API adapter 设计。
 - `reasoning-content.md`：`reasoning_content` 状态机。
+- `turn-loop.md`：Agent Turn Loop 基础编排。
 - `json-rpc-protocol.md`：前端与 Rust RPC Server 之间的内部协议。
 - `run-log.md`：本地运行日志、事件存储和回放基础。
 - `context-capsule.md`：长上下文构建和缓存友好的 prompt 布局。
@@ -27,7 +28,7 @@
 
 ## 协议 Fixture
 
-- `protocol/tool-registry.v1.json`：Rust 与 TypeScript 共同校验的工具注册表 fixture，用于降低双栈协议分叉风险。
+- `protocol/tool-registry.v1.json`：Rust 与 TypeScript 共同校验的工具注册表 fixture，包含工具风险、审批和实现状态，用于降低双栈协议分叉风险。
 
 ## 架构决策记录
 

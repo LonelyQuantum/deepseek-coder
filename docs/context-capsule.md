@@ -69,7 +69,7 @@ Phase 1 已实现基础 Context Builder，不直接追求完整 1M Context Capsu
 
 当前 token 统计使用 `utf8_bytes` 估算器：它用 UTF-8 字节数作为确定性估算，不是 DeepSeek tokenizer 的精确 token 数。报告中的 `estimator.exact` 必须为 `false`，前端和后续 turn loop 不能把它展示成精确模型 token。
 
-当前 Context Builder 还是库能力，尚未接入 Agent Turn Loop。下一步应由 Turn Loop 收集用户任务、项目规则、工具结果和计划，再调用 Context Builder 生成 provider 请求输入，并把 `context.built` 事件写入 Run Log / JSON-RPC。
+当前 Context Builder 已接入基础 Agent Turn Loop。Turn Loop 会收集用户任务和调用方提供的上下文条目，生成 provider 请求输入，并把 `context.built` 事件写入 Run Log。后续仍需要把该事件通过 JSON-RPC 发送给前端，并扩展 workspace manifest、git 状态、选中文件、工具结果和计划步骤的自动收集。
 
 ## 与工具系统的衔接
 
