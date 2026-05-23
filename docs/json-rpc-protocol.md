@@ -362,6 +362,15 @@ interface RunCanceled {
 }
 ```
 
+### `turn.started`
+
+```ts
+interface TurnStarted {
+  turnId: string;
+  userTask: string;
+}
+```
+
 ### `assistant.delta`
 
 面向用户展示的 assistant 输出。
@@ -443,6 +452,18 @@ interface ContextBuilt {
 }
 ```
 
+### `provider.requested`
+
+```ts
+interface ProviderRequested {
+  iteration: number;
+  messageCount: number;
+  reasoningState:
+    | { state: "no_replay_required" }
+    | { state: "replay_required"; assistantMessages: number };
+}
+```
+
 ### `tool.requested`
 
 ```ts
@@ -490,7 +511,8 @@ interface ToolCompleted {
   exitCode?: number;
   stdout?: string;
   stderr?: string;
-  durationMs: number;
+  durationMs?: number;
+  result?: unknown;
 }
 ```
 
@@ -688,7 +710,7 @@ Run log 持久化前必须脱敏密钥。
 
 - `packages/protocol` 定义与本文档匹配的 TypeScript 类型。
 - `crates/agent-rpc` 负责 Rust 协议结构和 JSON-RPC framing。
-- `docs/protocol/tool-registry.v1.json` 当前用于校验 Rust 与 TypeScript 的基础工具注册表一致。
+- `docs/protocol/tool-registry.v1.json` 当前用于校验 Rust 与 TypeScript 的基础工具注册表一致，包含工具风险、默认审批和当前实现状态。
 - 后续应继续增加事件 payload 和 RPC method 的兼容性测试，验证 Rust 和 TypeScript 的协议定义一致。
 
 ## 后续增强
