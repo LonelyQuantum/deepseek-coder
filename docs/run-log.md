@@ -61,7 +61,7 @@ crates/agent-core/src/run_log.rs
 说明：
 
 - `seq` 从 1 开始，读取时要求连续；发现缺口或乱序会显式失败。
-- `timeUnixMs` 是 UNIX epoch 毫秒。后续 `crates/agent-rpc` 可在转换 JSON-RPC 事件时生成 `time` 字符串。
+- `timeUnixMs` 是 UNIX epoch 毫秒。`crates/agent-rpc` 在转换 JSON-RPC 事件时生成 UTC `time` 字符串。
 - `type` 使用 `docs/json-rpc-protocol.md` 中的事件名，例如 `run.started`、`assistant.delta`、`tool.completed`。
 - `payload` 当前是 `serde_json::Value`，具体 schema 后续会和 JSON-RPC 协议、TypeScript 协议包对齐。
 

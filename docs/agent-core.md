@@ -60,7 +60,7 @@ Agent Core 不应通过启发式后处理掩盖失败。
 
 Phase 1 已实现基础 Context Builder，详见 `docs/context-capsule.md`。它能从用户任务、项目规则、git 状态、文件、工具结果和计划等片段生成稳定排序的上下文输入，并输出 token 预算报告。
 
-当前 token 统计使用 `utf8_bytes` 估算器，不是 DeepSeek tokenizer 的精确 token 数。Context Builder 已接入基础 Agent Turn Loop，并会写入 `context.built` run log 事件；后续还需要通过 JSON-RPC 发送给前端。
+当前 token 统计使用 `utf8_bytes` 估算器，不是 DeepSeek tokenizer 的精确 token 数。Context Builder 已接入基础 Agent Turn Loop，并会写入 `context.built` run log 事件；基础 RPC 事件桥接已能把该事件转换为 JSON-RPC notification，后续还需要接入完整 request loop。
 
 ## 本地工具执行
 
@@ -72,21 +72,22 @@ Phase 1 已实现 `WorkspaceToolExecutor`，作为 read/search/apply_patch/shell
 
 Phase 1 已实现基础 Run Log 存储层，详见 `docs/run-log.md`。它提供 workspace 内 `.deepseek-coder/runs/<runId>/events.jsonl` 追加写入、按序读取、序列校验和基础脱敏。
 
-当前 Run Log 已接入基础 Agent Turn Loop，会记录 user turn、context、provider 请求摘要、工具请求、审批、工具结果和 run 完成/失败事件。`RunLog` 是单 writer 句柄，不提供内部跨任务同步；RPC 层接入时仍应串行化同一个 run 的所有写入。验证命令、run summary 和更完整 provider 摘要仍待实现。
+当前 Run Log 已接入基础 Agent Turn Loop，会记录 user turn、context、provider 请求摘要、工具请求、审批、工具结果和 run 完成/失败事件。CLI `run` 已在回合成功后写入 `verification.started` / `verification.completed` 事件，并对验证输出做脱敏；共享的 RPC verification request loop、run summary 和更完整 provider 摘要仍待实现。`RunLog` 是单 writer 句柄，不提供内部跨任务同步；RPC 层接入时仍应串行化同一个 run 的所有写入。
 
 ## Agent Turn Loop
 
 Phase 1 已实现基础 Agent Turn Loop，详见 `docs/turn-loop.md`。当前编排层可以用 fake provider 跑通 Context Builder、`ReasoningContentStateMachine`、工具请求、审批、工具执行、脱敏工具结果、Run Log 写入和继续 provider 请求。
 
-当前 Turn Loop 仍是同步 provider trait 与本地库测试骨架，尚未接入真实 DeepSeek streaming、Agent RPC Server 或 CLI。它的价值是先固定模块协作边界和 run log 事件顺序，为后续 RPC/CLI 接入提供可测试核心。
+当前 Turn Loop 仍是同步 provider trait；CLI 已通过非 streaming DeepSeek provider wrapper 和 fixture provider 接入它，完整 Agent RPC request loop 和真实 DeepSeek streaming 尚未接入。它的价值是先固定模块协作边界和 run log 事件顺序，为后续 RPC/前端接入提供可测试核心。
 
 ## Phase 1 收敛顺序
 
 当前最重要的目标不是继续扩展工具数量，而是把已有模块串成可运行闭环：
 
-1. Agent RPC Server：把同一条 run log 事件流转换成 JSON-RPC notifications。
-2. CLI 最小闭环：通过 `deepseek-coder run "<task>"` 跑通小型仓库上的读取、修改、验证和报告。
-3. 端到端 smoke test：使用 fake provider 或 fixture 验证 turn loop、工具执行、run log 和前端事件一致。
+1. 真实 provider streaming 接入：把 DeepSeek adapter 的流式响应适配到 Turn Loop。
+2. RPC request loop：在 `agent.initialize` / `agent.sendTurn` 中创建 run、驱动 Turn Loop 并发送事件。
+3. 交互式审批：让 CLI/TUI/VS Code 能对 `tool.approvalRequired` 做真实批准或拒绝。
+4. 真实仓库验收：通过 `deepseek-coder run "<task>"` 跑通小型仓库上的读取、修改、验证和报告。
 
 ## 后续增强
 
@@ -95,4 +96,4 @@ Phase 1 已实现基础 Agent Turn Loop，详见 `docs/turn-loop.md`。当前编
 - 在调用 provider 前统一运行 `ReasoningContentStateMachine`，确保 thinking + tool calls 的 `reasoning_content` 回放规则不分散到前端。
 - 扩展 Context Builder 接入，把 workspace manifest、git 状态、选中文件、工具结果和计划步骤纳入 provider 请求。
 - 在工具结果进入 run log 或下一轮 prompt 前增加统一脱敏与大小限制。
-- 把 Agent Core 事件通过 `crates/agent-rpc` 映射到 `docs/json-rpc-protocol.md`，供 CLI/TUI/VS Code 共享。
+- 扩展 `crates/agent-rpc` 的 request loop 和异步审批等待，供 CLI/TUI/VS Code 共享。

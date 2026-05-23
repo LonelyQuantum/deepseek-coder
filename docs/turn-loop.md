@@ -1,6 +1,6 @@
 # Agent Turn Loop
 
-状态：Phase 1 基础编排已实现，真实 provider streaming 和前端 RPC 接入尚未实现。
+状态：Phase 1 基础编排已实现，基础 RPC 事件桥接已实现，真实 provider streaming 和完整前端 RPC request loop 尚未实现。
 
 Agent Turn Loop 是 Agent Core 的回合编排层。它负责把已经实现的 Context Builder、`reasoning_content` 状态机、provider 边界、工具执行、审批和 Run Log 串成同一条可复现事件流。
 
@@ -58,6 +58,8 @@ AgentTurnInput
 - `run.failed`
 
 `provider.requested` 只记录消息数量、iteration 和 reasoning replay 状态，不记录完整模型输入。完整上下文由 `context.built` 的 token/source 报告和后续工具结果共同复现；更细的 provider request 摘要应在后续 schema 中设计。
+
+`run.started` 记录规范化后的 workspace root，用于本地审计和前端展示当前 run 绑定的工作区。该路径只应进入本地 run log 和本机前端事件流，不应被上传到公开仓库或远程日志。
 
 ## 审批边界
 

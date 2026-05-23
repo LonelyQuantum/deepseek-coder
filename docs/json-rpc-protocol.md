@@ -562,6 +562,8 @@ interface VerificationCompleted {
 }
 ```
 
+`stdout` / `stderr` 必须在持久化和事件发送前应用与 `tool.completed.result` 相同的脱敏规则；前端不能假设验证命令输出是原始 shell 输出。
+
 ## 审批状态机
 
 ```text
@@ -704,12 +706,12 @@ Server 必须能够通过以下信息重建 run：
 
 Run log 持久化前必须脱敏密钥。
 
-当前 `crates/agent-core/src/run_log.rs` 已实现内部 JSONL 存储层。内部事件使用 `timeUnixMs`，后续 `crates/agent-rpc` 转换成 JSON-RPC notification 时再生成协议 envelope 中的 `time` 字符串。
+当前 `crates/agent-core/src/run_log.rs` 已实现内部 JSONL 存储层。内部事件使用 `timeUnixMs`，`crates/agent-rpc` 已实现基础 stdio 事件桥接，会在转换成 JSON-RPC notification 时生成协议 envelope 中的 `time` 字符串。
 
 ## 实现说明
 
 - `packages/protocol` 定义与本文档匹配的 TypeScript 类型。
-- `crates/agent-rpc` 负责 Rust 协议结构和 JSON-RPC framing。
+- `crates/agent-rpc` 负责 Rust 协议结构和 JSON-RPC framing；当前已实现 Run Log 事件到 `agent.event` notification 的最小桥接。
 - `docs/protocol/tool-registry.v1.json` 当前用于校验 Rust 与 TypeScript 的基础工具注册表一致，包含工具风险、默认审批和当前实现状态。
 - 后续应继续增加事件 payload 和 RPC method 的兼容性测试，验证 Rust 和 TypeScript 的协议定义一致。
 
