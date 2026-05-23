@@ -13,7 +13,7 @@ use crate::{
         ReasoningContentStateMachine,
     },
     run_log::{RunLog, RunLogError},
-    tool::{ToolDefinition, find_builtin_tool},
+    tool::{ToolDefinition, ToolName, find_builtin_tool},
     tool_execution::{
         ApplyPatchArgs, ShellArgs, ToolExecutionError, ToolStatus, WorkspaceToolExecutor,
         redacted_tool_result_value,
@@ -76,7 +76,7 @@ where
         if let Err(error) = &result
             && !matches!(error, AgentTurnLoopError::RunLog(_))
         {
-            let _append_result = run_log.append(
+            let append_result = run_log.append(
                 "run.failed",
                 Some(turn_id),
                 json!({
@@ -84,6 +84,12 @@ where
                     "message": error.to_string(),
                 }),
             );
+            if let Err(run_log_error) = append_result {
+                eprintln!(
+                    "failed to append run.failed event after `{}`: {run_log_error}",
+                    error.code()
+                );
+            }
         }
 
         result
@@ -105,7 +111,7 @@ where
             None,
             json!({
                 "runId": run_log.run_id(),
-                "workspaceRoot": "workspace",
+                "workspaceRoot": self.tools.root().display().to_string(),
                 "mode": input.mode.as_str(),
             }),
         )?;
@@ -266,22 +272,26 @@ where
             }),
         )?;
 
-        match tool_name {
-            "read_file" => {
+        match definition.name {
+            ToolName::WorkspaceManifest => Err(AgentTurnLoopError::UnsupportedTool {
+                tool_call_id: tool_call.id.clone(),
+                name: tool_name.to_owned(),
+            }),
+            ToolName::ReadFile => {
                 let args = parse_tool_arguments(tool_call)?;
                 self.execute_without_approval(tool_call, turn_id, args, run_log, |tools, args| {
                     let result = tools.read_file(args)?;
                     tool_record(result.status, result.summary.clone(), Vec::new(), &result)
                 })
             }
-            "search" => {
+            ToolName::Search => {
                 let args = parse_tool_arguments(tool_call)?;
                 self.execute_without_approval(tool_call, turn_id, args, run_log, |tools, args| {
                     let result = tools.search(args)?;
                     tool_record(result.status, result.summary.clone(), Vec::new(), &result)
                 })
             }
-            "apply_patch" => {
+            ToolName::ApplyPatch => {
                 let args: ApplyPatchArgs = parse_tool_arguments(tool_call)?;
                 self.ensure_approval(
                     definition,
@@ -303,7 +313,7 @@ where
                     )
                 })
             }
-            "shell" => {
+            ToolName::Shell => {
                 let args: ShellArgs = parse_tool_arguments(tool_call)?;
                 self.ensure_approval(
                     definition,
@@ -320,21 +330,25 @@ where
                     tool_record(result.status, result.summary.clone(), Vec::new(), &result)
                 })
             }
-            "git_status" => {
+            ToolName::GitStatus => {
                 let args = parse_tool_arguments(tool_call)?;
                 self.execute_without_approval(tool_call, turn_id, args, run_log, |tools, args| {
                     let result = tools.git_status(args)?;
                     tool_record(result.status, result.summary.clone(), Vec::new(), &result)
                 })
             }
-            "git_diff" => {
+            ToolName::GitDiff => {
                 let args = parse_tool_arguments(tool_call)?;
                 self.execute_without_approval(tool_call, turn_id, args, run_log, |tools, args| {
                     let result = tools.git_diff(args)?;
                     tool_record(result.status, result.summary.clone(), Vec::new(), &result)
                 })
             }
-            _ => Err(AgentTurnLoopError::UnsupportedTool {
+            ToolName::LspDiagnostics => Err(AgentTurnLoopError::UnsupportedTool {
+                tool_call_id: tool_call.id.clone(),
+                name: tool_name.to_owned(),
+            }),
+            ToolName::PlanUpdate => Err(AgentTurnLoopError::UnsupportedTool {
                 tool_call_id: tool_call.id.clone(),
                 name: tool_name.to_owned(),
             }),
@@ -843,6 +857,10 @@ mod tests {
         );
 
         let events = store.load_run("run_turn_read").expect("events should load");
+        let workspace_root = fs::canonicalize(workspace.path())
+            .expect("workspace path should canonicalize")
+            .display()
+            .to_string();
         let event_types = events
             .iter()
             .map(|event| event.event_type.as_str())
@@ -862,6 +880,7 @@ mod tests {
                 "run.completed",
             ]
         );
+        assert_eq!(events[0].payload["workspaceRoot"], workspace_root);
         assert_eq!(events[6].payload["name"], "read_file");
         assert_eq!(
             events[6].payload["result"]["content"],
