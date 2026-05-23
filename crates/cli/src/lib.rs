@@ -3,7 +3,7 @@
 use std::{
     collections::VecDeque,
     env, fs,
-    io::{self, Write},
+    io::{self, BufRead, Write},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -23,7 +23,8 @@ use deepseek_coder_agent_core::{
     },
     turn_loop::{
         AgentRunMode, AgentTurnInput, AgentTurnLoop, AgentTurnLoopConfig, AgentTurnLoopError,
-        AgentTurnOutcome, ApprovalPolicy, AutoApprovePolicy, RejectAllApprovalPolicy, TurnProvider,
+        AgentTurnOutcome, ApprovalDecision, ApprovalPolicy, ApprovalPolicyError, AutoApprovePolicy,
+        NoopTurnEventSink, TurnApprovalRequest, TurnEventSink, TurnEventSinkError, TurnProvider,
         TurnProviderDelta, TurnProviderError, TurnProviderEvent, TurnProviderFuture,
         TurnProviderRequest, TurnProviderResponse, TurnProviderStream,
         turn_provider_response_stream,
@@ -44,6 +45,23 @@ where
     W: Write,
     E: Write,
 {
+    let mut stdin = io::empty();
+    run_cli_with_input(args, &mut stdin, stdout, stderr)
+}
+
+pub fn run_cli_with_input<I, S, R, W, E>(
+    args: I,
+    stdin: &mut R,
+    stdout: &mut W,
+    stderr: &mut E,
+) -> Result<(), CliError>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+    R: BufRead,
+    W: Write,
+    E: Write,
+{
     let args = args.into_iter().map(Into::into).collect::<Vec<_>>();
     let command = CliCommand::parse(&args)?;
 
@@ -52,7 +70,7 @@ where
             writeln!(stdout, "{}", help_text())?;
             Ok(())
         }
-        CliCommand::Run(command) => run_command(command, stdout, stderr),
+        CliCommand::Run(command) => run_command(command, stdin, stdout, stderr),
     }
 }
 
@@ -215,8 +233,14 @@ impl RunCommand {
     }
 }
 
-fn run_command<W, E>(command: RunCommand, stdout: &mut W, stderr: &mut E) -> Result<(), CliError>
+fn run_command<R, W, E>(
+    command: RunCommand,
+    stdin: &mut R,
+    stdout: &mut W,
+    stderr: &mut E,
+) -> Result<(), CliError>
 where
+    R: BufRead,
     W: Write,
     E: Write,
 {
@@ -238,43 +262,55 @@ where
         .thread_name("deepseek-coder-cli")
         .build()?;
 
-    let turn_result = if command.auto_approve {
-        runtime.block_on(run_with_policy(
-            &workspace,
-            provider,
-            AutoApprovePolicy,
-            config,
-            input,
-            &mut run_log,
-        ))
+    let (turn_result, verification_result) = if command.json_events {
+        let mut event_sink = StdioEventBridge::new(stdout);
+        let context = RunExecutionContext {
+            workspace: &workspace,
+            auto_approve: command.auto_approve,
+            approval_input: stdin,
+            approval_output: stderr,
+            run_log: &mut run_log,
+            event_sink: &mut event_sink,
+        };
+        let turn_result =
+            runtime.block_on(run_with_selected_policy(context, provider, config, input));
+        let verification_result = match (&turn_result, &command.verify_command) {
+            (Ok(_), Some(verify_command)) => run_verification_with_event_sink(
+                &workspace,
+                &command.turn_id,
+                verify_command,
+                command.verify_timeout_ms,
+                &mut run_log,
+                &mut event_sink,
+            )
+            .map(Some),
+            _ => Ok(None),
+        };
+        (turn_result, verification_result)
     } else {
-        runtime.block_on(run_with_policy(
-            &workspace,
-            provider,
-            RejectAllApprovalPolicy,
-            config,
-            input,
-            &mut run_log,
-        ))
-    };
-
-    let verification_result = match (&turn_result, &command.verify_command) {
-        (Ok(_), Some(verify_command)) => run_verification(
-            &workspace,
-            &command.turn_id,
-            verify_command,
-            command.verify_timeout_ms,
-            &mut run_log,
-        )
-        .map(Some),
-        _ => Ok(None),
-    };
-
-    let events = run_log.load()?;
-    if command.json_events {
-        let mut bridge = StdioEventBridge::new(stdout);
-        bridge.emit_events(&events)?;
-    } else {
+        let mut event_sink = NoopTurnEventSink;
+        let context = RunExecutionContext {
+            workspace: &workspace,
+            auto_approve: command.auto_approve,
+            approval_input: stdin,
+            approval_output: stderr,
+            run_log: &mut run_log,
+            event_sink: &mut event_sink,
+        };
+        let turn_result =
+            runtime.block_on(run_with_selected_policy(context, provider, config, input));
+        let verification_result = match (&turn_result, &command.verify_command) {
+            (Ok(_), Some(verify_command)) => run_verification_with_event_sink(
+                &workspace,
+                &command.turn_id,
+                verify_command,
+                command.verify_timeout_ms,
+                &mut run_log,
+                &mut event_sink,
+            )
+            .map(Some),
+            _ => Ok(None),
+        };
         emit_human_summary(
             &command,
             run_log.events_path(),
@@ -283,7 +319,8 @@ where
             stdout,
             stderr,
         )?;
-    }
+        (turn_result, verification_result)
+    };
 
     let outcome = turn_result?;
     verification_result?;
@@ -295,32 +332,102 @@ where
     Ok(())
 }
 
-async fn run_with_policy<A>(
+struct RunExecutionContext<'a, R, E, S>
+where
+    R: BufRead,
+    E: Write,
+    S: TurnEventSink + ?Sized,
+{
+    workspace: &'a Path,
+    auto_approve: bool,
+    approval_input: &'a mut R,
+    approval_output: &'a mut E,
+    run_log: &'a mut RunLog,
+    event_sink: &'a mut S,
+}
+
+async fn run_with_selected_policy<R, E, S>(
+    context: RunExecutionContext<'_, R, E, S>,
+    provider: CliTurnProvider,
+    config: AgentTurnLoopConfig,
+    input: AgentTurnInput,
+) -> Result<AgentTurnOutcome, AgentTurnLoopError>
+where
+    R: BufRead,
+    E: Write,
+    S: TurnEventSink + ?Sized,
+{
+    let RunExecutionContext {
+        workspace,
+        auto_approve,
+        approval_input,
+        approval_output,
+        run_log,
+        event_sink,
+    } = context;
+
+    if auto_approve {
+        run_with_policy(
+            workspace,
+            provider,
+            AutoApprovePolicy,
+            config,
+            input,
+            run_log,
+            event_sink,
+        )
+        .await
+    } else {
+        let approval_policy = PromptApprovalPolicy::new(approval_input, approval_output);
+        run_with_policy(
+            workspace,
+            provider,
+            approval_policy,
+            config,
+            input,
+            run_log,
+            event_sink,
+        )
+        .await
+    }
+}
+
+async fn run_with_policy<A, S>(
     workspace: &Path,
     provider: CliTurnProvider,
     approval_policy: A,
     config: AgentTurnLoopConfig,
     input: AgentTurnInput,
     run_log: &mut RunLog,
+    event_sink: &mut S,
 ) -> Result<AgentTurnOutcome, AgentTurnLoopError>
 where
     A: ApprovalPolicy,
+    S: TurnEventSink + ?Sized,
 {
     let mut loop_runner =
         AgentTurnLoop::with_approval_policy(workspace, provider, approval_policy)?
             .with_config(config);
-    loop_runner.run_turn(input, run_log).await
+    loop_runner
+        .run_turn_with_event_sink(input, run_log, event_sink)
+        .await
 }
 
-fn run_verification(
+fn run_verification_with_event_sink<S>(
     workspace: &Path,
     turn_id: &str,
     command: &str,
     timeout_ms: u64,
     run_log: &mut RunLog,
-) -> Result<VerificationOutcome, CliError> {
+    event_sink: &mut S,
+) -> Result<VerificationOutcome, CliError>
+where
+    S: TurnEventSink + ?Sized,
+{
     let verification_id = "verification_1";
-    run_log.append(
+    append_cli_event(
+        run_log,
+        event_sink,
         "verification.started",
         Some(turn_id.to_owned()),
         json!({
@@ -342,7 +449,9 @@ fn run_verification(
     };
     let redacted_result = redacted_tool_result_value(&result)?;
 
-    run_log.append(
+    append_cli_event(
+        run_log,
+        event_sink,
         "verification.completed",
         Some(turn_id.to_owned()),
         json!({
@@ -366,6 +475,78 @@ fn run_verification(
     }
 
     Ok(outcome)
+}
+
+fn append_cli_event(
+    run_log: &mut RunLog,
+    event_sink: &mut (impl TurnEventSink + ?Sized),
+    event_type: impl Into<String>,
+    turn_id: Option<String>,
+    payload: serde_json::Value,
+) -> Result<(), CliError> {
+    let event = run_log.append(event_type, turn_id, payload)?;
+    event_sink.on_event(&event)?;
+    Ok(())
+}
+
+struct PromptApprovalPolicy<'io, R, W> {
+    input: &'io mut R,
+    output: &'io mut W,
+}
+
+impl<'io, R, W> PromptApprovalPolicy<'io, R, W> {
+    fn new(input: &'io mut R, output: &'io mut W) -> Self {
+        Self { input, output }
+    }
+}
+
+impl<R, W> ApprovalPolicy for PromptApprovalPolicy<'_, R, W>
+where
+    R: BufRead,
+    W: Write,
+{
+    fn decide(
+        &mut self,
+        request: &TurnApprovalRequest,
+    ) -> Result<ApprovalDecision, ApprovalPolicyError> {
+        writeln!(self.output, "Approval required")?;
+        writeln!(self.output, "  id: {}", request.approval_id)?;
+        writeln!(self.output, "  tool: {}", request.tool_name)?;
+        writeln!(self.output, "  risk: {}", request.risk.as_str())?;
+        writeln!(self.output, "  title: {}", request.title)?;
+        writeln!(self.output, "  detail: {}", request.detail)?;
+        if let Some(command) = &request.command {
+            writeln!(self.output, "  command: {command}")?;
+        }
+        if let Some(paths) = &request.paths {
+            writeln!(self.output, "  paths: {}", paths.join(", "))?;
+        }
+        writeln!(self.output, "  persistable: {}", request.persistable)?;
+
+        loop {
+            write!(self.output, "Approve this tool call? [y/N] ")?;
+            self.output.flush()?;
+
+            let mut answer = String::new();
+            if self.input.read_line(&mut answer)? == 0 {
+                return Ok(ApprovalDecision::Rejected {
+                    reason: "approval prompt input ended".to_owned(),
+                });
+            }
+
+            match answer.trim().to_ascii_lowercase().as_str() {
+                "y" | "yes" => return Ok(ApprovalDecision::Approved),
+                "" | "n" | "no" => {
+                    return Ok(ApprovalDecision::Rejected {
+                        reason: "rejected by user".to_owned(),
+                    });
+                }
+                _ => {
+                    writeln!(self.output, "Please answer y or n.")?;
+                }
+            }
+        }
+    }
 }
 
 fn emit_human_summary<W, E>(
@@ -684,6 +865,8 @@ pub enum CliError {
     ToolExecution(#[from] ToolExecutionError),
     #[error("RPC event bridge failed: {0}")]
     Rpc(#[from] AgentRpcError),
+    #[error("event sink failed: {0}")]
+    EventSink(#[from] TurnEventSinkError),
     #[error("verification command failed with exit code {exit_code:?}")]
     VerificationFailed { exit_code: Option<i32> },
     #[error("agent returned an empty final message")]
@@ -805,7 +988,8 @@ mod tests {
     use serde_json::Value;
 
     use super::{
-        CliCommand, ProviderKind, RunCommand, deepseek_chat_stream_to_turn_provider_stream, run_cli,
+        CliCommand, ProviderKind, RunCommand, deepseek_chat_stream_to_turn_provider_stream,
+        run_cli, run_cli_with_input,
     };
 
     #[test]
@@ -952,6 +1136,108 @@ mod tests {
                     .as_str()
                     .is_some_and(|stdout| stdout.contains(REDACTED_VALUE))
         }));
+
+        let store = RunLogStore::new(workspace.path()).expect("run log store should open");
+        let events = store.load_run("run_cli_patch").expect("events should load");
+        assert_eq!(notifications.len(), events.len());
+        let notification_seqs = notifications
+            .iter()
+            .map(|value| value["params"]["seq"].as_u64())
+            .collect::<Vec<_>>();
+        let persisted_seqs = events
+            .iter()
+            .map(|event| Some(event.seq))
+            .collect::<Vec<_>>();
+        assert_eq!(notification_seqs, persisted_seqs);
+    }
+
+    #[test]
+    fn fixture_patch_run_prompts_for_approval_and_applies_when_approved() {
+        let workspace = TestWorkspace::new();
+        workspace.write("CLI_SMOKE.txt", "old\n");
+        let mut stdin = std::io::Cursor::new(b"y\n".to_vec());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        run_cli_with_input(
+            [
+                "deepseek-coder",
+                "run",
+                "--provider",
+                "fixture",
+                "--fixture",
+                "patch",
+                "--workspace",
+                workspace.path_str(),
+                "--run-id",
+                "run_cli_prompt_approve",
+                "--turn-id",
+                "turn_cli_prompt",
+                "Patch smoke file",
+            ],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("approved prompt run should succeed");
+
+        assert_eq!(workspace.read("CLI_SMOKE.txt"), "new\n");
+        let stderr = String::from_utf8(stderr).expect("stderr should be UTF-8");
+        assert!(stderr.contains("Approval required"));
+        assert!(stderr.contains("Approve this tool call?"));
+        let store = RunLogStore::new(workspace.path()).expect("run log store should open");
+        let events = store
+            .load_run("run_cli_prompt_approve")
+            .expect("events should load");
+        assert!(events.iter().any(|event| {
+            event.event_type == "tool.approvalResolved" && event.payload["decision"] == "approved"
+        }));
+    }
+
+    #[test]
+    fn fixture_patch_run_prompts_for_approval_and_rejects() {
+        let workspace = TestWorkspace::new();
+        workspace.write("CLI_SMOKE.txt", "old\n");
+        let mut stdin = std::io::Cursor::new(b"n\n".to_vec());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run_cli_with_input(
+            [
+                "deepseek-coder",
+                "run",
+                "--provider",
+                "fixture",
+                "--fixture",
+                "patch",
+                "--workspace",
+                workspace.path_str(),
+                "--run-id",
+                "run_cli_prompt_reject",
+                "--turn-id",
+                "turn_cli_prompt",
+                "Patch smoke file",
+            ],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect_err("rejected prompt run should fail");
+
+        assert!(error.to_string().contains("rejected by user"));
+        assert_eq!(workspace.read("CLI_SMOKE.txt"), "old\n");
+        let stderr = String::from_utf8(stderr).expect("stderr should be UTF-8");
+        assert!(stderr.contains("status: failed"));
+        let store = RunLogStore::new(workspace.path()).expect("run log store should open");
+        let events = store
+            .load_run("run_cli_prompt_reject")
+            .expect("events should load");
+        assert!(events.iter().any(|event| {
+            event.event_type == "tool.approvalResolved"
+                && event.payload["decision"] == "rejected"
+                && event.payload["reason"] == "rejected by user"
+        }));
+        assert!(events.iter().any(|event| event.event_type == "run.failed"));
     }
 
     #[test]
