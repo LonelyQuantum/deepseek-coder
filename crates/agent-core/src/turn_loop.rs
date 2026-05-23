@@ -13,7 +13,7 @@ use crate::{
         ReasoningContentError, ReasoningContentMode, ReasoningContentState,
         ReasoningContentStateMachine,
     },
-    run_log::{RunLog, RunLogError},
+    run_log::{RunLog, RunLogError, RunLogEvent},
     tool::{ToolDefinition, ToolName, find_builtin_tool},
     tool_execution::{
         ApplyPatchArgs, ShellArgs, ToolExecutionError, ToolStatus, WorkspaceToolExecutor,
@@ -72,12 +72,31 @@ where
         input: AgentTurnInput,
         run_log: &mut RunLog,
     ) -> Result<AgentTurnOutcome, AgentTurnLoopError> {
+        let mut event_sink = NoopTurnEventSink;
+        self.run_turn_with_event_sink(input, run_log, &mut event_sink)
+            .await
+    }
+
+    pub async fn run_turn_with_event_sink<S>(
+        &mut self,
+        input: AgentTurnInput,
+        run_log: &mut RunLog,
+        event_sink: &mut S,
+    ) -> Result<AgentTurnOutcome, AgentTurnLoopError>
+    where
+        S: TurnEventSink + ?Sized,
+    {
         let turn_id = input.turn_id.clone();
-        let result = self.run_turn_inner(input, run_log).await;
+        let result = self.run_turn_inner(input, run_log, event_sink).await;
         if let Err(error) = &result
-            && !matches!(error, AgentTurnLoopError::RunLog(_))
+            && !matches!(
+                error,
+                AgentTurnLoopError::RunLog(_) | AgentTurnLoopError::EventSink(_)
+            )
         {
-            let append_result = run_log.append(
+            let append_result = append_turn_event(
+                run_log,
+                event_sink,
                 "run.failed",
                 Some(turn_id),
                 json!({
@@ -85,9 +104,9 @@ where
                     "message": error.to_string(),
                 }),
             );
-            if let Err(run_log_error) = append_result {
+            if let Err(append_error) = append_result {
                 eprintln!(
-                    "failed to append run.failed event after `{}`: {run_log_error}",
+                    "failed to append run.failed event after `{}`: {append_error}",
                     error.code()
                 );
             }
@@ -100,6 +119,7 @@ where
         &mut self,
         input: AgentTurnInput,
         run_log: &mut RunLog,
+        event_sink: &mut (impl TurnEventSink + ?Sized),
     ) -> Result<AgentTurnOutcome, AgentTurnLoopError> {
         if self.config.max_model_turns == 0 {
             return Err(AgentTurnLoopError::InvalidConfig {
@@ -107,7 +127,9 @@ where
             });
         }
 
-        run_log.append(
+        append_turn_event(
+            run_log,
+            event_sink,
             "run.started",
             None,
             json!({
@@ -116,7 +138,9 @@ where
                 "mode": input.mode.as_str(),
             }),
         )?;
-        run_log.append(
+        append_turn_event(
+            run_log,
+            event_sink,
             "turn.started",
             Some(input.turn_id.clone()),
             json!({
@@ -126,7 +150,9 @@ where
         )?;
 
         let context = self.build_context(&input)?;
-        run_log.append(
+        append_turn_event(
+            run_log,
+            event_sink,
             "context.built",
             Some(input.turn_id.clone()),
             context.context_built_payload(),
@@ -138,7 +164,9 @@ where
 
         for iteration in 1..=self.config.max_model_turns {
             let prepared = self.reasoning.prepare_messages(&messages)?;
-            run_log.append(
+            append_turn_event(
+                run_log,
+                event_sink,
                 "provider.requested",
                 Some(input.turn_id.clone()),
                 json!({
@@ -157,6 +185,7 @@ where
                     &input.turn_id,
                     iteration,
                     run_log,
+                    event_sink,
                 )
                 .await?;
             let response = provider_turn.response;
@@ -177,7 +206,9 @@ where
                 .filter(|content| !content.is_empty())
                 .filter(|_| !provider_turn.emitted_content_delta)
             {
-                run_log.append(
+                append_turn_event(
+                    run_log,
+                    event_sink,
                     "assistant.delta",
                     Some(input.turn_id.clone()),
                     json!({
@@ -189,7 +220,9 @@ where
 
             if response.tool_calls.is_empty() {
                 let final_message = response.content.unwrap_or_default();
-                run_log.append(
+                append_turn_event(
+                    run_log,
+                    event_sink,
                     "run.completed",
                     Some(input.turn_id.clone()),
                     json!({
@@ -221,6 +254,7 @@ where
                     iteration,
                     tool_index + 1,
                     run_log,
+                    event_sink,
                 )?;
                 changed_files.extend(executed.changed_files.iter().cloned());
                 messages.push(ChatMessage::tool_result(
@@ -247,6 +281,7 @@ where
         turn_id: &str,
         iteration: usize,
         run_log: &mut RunLog,
+        event_sink: &mut (impl TurnEventSink + ?Sized),
     ) -> Result<CollectedProviderTurn, AgentTurnLoopError> {
         let mut stream = self.provider.complete_stream(request).await?;
         let mut response = None;
@@ -265,7 +300,9 @@ where
                         .filter(|content| !content.is_empty())
                     {
                         emitted_content_delta = true;
-                        run_log.append(
+                        append_turn_event(
+                            run_log,
+                            event_sink,
                             "assistant.delta",
                             Some(turn_id.to_owned()),
                             json!({
@@ -312,6 +349,7 @@ where
         iteration: usize,
         tool_index: usize,
         run_log: &mut RunLog,
+        event_sink: &mut (impl TurnEventSink + ?Sized),
     ) -> Result<ExecutedToolCall, AgentTurnLoopError> {
         let tool_name = tool_call.function.name.as_str();
         let definition =
@@ -321,7 +359,9 @@ where
             })?;
         let arguments_preview = parse_tool_arguments_value(tool_call)?;
 
-        run_log.append(
+        append_turn_event(
+            run_log,
+            event_sink,
             "tool.requested",
             Some(turn_id.to_owned()),
             json!({
@@ -339,17 +379,31 @@ where
             }),
             ToolName::ReadFile => {
                 let args = parse_tool_arguments(tool_call)?;
-                self.execute_without_approval(tool_call, turn_id, args, run_log, |tools, args| {
-                    let result = tools.read_file(args)?;
-                    tool_record(result.status, result.summary.clone(), Vec::new(), &result)
-                })
+                self.execute_without_approval(
+                    tool_call,
+                    turn_id,
+                    args,
+                    run_log,
+                    event_sink,
+                    |tools, args| {
+                        let result = tools.read_file(args)?;
+                        tool_record(result.status, result.summary.clone(), Vec::new(), &result)
+                    },
+                )
             }
             ToolName::Search => {
                 let args = parse_tool_arguments(tool_call)?;
-                self.execute_without_approval(tool_call, turn_id, args, run_log, |tools, args| {
-                    let result = tools.search(args)?;
-                    tool_record(result.status, result.summary.clone(), Vec::new(), &result)
-                })
+                self.execute_without_approval(
+                    tool_call,
+                    turn_id,
+                    args,
+                    run_log,
+                    event_sink,
+                    |tools, args| {
+                        let result = tools.search(args)?;
+                        tool_record(result.status, result.summary.clone(), Vec::new(), &result)
+                    },
+                )
             }
             ToolName::ApplyPatch => {
                 let args: ApplyPatchArgs = parse_tool_arguments(tool_call)?;
@@ -362,16 +416,24 @@ where
                     Some(args.expected_files.clone()),
                     None,
                     run_log,
+                    event_sink,
                 )?;
-                self.execute_without_approval(tool_call, turn_id, args, run_log, |tools, args| {
-                    let result = tools.apply_patch(args)?;
-                    tool_record(
-                        result.status,
-                        result.summary.clone(),
-                        result.files.clone(),
-                        &result,
-                    )
-                })
+                self.execute_without_approval(
+                    tool_call,
+                    turn_id,
+                    args,
+                    run_log,
+                    event_sink,
+                    |tools, args| {
+                        let result = tools.apply_patch(args)?;
+                        tool_record(
+                            result.status,
+                            result.summary.clone(),
+                            result.files.clone(),
+                            &result,
+                        )
+                    },
+                )
             }
             ToolName::Shell => {
                 let args: ShellArgs = parse_tool_arguments(tool_call)?;
@@ -384,25 +446,47 @@ where
                     args.cwd.clone().map(|cwd| vec![cwd]),
                     Some(args.command.clone()),
                     run_log,
+                    event_sink,
                 )?;
-                self.execute_without_approval(tool_call, turn_id, args, run_log, |tools, args| {
-                    let result = tools.shell(args)?;
-                    tool_record(result.status, result.summary.clone(), Vec::new(), &result)
-                })
+                self.execute_without_approval(
+                    tool_call,
+                    turn_id,
+                    args,
+                    run_log,
+                    event_sink,
+                    |tools, args| {
+                        let result = tools.shell(args)?;
+                        tool_record(result.status, result.summary.clone(), Vec::new(), &result)
+                    },
+                )
             }
             ToolName::GitStatus => {
                 let args = parse_tool_arguments(tool_call)?;
-                self.execute_without_approval(tool_call, turn_id, args, run_log, |tools, args| {
-                    let result = tools.git_status(args)?;
-                    tool_record(result.status, result.summary.clone(), Vec::new(), &result)
-                })
+                self.execute_without_approval(
+                    tool_call,
+                    turn_id,
+                    args,
+                    run_log,
+                    event_sink,
+                    |tools, args| {
+                        let result = tools.git_status(args)?;
+                        tool_record(result.status, result.summary.clone(), Vec::new(), &result)
+                    },
+                )
             }
             ToolName::GitDiff => {
                 let args = parse_tool_arguments(tool_call)?;
-                self.execute_without_approval(tool_call, turn_id, args, run_log, |tools, args| {
-                    let result = tools.git_diff(args)?;
-                    tool_record(result.status, result.summary.clone(), Vec::new(), &result)
-                })
+                self.execute_without_approval(
+                    tool_call,
+                    turn_id,
+                    args,
+                    run_log,
+                    event_sink,
+                    |tools, args| {
+                        let result = tools.git_diff(args)?;
+                        tool_record(result.status, result.summary.clone(), Vec::new(), &result)
+                    },
+                )
             }
             ToolName::LspDiagnostics => Err(AgentTurnLoopError::UnsupportedTool {
                 tool_call_id: tool_call.id.clone(),
@@ -421,12 +505,15 @@ where
         turn_id: &str,
         args: Args,
         run_log: &mut RunLog,
+        event_sink: &mut (impl TurnEventSink + ?Sized),
         execute: F,
     ) -> Result<ExecutedToolCall, AgentTurnLoopError>
     where
         F: FnOnce(&WorkspaceToolExecutor, Args) -> Result<ExecutedToolCall, AgentTurnLoopError>,
     {
-        run_log.append(
+        append_turn_event(
+            run_log,
+            event_sink,
             "tool.started",
             Some(turn_id.to_owned()),
             json!({
@@ -436,7 +523,9 @@ where
         )?;
 
         let executed = execute(&self.tools, args)?;
-        run_log.append(
+        append_turn_event(
+            run_log,
+            event_sink,
             "tool.completed",
             Some(turn_id.to_owned()),
             json!({
@@ -462,6 +551,7 @@ where
         paths: Option<Vec<String>>,
         command: Option<String>,
         run_log: &mut RunLog,
+        event_sink: &mut (impl TurnEventSink + ?Sized),
     ) -> Result<(), AgentTurnLoopError> {
         if definition.approval == ApprovalRequirement::None {
             return Ok(());
@@ -483,21 +573,80 @@ where
             persistable: definition.approval.is_persistable(),
         };
 
-        run_log.append(
+        append_turn_event(
+            run_log,
+            event_sink,
             "tool.approvalRequired",
             Some(turn_id.to_owned()),
             approval_payload(&request),
         )?;
 
-        match self.approval_policy.decide(&request) {
-            ApprovalDecision::Approved => Ok(()),
-            ApprovalDecision::Rejected { reason } => Err(AgentTurnLoopError::ApprovalRejected {
-                approval_id: request.approval_id,
-                tool_call_id: request.tool_call_id,
-                reason,
-            }),
+        match self.approval_policy.decide(&request)? {
+            ApprovalDecision::Approved => {
+                append_turn_event(
+                    run_log,
+                    event_sink,
+                    "tool.approvalResolved",
+                    Some(turn_id.to_owned()),
+                    approval_resolved_payload(&request, "approved", None),
+                )?;
+                Ok(())
+            }
+            ApprovalDecision::Rejected { reason } => {
+                append_turn_event(
+                    run_log,
+                    event_sink,
+                    "tool.approvalResolved",
+                    Some(turn_id.to_owned()),
+                    approval_resolved_payload(&request, "rejected", Some(reason.as_str())),
+                )?;
+                Err(AgentTurnLoopError::ApprovalRejected {
+                    approval_id: request.approval_id,
+                    tool_call_id: request.tool_call_id,
+                    reason,
+                })
+            }
         }
     }
+}
+
+pub trait TurnEventSink {
+    fn on_event(&mut self, event: &RunLogEvent) -> Result<(), TurnEventSinkError>;
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoopTurnEventSink;
+
+impl TurnEventSink for NoopTurnEventSink {
+    fn on_event(&mut self, _event: &RunLogEvent) -> Result<(), TurnEventSinkError> {
+        Ok(())
+    }
+}
+
+#[derive(Debug, Error)]
+#[error("turn event sink failed: {message}")]
+pub struct TurnEventSinkError {
+    message: String,
+}
+
+impl TurnEventSinkError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+fn append_turn_event(
+    run_log: &mut RunLog,
+    event_sink: &mut (impl TurnEventSink + ?Sized),
+    event_type: impl Into<String>,
+    turn_id: Option<String>,
+    payload: Value,
+) -> Result<RunLogEvent, AgentTurnLoopError> {
+    let event = run_log.append(event_type, turn_id, payload)?;
+    event_sink.on_event(&event)?;
+    Ok(event)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -709,17 +858,43 @@ pub enum ApprovalDecision {
 }
 
 pub trait ApprovalPolicy {
-    fn decide(&mut self, request: &TurnApprovalRequest) -> ApprovalDecision;
+    fn decide(
+        &mut self,
+        request: &TurnApprovalRequest,
+    ) -> Result<ApprovalDecision, ApprovalPolicyError>;
+}
+
+#[derive(Debug, Error)]
+#[error("approval policy failed: {message}")]
+pub struct ApprovalPolicyError {
+    message: String,
+}
+
+impl ApprovalPolicyError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+impl From<std::io::Error> for ApprovalPolicyError {
+    fn from(source: std::io::Error) -> Self {
+        Self::new(source.to_string())
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct RejectAllApprovalPolicy;
 
 impl ApprovalPolicy for RejectAllApprovalPolicy {
-    fn decide(&mut self, request: &TurnApprovalRequest) -> ApprovalDecision {
-        ApprovalDecision::Rejected {
+    fn decide(
+        &mut self,
+        request: &TurnApprovalRequest,
+    ) -> Result<ApprovalDecision, ApprovalPolicyError> {
+        Ok(ApprovalDecision::Rejected {
             reason: format!("approval required for {}", request.tool_name),
-        }
+        })
     }
 }
 
@@ -727,8 +902,11 @@ impl ApprovalPolicy for RejectAllApprovalPolicy {
 pub struct AutoApprovePolicy;
 
 impl ApprovalPolicy for AutoApprovePolicy {
-    fn decide(&mut self, _request: &TurnApprovalRequest) -> ApprovalDecision {
-        ApprovalDecision::Approved
+    fn decide(
+        &mut self,
+        _request: &TurnApprovalRequest,
+    ) -> Result<ApprovalDecision, ApprovalPolicyError> {
+        Ok(ApprovalDecision::Approved)
     }
 }
 
@@ -750,6 +928,8 @@ pub enum AgentTurnLoopError {
     ProviderEventAfterCompletion,
     #[error("run log failed: {0}")]
     RunLog(#[from] RunLogError),
+    #[error("event sink failed: {0}")]
+    EventSink(#[from] TurnEventSinkError),
     #[error("tool execution failed: {0}")]
     ToolExecution(#[from] ToolExecutionError),
     #[error("tool call `{tool_call_id}` requested unknown tool `{name}`")]
@@ -772,6 +952,8 @@ pub enum AgentTurnLoopError {
         tool_call_id: String,
         reason: String,
     },
+    #[error("approval policy failed: {0}")]
+    ApprovalPolicy(#[from] ApprovalPolicyError),
     #[error("model did not finish after {max_model_turns} turns")]
     MaxModelTurnsExceeded { max_model_turns: usize },
 }
@@ -787,6 +969,7 @@ impl AgentTurnLoopError {
             Self::ProviderCompletedMultipleTimes => "E_PROVIDER_STREAM_INVALID",
             Self::ProviderEventAfterCompletion => "E_PROVIDER_STREAM_INVALID",
             Self::RunLog(_) => "E_RUN_LOG",
+            Self::EventSink(_) => "E_EVENT_SINK",
             Self::ToolExecution(_) => "E_TOOL_EXECUTION",
             Self::UnknownTool { .. } => "E_UNKNOWN_TOOL",
             Self::UnsupportedTool { .. } => "E_UNSUPPORTED_TOOL",
@@ -794,6 +977,7 @@ impl AgentTurnLoopError {
             Self::Serialization(_) => "E_SERIALIZATION",
             Self::MissingAssistantReasoningContent => "E_MISSING_REASONING_CONTENT",
             Self::ApprovalRejected { .. } => "E_APPROVAL_REJECTED",
+            Self::ApprovalPolicy(_) => "E_APPROVAL_POLICY",
             Self::MaxModelTurnsExceeded { .. } => "E_MAX_MODEL_TURNS",
         }
     }
@@ -902,6 +1086,10 @@ fn approval_payload(request: &TurnApprovalRequest) -> Value {
         Value::String(request.tool_call_id.clone()),
     );
     payload.insert(
+        "toolName".to_owned(),
+        Value::String(request.tool_name.clone()),
+    );
+    payload.insert(
         "risk".to_owned(),
         Value::String(request.risk.as_str().to_owned()),
     );
@@ -921,6 +1109,32 @@ fn approval_payload(request: &TurnApprovalRequest) -> Value {
     Value::Object(payload)
 }
 
+fn approval_resolved_payload(
+    request: &TurnApprovalRequest,
+    decision: &'static str,
+    reason: Option<&str>,
+) -> Value {
+    let mut payload = Map::new();
+    payload.insert(
+        "approvalId".to_owned(),
+        Value::String(request.approval_id.clone()),
+    );
+    payload.insert(
+        "toolCallId".to_owned(),
+        Value::String(request.tool_call_id.clone()),
+    );
+    payload.insert(
+        "toolName".to_owned(),
+        Value::String(request.tool_name.clone()),
+    );
+    payload.insert("decision".to_owned(), Value::String(decision.to_owned()));
+    if let Some(reason) = reason {
+        payload.insert("reason".to_owned(), Value::String(reason.to_owned()));
+    }
+
+    Value::Object(payload)
+}
+
 #[cfg(test)]
 mod tests {
     use std::{collections::VecDeque, fs};
@@ -928,13 +1142,17 @@ mod tests {
     use futures_util::stream;
     use serde_json::json;
 
-    use crate::{context::ContextItem, provider::deepseek_api::ChatToolCall, run_log::RunLogStore};
+    use crate::{
+        context::ContextItem,
+        provider::deepseek_api::ChatToolCall,
+        run_log::{RunLogEvent, RunLogStore},
+    };
 
     use super::{
         AgentRunMode, AgentTurnInput, AgentTurnLoop, AgentTurnLoopError, AutoApprovePolicy,
-        TurnProvider, TurnProviderDelta, TurnProviderError, TurnProviderEvent, TurnProviderFuture,
-        TurnProviderRequest, TurnProviderResponse, TurnProviderStream,
-        turn_provider_response_stream,
+        TurnEventSink, TurnEventSinkError, TurnProvider, TurnProviderDelta, TurnProviderError,
+        TurnProviderEvent, TurnProviderFuture, TurnProviderRequest, TurnProviderResponse,
+        TurnProviderStream, turn_provider_response_stream,
     };
 
     #[tokio::test]
@@ -1159,6 +1377,40 @@ mod tests {
         assert_eq!(deltas[1].payload["text"], "world");
     }
 
+    #[tokio::test]
+    async fn turn_loop_sends_each_persisted_event_to_sink() {
+        let workspace = TestWorkspace::new();
+        let store = RunLogStore::new(workspace.path()).expect("run log store should open");
+        let mut run = store
+            .create_run("run_turn_sink")
+            .expect("run should be created");
+        let provider = EventScriptedProvider::new(vec![vec![
+            TurnProviderEvent::AssistantDelta(TurnProviderDelta::content("live")),
+            TurnProviderEvent::Completed(TurnProviderResponse::final_text("live")),
+        ]]);
+        let mut loop_runner =
+            AgentTurnLoop::new(workspace.path(), provider).expect("turn loop should initialize");
+        let mut sink = RecordingEventSink::default();
+
+        let outcome = loop_runner
+            .run_turn_with_event_sink(
+                AgentTurnInput::new("turn_1", "Say hello"),
+                &mut run,
+                &mut sink,
+            )
+            .await
+            .expect("streaming turn should complete");
+
+        assert_eq!(outcome.final_message, "live");
+        let events = store.load_run("run_turn_sink").expect("events should load");
+        assert_eq!(sink.events, events);
+        assert!(
+            sink.events
+                .iter()
+                .any(|event| event.event_type == "assistant.delta")
+        );
+    }
+
     struct ScriptedProvider {
         responses: VecDeque<TurnProviderResponse>,
         requests: Vec<TurnProviderRequest>,
@@ -1207,6 +1459,18 @@ mod tests {
                 let stream: TurnProviderStream = Box::pin(stream::iter(events.into_iter().map(Ok)));
                 Ok(stream)
             })
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingEventSink {
+        events: Vec<RunLogEvent>,
+    }
+
+    impl TurnEventSink for RecordingEventSink {
+        fn on_event(&mut self, event: &RunLogEvent) -> Result<(), TurnEventSinkError> {
+            self.events.push(event.clone());
+            Ok(())
         }
     }
 
