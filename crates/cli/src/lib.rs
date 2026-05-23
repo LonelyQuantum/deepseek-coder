@@ -442,7 +442,7 @@ impl DeepSeekTurnProvider {
     fn new(max_output_tokens: u32) -> Result<Self, CliError> {
         let config = DeepSeekApiConfig::from_env()?;
         let adapter = DeepSeekApiAdapter::new(config)?;
-        let runtime = tokio::runtime::Builder::new_multi_thread()
+        let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .thread_name("deepseek-coder-cli-provider")
             .build()?;
