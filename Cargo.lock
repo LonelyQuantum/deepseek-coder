@@ -95,6 +95,9 @@ name = "deepseek-coder-agent-rpc"
 version = "0.1.0"
 dependencies = [
  "deepseek-coder-agent-core",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]
