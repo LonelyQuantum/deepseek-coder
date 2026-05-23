@@ -18,11 +18,14 @@ interface ToolRegistryFixture {
   readonly version: string;
   readonly riskLevels: readonly string[];
   readonly riskDefaultApproval: Readonly<Record<string, string>>;
-  readonly tools: ReadonlyArray<{
-    readonly name: string;
-    readonly risk: string;
-    readonly approval: string;
-  }>;
+  readonly tools: readonly ToolRegistryTool[];
+}
+
+interface ToolRegistryTool {
+  readonly name: string;
+  readonly risk: string;
+  readonly approval: string;
+  readonly status: string;
 }
 
 const toolRegistryFixture = JSON.parse(
@@ -78,14 +81,26 @@ test("tool registry stays aligned with shared protocol fixture", () => {
   assert.deepEqual(toolRegistryFixture.riskLevels, [...riskLevels]);
   assert.deepEqual(toolRegistryFixture.riskDefaultApproval, riskDefaultApproval);
   assert.deepEqual(
-    toolRegistryFixture.tools,
-    toolDefinitions.map((tool) => ({
+    sortedTools(toolRegistryFixture.tools),
+    sortedTools(toolDefinitions.map((tool) => ({
       name: tool.name,
       risk: tool.risk,
       approval: tool.approval,
-    })),
+      status: tool.implementationStatus,
+    }))),
   );
 });
+
+function sortedTools(tools: readonly ToolRegistryTool[]): ToolRegistryTool[] {
+  const names = new Set<string>();
+
+  for (const tool of tools) {
+    assert.equal(names.has(tool.name), false, `tool ${tool.name} must be declared only once`);
+    names.add(tool.name);
+  }
+
+  return [...tools].sort((left, right) => left.name.localeCompare(right.name));
+}
 
 test("tool approval defaults match risk defaults", () => {
   for (const tool of toolDefinitions) {

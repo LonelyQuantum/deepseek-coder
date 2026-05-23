@@ -51,6 +51,9 @@ export function isApprovalRequired(risk: RiskLevel): boolean {
 
 export type JsonSchema = Readonly<Record<string, unknown>>;
 
+export const toolImplementationStatuses = ["schema_only", "executor_implemented"] as const;
+export type ToolImplementationStatus = (typeof toolImplementationStatuses)[number];
+
 export const toolNames = [
   "workspace_manifest",
   "read_file",
@@ -69,6 +72,7 @@ export interface ToolDefinition {
   readonly description: string;
   readonly risk: RiskLevel;
   readonly approval: ApprovalRequirement;
+  readonly implementationStatus: ToolImplementationStatus;
   readonly argumentSchema: JsonSchema;
   readonly resultSchema: JsonSchema;
 }
@@ -90,6 +94,7 @@ export const toolDefinitions = [
     description: "生成 workspace manifest。",
     risk: "read",
     approval: "none",
+    implementationStatus: "schema_only",
     argumentSchema: {
       type: "object",
       additionalProperties: false,
@@ -105,6 +110,7 @@ export const toolDefinitions = [
     description: "读取 workspace 内 UTF-8 文本文件。",
     risk: "read",
     approval: "none",
+    implementationStatus: "executor_implemented",
     argumentSchema: {
       type: "object",
       additionalProperties: false,
@@ -122,6 +128,7 @@ export const toolDefinitions = [
     description: "使用 ripgrep 搜索 workspace 文本。",
     risk: "read",
     approval: "none",
+    implementationStatus: "executor_implemented",
     argumentSchema: {
       type: "object",
       additionalProperties: false,
@@ -140,6 +147,7 @@ export const toolDefinitions = [
     description: "应用统一 diff patch。",
     risk: "write",
     approval: "required",
+    implementationStatus: "executor_implemented",
     argumentSchema: {
       type: "object",
       additionalProperties: false,
@@ -160,6 +168,7 @@ export const toolDefinitions = [
     description: "执行非交互式 shell 命令。",
     risk: "exec",
     approval: "required",
+    implementationStatus: "executor_implemented",
     argumentSchema: {
       type: "object",
       additionalProperties: false,
@@ -177,6 +186,7 @@ export const toolDefinitions = [
     description: "读取 git status。",
     risk: "read",
     approval: "none",
+    implementationStatus: "executor_implemented",
     argumentSchema: {
       type: "object",
       additionalProperties: false,
@@ -191,6 +201,7 @@ export const toolDefinitions = [
     description: "读取 git diff。",
     risk: "read",
     approval: "none",
+    implementationStatus: "executor_implemented",
     argumentSchema: {
       type: "object",
       additionalProperties: false,
@@ -206,6 +217,7 @@ export const toolDefinitions = [
     description: "读取语言服务器或编辑器 diagnostics。",
     risk: "read",
     approval: "none",
+    implementationStatus: "schema_only",
     argumentSchema: {
       type: "object",
       additionalProperties: false,
@@ -220,6 +232,7 @@ export const toolDefinitions = [
     description: "更新当前计划。",
     risk: "read",
     approval: "none",
+    implementationStatus: "schema_only",
     argumentSchema: {
       type: "object",
       additionalProperties: false,
