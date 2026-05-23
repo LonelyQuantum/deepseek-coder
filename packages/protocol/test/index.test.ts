@@ -5,6 +5,12 @@ import test from "node:test";
 import {
   agentEventMethod,
   agentInitializeMethod,
+  agentSendTurnMethod,
+  agentResumeMethod,
+  agentApproveMethod,
+  agentRejectMethod,
+  agentCancelMethod,
+  agentListRunsMethod,
   approvalStateTransitions,
   canTransitionApprovalState,
   jsonRpcVersion,
@@ -70,6 +76,12 @@ test("approval state transitions allow only documented next states", () => {
 test("JSON-RPC method constants match protocol document", () => {
   assert.equal(jsonRpcVersion, "2.0");
   assert.equal(agentInitializeMethod, "agent.initialize");
+  assert.equal(agentSendTurnMethod, "agent.sendTurn");
+  assert.equal(agentResumeMethod, "agent.resume");
+  assert.equal(agentApproveMethod, "agent.approve");
+  assert.equal(agentRejectMethod, "agent.reject");
+  assert.equal(agentCancelMethod, "agent.cancel");
+  assert.equal(agentListRunsMethod, "agent.listRuns");
   assert.equal(agentEventMethod, "agent.event");
 });
 

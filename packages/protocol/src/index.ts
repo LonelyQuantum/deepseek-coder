@@ -2,6 +2,12 @@ export const protocolVersion = "0.1.0" as const;
 export const jsonRpcVersion = "2.0" as const;
 export const agentEventMethod = "agent.event" as const;
 export const agentInitializeMethod = "agent.initialize" as const;
+export const agentSendTurnMethod = "agent.sendTurn" as const;
+export const agentResumeMethod = "agent.resume" as const;
+export const agentApproveMethod = "agent.approve" as const;
+export const agentRejectMethod = "agent.reject" as const;
+export const agentCancelMethod = "agent.cancel" as const;
+export const agentListRunsMethod = "agent.listRuns" as const;
 
 export const riskLevels = ["read", "write", "exec", "network", "destructive"] as const;
 export type RiskLevel = (typeof riskLevels)[number];
@@ -268,9 +274,79 @@ export function findToolDefinition(name: string): ToolDefinition | undefined {
   return toolDefinitions.find((tool) => tool.name === name);
 }
 
+export type FrontendKind = "cli" | "tui" | "vscode";
+
+export interface ClientInfo {
+  readonly name: string;
+  readonly version: string;
+  readonly frontend: FrontendKind;
+}
+
 export interface AgentInitializeParams {
-  readonly workspacePath: string;
   readonly protocolVersion: typeof protocolVersion;
+  readonly client: ClientInfo;
+  readonly workspaceRoot: string;
+  readonly workspaceTrusted: boolean;
+}
+
+export interface ServerInfo {
+  readonly name: string;
+  readonly version: string;
+}
+
+export interface ServerCapabilities {
+  readonly protocolVersion: typeof protocolVersion;
+  readonly supportsRunResume: boolean;
+  readonly supportsPatchApproval: boolean;
+  readonly supportsPersistentApprovals: boolean;
+  readonly supportedRiskLevels: readonly RiskLevel[];
+}
+
+export interface AgentInitializeResult {
+  readonly protocolVersion: typeof protocolVersion;
+  readonly server: ServerInfo;
+  readonly capabilities: ServerCapabilities;
+  readonly stateDir: string;
+}
+
+export type RpcRunMode = "plan" | "edit" | "review" | "ask";
+
+export interface TextRange {
+  readonly startLine: number;
+  readonly startColumn: number;
+  readonly endLine: number;
+  readonly endColumn: number;
+}
+
+export interface TurnAttachment {
+  readonly kind: "file" | "selection" | "diagnostic";
+  readonly path?: string;
+  readonly range?: TextRange;
+  readonly text?: string;
+}
+
+export interface SendTurnParams {
+  readonly runId?: string;
+  readonly message: string;
+  readonly mode: RpcRunMode;
+  readonly attachments?: readonly TurnAttachment[];
+}
+
+export interface SendTurnResult {
+  readonly runId: string;
+  readonly turnId: string;
+  readonly accepted: true;
+}
+
+export interface ResumeParams {
+  readonly runId: string;
+  readonly replayFromSeq?: number;
+}
+
+export interface ResumeResult {
+  readonly runId: string;
+  readonly nextSeq: number;
+  readonly replayStarted: boolean;
 }
 
 export interface ApprovalRequest {
@@ -283,6 +359,33 @@ export interface ApprovalRequest {
   readonly command?: string;
   readonly paths?: readonly string[];
   readonly persistable: boolean;
+}
+
+export type JsonRpcId = string | number | null;
+
+export interface JsonRpcRequest<TParams = unknown> {
+  readonly jsonrpc: typeof jsonRpcVersion;
+  readonly id: JsonRpcId;
+  readonly method: string;
+  readonly params?: TParams;
+}
+
+export interface JsonRpcResponse<TResult = unknown> {
+  readonly jsonrpc: typeof jsonRpcVersion;
+  readonly id: JsonRpcId;
+  readonly result: TResult;
+}
+
+export interface JsonRpcErrorObject<TData = unknown> {
+  readonly code: number;
+  readonly message: string;
+  readonly data?: TData;
+}
+
+export interface JsonRpcErrorResponse<TData = unknown> {
+  readonly jsonrpc: typeof jsonRpcVersion;
+  readonly id: JsonRpcId;
+  readonly error: JsonRpcErrorObject<TData>;
 }
 
 export interface JsonRpcNotification<TParams = unknown> {
@@ -298,6 +401,12 @@ export interface AgentEventEnvelope<TPayload = unknown> {
   readonly runId: string;
   readonly turnId?: string;
   readonly payload: TPayload;
+}
+
+export interface AssistantDeltaPayload {
+  readonly text: string;
+  readonly iteration?: number;
+  readonly stream?: boolean;
 }
 
 export type AgentEventNotification<TPayload = unknown> = JsonRpcNotification<
