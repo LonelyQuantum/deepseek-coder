@@ -2,7 +2,12 @@
 
 use std::io::{self, BufRead, Write};
 
-use deepseek_coder_agent_core::{AGENT_METADATA, approval::ALL_RISK_LEVELS, run_log::RunLogEvent};
+use deepseek_coder_agent_core::{
+    AGENT_METADATA,
+    approval::ALL_RISK_LEVELS,
+    run_log::RunLogEvent,
+    turn_loop::{TurnEventSink, TurnEventSinkError},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use thiserror::Error;
@@ -45,6 +50,8 @@ pub const RPC_UNSUPPORTED_PROTOCOL: i64 = -32001;
 pub const RPC_WORKSPACE_UNTRUSTED: i64 = -32002;
 pub const RPC_RUN_NOT_FOUND: i64 = -32003;
 pub const RPC_RUN_ALREADY_ACTIVE: i64 = -32004;
+pub const RPC_APPROVAL_NOT_FOUND: i64 = -32011;
+pub const RPC_APPROVAL_DENIED: i64 = -32012;
 pub const RPC_INTERNAL_INVARIANT: i64 = -32060;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -266,6 +273,54 @@ pub struct ResumeResult {
     pub replay_started: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RpcApprovalPersistence {
+    Never,
+    Session,
+    Workspace,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RpcApprovalState {
+    Approved,
+    Rejected,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApproveParams {
+    pub approval_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub persist: Option<RpcApprovalPersistence>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApproveResult {
+    pub approval_id: String,
+    pub state: RpcApprovalState,
+    pub persist: RpcApprovalPersistence,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RejectParams {
+    pub approval_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RejectResult {
+    pub approval_id: String,
+    pub state: RpcApprovalState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentRpcHandlerOutput<TResult> {
     pub result: TResult,
@@ -326,6 +381,16 @@ pub trait AgentRpcRequestHandler {
         &mut self,
         params: SendTurnParams,
     ) -> Result<AgentRpcHandlerOutput<SendTurnResult>, AgentRpcHandlerError>;
+
+    fn approve(
+        &mut self,
+        params: ApproveParams,
+    ) -> Result<AgentRpcHandlerOutput<ApproveResult>, AgentRpcHandlerError>;
+
+    fn reject(
+        &mut self,
+        params: RejectParams,
+    ) -> Result<AgentRpcHandlerOutput<RejectResult>, AgentRpcHandlerError>;
 
     fn resume(
         &mut self,
@@ -420,6 +485,17 @@ where
     }
 }
 
+impl<W> TurnEventSink for StdioEventBridge<W>
+where
+    W: Write,
+{
+    fn on_event(&mut self, event: &RunLogEvent) -> Result<(), TurnEventSinkError> {
+        self.emit_event(event)
+            .map(|_| ())
+            .map_err(|source| TurnEventSinkError::new(source.to_string()))
+    }
+}
+
 #[derive(Debug)]
 pub struct AgentRpcServer<H> {
     handler: H,
@@ -494,6 +570,12 @@ where
             method if method == SEND_TURN_METHOD.qualified_name() => {
                 self.handle_send_turn(id, message.params, writer)
             }
+            method if method == APPROVE_METHOD.qualified_name() => {
+                self.handle_approve(id, message.params, writer)
+            }
+            method if method == REJECT_METHOD.qualified_name() => {
+                self.handle_reject(id, message.params, writer)
+            }
             method if method == RESUME_METHOD.qualified_name() => {
                 self.handle_resume(id, message.params, writer)
             }
@@ -559,6 +641,54 @@ where
                 write_json_line(writer, &JsonRpcResponse::new(id, result))?;
                 self.initialized = true;
                 Ok(())
+            }
+            Err(error) => write_error(writer, id, error.into_error_object()),
+        }
+    }
+
+    fn handle_approve<W>(
+        &mut self,
+        id: Value,
+        params: Option<Value>,
+        writer: &mut W,
+    ) -> Result<(), AgentRpcError>
+    where
+        W: Write,
+    {
+        let params =
+            match parse_params::<ApproveParams>(params, APPROVE_METHOD.qualified_name().as_str()) {
+                Ok(params) => params,
+                Err(error) => return write_error(writer, id, error),
+            };
+
+        match self.handler.approve(params) {
+            Ok(output) => {
+                write_json_line(writer, &JsonRpcResponse::new(id, output.result))?;
+                emit_run_log_events(writer, &output.events)
+            }
+            Err(error) => write_error(writer, id, error.into_error_object()),
+        }
+    }
+
+    fn handle_reject<W>(
+        &mut self,
+        id: Value,
+        params: Option<Value>,
+        writer: &mut W,
+    ) -> Result<(), AgentRpcError>
+    where
+        W: Write,
+    {
+        let params =
+            match parse_params::<RejectParams>(params, REJECT_METHOD.qualified_name().as_str()) {
+                Ok(params) => params,
+                Err(error) => return write_error(writer, id, error),
+            };
+
+        match self.handler.reject(params) {
+            Ok(output) => {
+                write_json_line(writer, &JsonRpcResponse::new(id, output.result))?;
+                emit_run_log_events(writer, &output.events)
             }
             Err(error) => write_error(writer, id, error.into_error_object()),
         }
@@ -790,16 +920,18 @@ fn civil_from_unix_days(
 
 #[cfg(test)]
 mod tests {
-    use deepseek_coder_agent_core::run_log::RunLogEvent;
+    use deepseek_coder_agent_core::{run_log::RunLogEvent, turn_loop::TurnEventSink};
     use serde_json::{Value, json};
     use std::io::Cursor;
 
     use super::{
-        AgentInitializeParams, AgentInitializeResult, AgentRpcHandlerError, AgentRpcHandlerOutput,
-        AgentRpcRequestHandler, EVENT_METHOD, INITIALIZE_METHOD, JSON_RPC_INVALID_REQUEST,
-        JSON_RPC_METHOD_NOT_FOUND, JSON_RPC_PARSE_ERROR, PROTOCOL_VERSION, RESUME_METHOD,
-        RPC_UNSUPPORTED_PROTOCOL, ResumeParams, ResumeResult, SEND_TURN_METHOD, SendTurnParams,
-        SendTurnResult, StdioEventBridge, format_unix_millis, run_log_event_to_notification,
+        APPROVE_METHOD, AgentInitializeParams, AgentInitializeResult, AgentRpcHandlerError,
+        AgentRpcHandlerOutput, AgentRpcRequestHandler, ApproveParams, ApproveResult, EVENT_METHOD,
+        INITIALIZE_METHOD, JSON_RPC_INVALID_REQUEST, JSON_RPC_METHOD_NOT_FOUND,
+        JSON_RPC_PARSE_ERROR, PROTOCOL_VERSION, REJECT_METHOD, RESUME_METHOD,
+        RPC_UNSUPPORTED_PROTOCOL, RejectParams, RejectResult, ResumeParams, ResumeResult,
+        RpcApprovalPersistence, RpcApprovalState, SEND_TURN_METHOD, SendTurnParams, SendTurnResult,
+        StdioEventBridge, format_unix_millis, run_log_event_to_notification,
         run_stdio_request_loop,
     };
 
@@ -807,6 +939,8 @@ mod tests {
     fn method_names_match_protocol_docs() {
         assert_eq!(INITIALIZE_METHOD.qualified_name(), "agent.initialize");
         assert_eq!(SEND_TURN_METHOD.qualified_name(), "agent.sendTurn");
+        assert_eq!(APPROVE_METHOD.qualified_name(), "agent.approve");
+        assert_eq!(REJECT_METHOD.qualified_name(), "agent.reject");
         assert_eq!(RESUME_METHOD.qualified_name(), "agent.resume");
         assert_eq!(EVENT_METHOD.qualified_name(), "agent.event");
     }
@@ -874,6 +1008,31 @@ mod tests {
         assert!(first["params"].get("turnId").is_none());
         assert_eq!(second["params"]["time"], "1970-01-02T00:00:00.000Z");
         assert_eq!(second["params"]["payload"]["summary"], "done");
+    }
+
+    #[test]
+    fn stdio_bridge_can_stream_turn_loop_events() {
+        let event = RunLogEvent {
+            seq: 1,
+            time_unix_ms: 0,
+            event_type: "assistant.delta".to_owned(),
+            run_id: "run_01".to_owned(),
+            turn_id: Some("turn_01".to_owned()),
+            payload: json!({ "text": "hello", "stream": true }),
+        };
+        let mut bridge = StdioEventBridge::new(Vec::new());
+
+        bridge
+            .on_event(&event)
+            .expect("turn event should be streamed");
+
+        let output = String::from_utf8(bridge.into_inner()).expect("stdio output must be UTF-8");
+        let lines = output.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 1);
+        let value: Value = serde_json::from_str(lines[0]).expect("line should be JSON");
+        assert_eq!(value["method"], EVENT_METHOD.qualified_name());
+        assert_eq!(value["params"]["type"], "assistant.delta");
+        assert_eq!(value["params"]["payload"]["text"], "hello");
     }
 
     #[test]
@@ -1036,6 +1195,62 @@ mod tests {
     }
 
     #[test]
+    fn request_loop_dispatches_approval_decisions() {
+        let input = [
+            json!({
+                "jsonrpc": "2.0",
+                "id": "init_1",
+                "method": "agent.initialize",
+                "params": initialize_params()
+            })
+            .to_string(),
+            json!({
+                "jsonrpc": "2.0",
+                "id": "approve_1",
+                "method": "agent.approve",
+                "params": {
+                    "approvalId": "approval_1",
+                    "persist": "session"
+                }
+            })
+            .to_string(),
+            json!({
+                "jsonrpc": "2.0",
+                "id": "reject_1",
+                "method": "agent.reject",
+                "params": {
+                    "approvalId": "approval_2",
+                    "reason": "not safe"
+                }
+            })
+            .to_string(),
+        ]
+        .join("\n");
+        let mut output = Vec::new();
+
+        let handler =
+            run_stdio_request_loop(Cursor::new(input), &mut output, TestHandler::default())
+                .expect("request loop should complete");
+
+        assert_eq!(handler.approvals.len(), 1);
+        assert_eq!(handler.approvals[0].approval_id, "approval_1");
+        assert_eq!(
+            handler.approvals[0].persist,
+            Some(RpcApprovalPersistence::Session)
+        );
+        assert_eq!(handler.rejections.len(), 1);
+        assert_eq!(handler.rejections[0].approval_id, "approval_2");
+        let lines = output_lines(output);
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[1]["id"], "approve_1");
+        assert_eq!(lines[1]["result"]["state"], "approved");
+        assert_eq!(lines[1]["result"]["persist"], "session");
+        assert_eq!(lines[2]["id"], "reject_1");
+        assert_eq!(lines[2]["result"]["state"], "rejected");
+        assert_eq!(lines[2]["result"]["reason"], "not safe");
+    }
+
+    #[test]
     fn request_loop_writes_parse_and_method_errors() {
         let input = [
             "{not json}".to_owned(),
@@ -1130,6 +1345,8 @@ mod tests {
     struct TestHandler {
         initialized: Vec<AgentInitializeParams>,
         send_turns: Vec<SendTurnParams>,
+        approvals: Vec<ApproveParams>,
+        rejections: Vec<RejectParams>,
         resumes: Vec<ResumeParams>,
     }
 
@@ -1163,6 +1380,30 @@ mod tests {
                 None,
                 json!({ "mode": "ask" }),
             )]))
+        }
+
+        fn approve(
+            &mut self,
+            params: ApproveParams,
+        ) -> Result<AgentRpcHandlerOutput<ApproveResult>, AgentRpcHandlerError> {
+            self.approvals.push(params.clone());
+            Ok(AgentRpcHandlerOutput::new(ApproveResult {
+                approval_id: params.approval_id,
+                state: RpcApprovalState::Approved,
+                persist: params.persist.unwrap_or(RpcApprovalPersistence::Never),
+            }))
+        }
+
+        fn reject(
+            &mut self,
+            params: RejectParams,
+        ) -> Result<AgentRpcHandlerOutput<RejectResult>, AgentRpcHandlerError> {
+            self.rejections.push(params.clone());
+            Ok(AgentRpcHandlerOutput::new(RejectResult {
+                approval_id: params.approval_id,
+                state: RpcApprovalState::Rejected,
+                reason: params.reason,
+            }))
         }
 
         fn resume(
