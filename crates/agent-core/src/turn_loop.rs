@@ -1,5 +1,6 @@
-use std::path::Path;
+use std::{future::Future, path::Path, pin::Pin};
 
+use futures_util::{Stream, StreamExt};
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
 use thiserror::Error;
@@ -66,13 +67,13 @@ where
     P: TurnProvider,
     A: ApprovalPolicy,
 {
-    pub fn run_turn(
+    pub async fn run_turn(
         &mut self,
         input: AgentTurnInput,
         run_log: &mut RunLog,
     ) -> Result<AgentTurnOutcome, AgentTurnLoopError> {
         let turn_id = input.turn_id.clone();
-        let result = self.run_turn_inner(input, run_log);
+        let result = self.run_turn_inner(input, run_log).await;
         if let Err(error) = &result
             && !matches!(error, AgentTurnLoopError::RunLog(_))
         {
@@ -95,7 +96,7 @@ where
         result
     }
 
-    fn run_turn_inner(
+    async fn run_turn_inner(
         &mut self,
         input: AgentTurnInput,
         run_log: &mut RunLog,
@@ -147,10 +148,18 @@ where
                 }),
             )?;
 
-            let response = self.provider.complete(TurnProviderRequest {
-                iteration,
-                messages: prepared.messages,
-            })?;
+            let provider_turn = self
+                .collect_provider_response(
+                    TurnProviderRequest {
+                        iteration,
+                        messages: prepared.messages,
+                    },
+                    &input.turn_id,
+                    iteration,
+                    run_log,
+                )
+                .await?;
+            let response = provider_turn.response;
 
             if !response.tool_calls.is_empty()
                 && self.reasoning.mode() == ReasoningContentMode::ThinkingEnabled
@@ -166,6 +175,7 @@ where
                 .content
                 .as_deref()
                 .filter(|content| !content.is_empty())
+                .filter(|_| !provider_turn.emitted_content_delta)
             {
                 run_log.append(
                     "assistant.delta",
@@ -228,6 +238,56 @@ where
 
         Err(AgentTurnLoopError::MaxModelTurnsExceeded {
             max_model_turns: self.config.max_model_turns,
+        })
+    }
+
+    async fn collect_provider_response(
+        &mut self,
+        request: TurnProviderRequest,
+        turn_id: &str,
+        iteration: usize,
+        run_log: &mut RunLog,
+    ) -> Result<CollectedProviderTurn, AgentTurnLoopError> {
+        let mut stream = self.provider.complete_stream(request).await?;
+        let mut response = None;
+        let mut emitted_content_delta = false;
+
+        while let Some(event) = stream.next().await {
+            match event? {
+                TurnProviderEvent::AssistantDelta(delta) => {
+                    if response.is_some() {
+                        return Err(AgentTurnLoopError::ProviderEventAfterCompletion);
+                    }
+
+                    if let Some(content) = delta
+                        .content
+                        .as_deref()
+                        .filter(|content| !content.is_empty())
+                    {
+                        emitted_content_delta = true;
+                        run_log.append(
+                            "assistant.delta",
+                            Some(turn_id.to_owned()),
+                            json!({
+                                "iteration": iteration,
+                                "text": content,
+                                "stream": true,
+                            }),
+                        )?;
+                    }
+                }
+                TurnProviderEvent::Completed(completed) => {
+                    if response.replace(completed).is_some() {
+                        return Err(AgentTurnLoopError::ProviderCompletedMultipleTimes);
+                    }
+                }
+            }
+        }
+
+        let response = response.ok_or(AgentTurnLoopError::ProviderStreamEndedWithoutCompletion)?;
+        Ok(CollectedProviderTurn {
+            response,
+            emitted_content_delta,
         })
     }
 
@@ -554,11 +614,65 @@ impl TurnProviderResponse {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum TurnProviderEvent {
+    AssistantDelta(TurnProviderDelta),
+    Completed(TurnProviderResponse),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TurnProviderDelta {
+    pub content: Option<String>,
+    pub reasoning_content: Option<String>,
+}
+
+impl TurnProviderDelta {
+    pub fn new(content: Option<String>, reasoning_content: Option<String>) -> Self {
+        Self {
+            content,
+            reasoning_content,
+        }
+    }
+
+    pub fn content(content: impl Into<String>) -> Self {
+        Self {
+            content: Some(content.into()),
+            reasoning_content: None,
+        }
+    }
+
+    pub fn reasoning_content(reasoning_content: impl Into<String>) -> Self {
+        Self {
+            content: None,
+            reasoning_content: Some(reasoning_content.into()),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.content
+            .as_deref()
+            .is_none_or(|content| content.is_empty())
+            && self
+                .reasoning_content
+                .as_deref()
+                .is_none_or(|reasoning_content| reasoning_content.is_empty())
+    }
+}
+
+pub type TurnProviderStream =
+    Pin<Box<dyn Stream<Item = Result<TurnProviderEvent, TurnProviderError>> + Send>>;
+
+pub type TurnProviderFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<TurnProviderStream, TurnProviderError>> + Send + 'a>>;
+
+pub fn turn_provider_response_stream(response: TurnProviderResponse) -> TurnProviderStream {
+    Box::pin(futures_util::stream::once(async move {
+        Ok(TurnProviderEvent::Completed(response))
+    }))
+}
+
 pub trait TurnProvider {
-    fn complete(
-        &mut self,
-        request: TurnProviderRequest,
-    ) -> Result<TurnProviderResponse, TurnProviderError>;
+    fn complete_stream(&mut self, request: TurnProviderRequest) -> TurnProviderFuture<'_>;
 }
 
 #[derive(Debug, Error)]
@@ -628,6 +742,12 @@ pub enum AgentTurnLoopError {
     Reasoning(#[from] ReasoningContentError),
     #[error("provider failed: {0}")]
     Provider(#[from] TurnProviderError),
+    #[error("provider stream ended without a completed response")]
+    ProviderStreamEndedWithoutCompletion,
+    #[error("provider stream emitted more than one completed response")]
+    ProviderCompletedMultipleTimes,
+    #[error("provider stream emitted an event after the completed response")]
+    ProviderEventAfterCompletion,
     #[error("run log failed: {0}")]
     RunLog(#[from] RunLogError),
     #[error("tool execution failed: {0}")]
@@ -663,6 +783,9 @@ impl AgentTurnLoopError {
             Self::ContextBuild(_) => "E_CONTEXT_BUILD_FAILED",
             Self::Reasoning(_) => "E_REASONING_CONTENT",
             Self::Provider(_) => "E_PROVIDER_ERROR",
+            Self::ProviderStreamEndedWithoutCompletion => "E_PROVIDER_STREAM_INCOMPLETE",
+            Self::ProviderCompletedMultipleTimes => "E_PROVIDER_STREAM_INVALID",
+            Self::ProviderEventAfterCompletion => "E_PROVIDER_STREAM_INVALID",
             Self::RunLog(_) => "E_RUN_LOG",
             Self::ToolExecution(_) => "E_TOOL_EXECUTION",
             Self::UnknownTool { .. } => "E_UNKNOWN_TOOL",
@@ -682,6 +805,15 @@ struct ExecutedToolCall {
     message_content: String,
     log_result: Value,
     changed_files: Vec<String>,
+}
+
+struct CollectedProviderTurn {
+    // `response` is the authoritative completed assistant message used for final text,
+    // reasoning replay, and tool execution. Streaming deltas are only presentation/log events.
+    response: TurnProviderResponse,
+    // Only visible content deltas count here. Reasoning deltas stay provider-private, and this
+    // flag prevents duplicating the final content as another assistant.delta after streaming.
+    emitted_content_delta: bool,
 }
 
 fn parse_tool_arguments_value(tool_call: &ChatToolCall) -> Result<Value, AgentTurnLoopError> {
@@ -793,17 +925,20 @@ fn approval_payload(request: &TurnApprovalRequest) -> Value {
 mod tests {
     use std::{collections::VecDeque, fs};
 
+    use futures_util::stream;
     use serde_json::json;
 
     use crate::{context::ContextItem, provider::deepseek_api::ChatToolCall, run_log::RunLogStore};
 
     use super::{
         AgentRunMode, AgentTurnInput, AgentTurnLoop, AgentTurnLoopError, AutoApprovePolicy,
-        TurnProvider, TurnProviderError, TurnProviderRequest, TurnProviderResponse,
+        TurnProvider, TurnProviderDelta, TurnProviderError, TurnProviderEvent, TurnProviderFuture,
+        TurnProviderRequest, TurnProviderResponse, TurnProviderStream,
+        turn_provider_response_stream,
     };
 
-    #[test]
-    fn turn_loop_runs_read_tool_and_continues_to_final_answer() {
+    #[tokio::test]
+    async fn turn_loop_runs_read_tool_and_continues_to_final_answer() {
         let workspace = TestWorkspace::new();
         workspace.write("README.md", "hello from README\n");
         let store = RunLogStore::new(workspace.path()).expect("run log store should open");
@@ -835,6 +970,7 @@ mod tests {
                     )),
                 &mut run,
             )
+            .await
             .expect("turn should complete");
 
         assert_eq!(outcome.final_message, "README says hello.");
@@ -888,8 +1024,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn turn_loop_requires_approval_for_shell_before_execution() {
+    #[tokio::test]
+    async fn turn_loop_requires_approval_for_shell_before_execution() {
         let workspace = TestWorkspace::new();
         let store = RunLogStore::new(workspace.path()).expect("run log store should open");
         let mut run = store
@@ -909,6 +1045,7 @@ mod tests {
 
         let error = loop_runner
             .run_turn(AgentTurnInput::new("turn_1", "Run a command"), &mut run)
+            .await
             .expect_err("approval rejection should fail the turn");
 
         assert!(matches!(error, AgentTurnLoopError::ApprovalRejected { .. }));
@@ -928,8 +1065,8 @@ mod tests {
         assert!(events.iter().any(|event| event.event_type == "run.failed"));
     }
 
-    #[test]
-    fn turn_loop_executes_approved_patch_and_tracks_changed_files() {
+    #[tokio::test]
+    async fn turn_loop_executes_approved_patch_and_tracks_changed_files() {
         let workspace = TestWorkspace::new();
         workspace.write("README.md", "old\n");
         let store = RunLogStore::new(workspace.path()).expect("run log store should open");
@@ -965,6 +1102,7 @@ mod tests {
 
         let outcome = loop_runner
             .run_turn(AgentTurnInput::new("turn_1", "Update README"), &mut run)
+            .await
             .expect("approved patch should complete");
 
         assert_eq!(workspace.read("README.md"), "new\n");
@@ -984,6 +1122,43 @@ mod tests {
         assert_eq!(completed.payload["changedFiles"], json!(["README.md"]));
     }
 
+    #[tokio::test]
+    async fn turn_loop_logs_streamed_content_deltas_once() {
+        let workspace = TestWorkspace::new();
+        let store = RunLogStore::new(workspace.path()).expect("run log store should open");
+        let mut run = store
+            .create_run("run_turn_streaming")
+            .expect("run should be created");
+        let provider = EventScriptedProvider::new(vec![vec![
+            TurnProviderEvent::AssistantDelta(TurnProviderDelta::content("hello ")),
+            TurnProviderEvent::AssistantDelta(TurnProviderDelta::reasoning_content(
+                "private reasoning",
+            )),
+            TurnProviderEvent::AssistantDelta(TurnProviderDelta::content("world")),
+            TurnProviderEvent::Completed(TurnProviderResponse::final_text("hello world")),
+        ]]);
+        let mut loop_runner =
+            AgentTurnLoop::new(workspace.path(), provider).expect("turn loop should initialize");
+
+        let outcome = loop_runner
+            .run_turn(AgentTurnInput::new("turn_1", "Say hello"), &mut run)
+            .await
+            .expect("streaming turn should complete");
+
+        assert_eq!(outcome.final_message, "hello world");
+        let events = store
+            .load_run("run_turn_streaming")
+            .expect("events should load");
+        let deltas = events
+            .iter()
+            .filter(|event| event.event_type == "assistant.delta")
+            .collect::<Vec<_>>();
+        assert_eq!(deltas.len(), 2);
+        assert_eq!(deltas[0].payload["text"], "hello ");
+        assert_eq!(deltas[0].payload["stream"], true);
+        assert_eq!(deltas[1].payload["text"], "world");
+    }
+
     struct ScriptedProvider {
         responses: VecDeque<TurnProviderResponse>,
         requests: Vec<TurnProviderRequest>,
@@ -999,14 +1174,39 @@ mod tests {
     }
 
     impl TurnProvider for ScriptedProvider {
-        fn complete(
-            &mut self,
-            request: TurnProviderRequest,
-        ) -> Result<TurnProviderResponse, TurnProviderError> {
-            self.requests.push(request);
-            self.responses
-                .pop_front()
-                .ok_or_else(|| TurnProviderError::new("scripted provider has no response"))
+        fn complete_stream(&mut self, request: TurnProviderRequest) -> TurnProviderFuture<'_> {
+            Box::pin(async move {
+                self.requests.push(request);
+                let response = self
+                    .responses
+                    .pop_front()
+                    .ok_or_else(|| TurnProviderError::new("scripted provider has no response"))?;
+                Ok(turn_provider_response_stream(response))
+            })
+        }
+    }
+
+    struct EventScriptedProvider {
+        streams: VecDeque<Vec<TurnProviderEvent>>,
+    }
+
+    impl EventScriptedProvider {
+        fn new(streams: Vec<Vec<TurnProviderEvent>>) -> Self {
+            Self {
+                streams: streams.into(),
+            }
+        }
+    }
+
+    impl TurnProvider for EventScriptedProvider {
+        fn complete_stream(&mut self, _request: TurnProviderRequest) -> TurnProviderFuture<'_> {
+            Box::pin(async move {
+                let events = self.streams.pop_front().ok_or_else(|| {
+                    TurnProviderError::new("event scripted provider has no stream")
+                })?;
+                let stream: TurnProviderStream = Box::pin(stream::iter(events.into_iter().map(Ok)));
+                Ok(stream)
+            })
         }
     }
 
