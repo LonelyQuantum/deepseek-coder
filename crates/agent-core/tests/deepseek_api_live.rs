@@ -2,8 +2,9 @@ use std::{env, error::Error, fs, io, path::PathBuf, time::Duration};
 
 use deepseek_coder_agent_core::{
     provider::deepseek_api::{
-        ChatFunctionDefinition, ChatMessage, ChatTool, DEFAULT_API_BASE_URL, DEFAULT_MODEL,
-        DeepSeekApiAdapter, DeepSeekApiConfig, StreamEvent, ThinkingConfig,
+        ChatFunctionDefinition, ChatMessage, ChatTool, ChatToolCallAccumulator,
+        DEFAULT_API_BASE_URL, DEFAULT_MODEL, DeepSeekApiAdapter, DeepSeekApiConfig, StreamEvent,
+        ThinkingConfig, ToolChoice,
     },
     reasoning::{ReasoningContentState, ReasoningContentStateMachine},
 };
@@ -261,6 +262,84 @@ async fn live_chat_completion_stream_smoke_test() -> Result<(), Box<dyn Error>> 
     assert!(
         saw_text || saw_usage,
         "live stream should produce text/reasoning deltas or a usage chunk"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires DEEPSEEK_CODER_LIVE_TESTS=1, API key, and network access"]
+async fn live_streaming_tool_call_accumulator_smoke_test() -> Result<(), Box<dyn Error>> {
+    let Some(adapter) = live_adapter()? else {
+        return Ok(());
+    };
+
+    let request = adapter
+        .new_chat_request(vec![
+            ChatMessage::system(
+                "For this live test, call the selected tool exactly once and do not answer in prose.",
+            ),
+            ChatMessage::user("Call get_live_reasoning_fixture with no arguments."),
+        ])?
+        .with_thinking(ThinkingConfig::disabled())
+        .with_max_tokens(128)
+        .with_tools(vec![live_reasoning_probe_tool()])
+        .with_tool_choice(ToolChoice::function("get_live_reasoning_fixture"));
+
+    let mut stream = adapter.create_chat_completion_stream(request).await?;
+    let mut accumulator = ChatToolCallAccumulator::new();
+    let mut saw_chunk = false;
+    let mut saw_done = false;
+    let mut saw_tool_delta = false;
+    let mut saw_usage = false;
+
+    while let Some(event) = stream.next().await {
+        match event? {
+            StreamEvent::Chunk(chunk) => {
+                saw_chunk = true;
+                saw_usage |= chunk.usage.is_some();
+
+                for choice in chunk.choices {
+                    if let Some(tool_call_deltas) = choice.delta.tool_calls {
+                        saw_tool_delta = true;
+                        for tool_call_delta in tool_call_deltas {
+                            accumulator.append_delta(tool_call_delta)?;
+                        }
+                    }
+                }
+            }
+            StreamEvent::Done => {
+                saw_done = true;
+                break;
+            }
+        }
+    }
+
+    assert!(saw_chunk, "live stream should produce at least one chunk");
+    assert!(saw_done, "live stream should terminate with [DONE]");
+    assert!(
+        saw_tool_delta,
+        "live stream should produce tool call deltas"
+    );
+    assert!(
+        saw_usage,
+        "live stream should produce the include_usage summary chunk"
+    );
+
+    let tool_calls = accumulator.finish()?;
+    assert_eq!(
+        tool_calls.len(),
+        1,
+        "live streaming tool test expects one tool call"
+    );
+    assert_eq!(
+        tool_calls[0].function.name, "get_live_reasoning_fixture",
+        "streaming accumulator should preserve the selected function name"
+    );
+    let arguments: serde_json::Value = serde_json::from_str(&tool_calls[0].function.arguments)?;
+    assert!(
+        arguments.is_object(),
+        "tool call arguments should assemble into a JSON object"
     );
 
     Ok(())
