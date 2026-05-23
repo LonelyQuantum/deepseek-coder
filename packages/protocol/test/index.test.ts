@@ -11,6 +11,13 @@ import {
   agentRejectMethod,
   agentCancelMethod,
   agentListRunsMethod,
+  type ApprovalRequest,
+  type ApproveParams,
+  type ApproveResult,
+  type RejectParams,
+  type RejectResult,
+  type ToolApprovalRequiredPayload,
+  type ToolApprovalResolvedPayload,
   approvalStateTransitions,
   canTransitionApprovalState,
   jsonRpcVersion,
@@ -83,6 +90,59 @@ test("JSON-RPC method constants match protocol document", () => {
   assert.equal(agentCancelMethod, "agent.cancel");
   assert.equal(agentListRunsMethod, "agent.listRuns");
   assert.equal(agentEventMethod, "agent.event");
+});
+
+test("approval request and decision params use stable protocol fields", () => {
+  const request = {
+    approvalId: "approval_1",
+    toolCallId: "call_1",
+    toolName: "shell",
+    risk: "exec",
+    title: "Run shell command",
+    detail: "Execute cargo test",
+    command: "cargo test",
+    persistable: false,
+  } satisfies ApprovalRequest;
+  const requiredPayload = {
+    approvalId: request.approvalId,
+    toolCallId: request.toolCallId,
+    toolName: request.toolName,
+    risk: request.risk,
+    title: request.title,
+    detail: request.detail,
+    command: request.command,
+    persistable: request.persistable,
+  } satisfies ToolApprovalRequiredPayload;
+  const resolvedPayload = {
+    approvalId: request.approvalId,
+    toolCallId: request.toolCallId,
+    toolName: request.toolName,
+    decision: "approved",
+  } satisfies ToolApprovalResolvedPayload;
+  const approve = {
+    approvalId: request.approvalId,
+    persist: "session",
+  } satisfies ApproveParams;
+  const approveResult = {
+    approvalId: request.approvalId,
+    state: "approved",
+    persist: "session",
+  } satisfies ApproveResult;
+  const reject = {
+    approvalId: request.approvalId,
+    reason: "not now",
+  } satisfies RejectParams;
+  const rejectResult = {
+    approvalId: request.approvalId,
+    state: "rejected",
+    reason: "not now",
+  } satisfies RejectResult;
+
+  assert.equal(approve.approvalId, "approval_1");
+  assert.equal(requiredPayload.toolName, "shell");
+  assert.equal(resolvedPayload.decision, "approved");
+  assert.equal(approveResult.state, "approved");
+  assert.equal(reject.reason, rejectResult.reason);
 });
 
 test("tool registry contains every declared tool exactly once", () => {

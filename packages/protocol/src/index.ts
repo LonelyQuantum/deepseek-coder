@@ -349,13 +349,35 @@ export interface ResumeResult {
   readonly replayStarted: boolean;
 }
 
+export interface ApproveParams {
+  readonly approvalId: string;
+  readonly persist?: ApprovalPersistence;
+}
+
+export interface ApproveResult {
+  readonly approvalId: string;
+  readonly state: "approved";
+  readonly persist: ApprovalPersistence;
+}
+
+export interface RejectParams {
+  readonly approvalId: string;
+  readonly reason?: string;
+}
+
+export interface RejectResult {
+  readonly approvalId: string;
+  readonly state: "rejected";
+  readonly reason?: string;
+}
+
 export interface ApprovalRequest {
-  readonly id: string;
+  readonly approvalId: string;
   readonly risk: RiskLevel;
   readonly title: string;
   readonly detail: string;
-  readonly toolCallId?: string;
-  readonly toolName?: ToolName;
+  readonly toolCallId: string;
+  readonly toolName: ToolName;
   readonly command?: string;
   readonly paths?: readonly string[];
   readonly persistable: boolean;
@@ -407,6 +429,26 @@ export interface AssistantDeltaPayload {
   readonly text: string;
   readonly iteration?: number;
   readonly stream?: boolean;
+}
+
+export interface ToolApprovalRequiredPayload {
+  readonly approvalId: string;
+  readonly toolCallId: string;
+  readonly toolName: ToolName;
+  readonly risk: RiskLevel;
+  readonly title: string;
+  readonly detail: string;
+  readonly command?: string;
+  readonly paths?: readonly string[];
+  readonly persistable: boolean;
+}
+
+export interface ToolApprovalResolvedPayload {
+  readonly approvalId: string;
+  readonly toolCallId: string;
+  readonly toolName: ToolName;
+  readonly decision: "approved" | "rejected";
+  readonly reason?: string;
 }
 
 export type AgentEventNotification<TPayload = unknown> = JsonRpcNotification<
