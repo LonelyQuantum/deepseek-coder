@@ -16,7 +16,9 @@ fn main() -> ExitCode {
     {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            let _ = writeln!(stderr, "{error}");
+            if !error.is_reported() {
+                let _ = writeln!(stderr, "{error}");
+            }
             ExitCode::FAILURE
         }
     }

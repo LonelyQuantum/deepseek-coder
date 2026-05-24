@@ -11,6 +11,7 @@ use std::{
 use deepseek_coder_agent_core::{
     AGENT_METADATA,
     cancellation::CancellationToken,
+    context::ContextBuildError,
     provider::deepseek_api::{
         ChatCompletionStream, ChatFunctionDefinition, ChatTool, ChatToolCall,
         ChatToolCallAccumulator, DeepSeekApiAdapter, DeepSeekApiConfig, StreamEvent,
@@ -32,15 +33,20 @@ use deepseek_coder_agent_core::{
     },
 };
 use deepseek_coder_agent_rpc::{
-    AgentRpcError, AgentRpcHandlerError, AgentTurnLoopRpcHandler, RPC_INTERNAL_INVARIANT,
-    RpcTurnProviderFactory, SendTurnParams, StdioEventBridge, run_stdio_request_loop,
+    AgentRpcError, AgentRpcHandlerError, AgentTurnLoopRpcHandler, JSON_RPC_INTERNAL_ERROR,
+    JSON_RPC_INVALID_PARAMS, JsonRpcErrorObject, JsonRpcErrorResponse, RPC_APPROVAL_DENIED,
+    RPC_CONTEXT_BUDGET_EXCEEDED, RPC_INTERNAL_INVARIANT, RPC_INVALID_TOOL_ARGUMENTS,
+    RPC_PROVIDER_ERROR, RPC_RUN_ALREADY_ACTIVE, RPC_RUN_CANCELED, RPC_RUN_NOT_FOUND,
+    RPC_TOOL_EXECUTION_FAILED, RpcTurnProviderFactory, SendTurnParams, StdioEventBridge,
+    run_stdio_request_loop,
 };
 use futures_util::StreamExt;
-use serde_json::json;
+use serde_json::{Value, json};
 use thiserror::Error;
 
 const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 1_024;
 const DEFAULT_VERIFY_TIMEOUT_MS: u64 = 120_000;
+const CLI_RUN_JSON_RPC_ID: &str = "cli.run";
 
 pub fn run_cli<I, S, W, E>(args: I, stdout: &mut W, stderr: &mut E) -> Result<(), CliError>
 where
@@ -67,7 +73,16 @@ where
     E: Write,
 {
     let args = args.into_iter().map(Into::into).collect::<Vec<_>>();
-    let command = CliCommand::parse(&args)?;
+    let command = match CliCommand::parse(&args) {
+        Ok(command) => command,
+        Err(error) if args_request_json_run(&args) => {
+            emit_json_rpc_error(stdout, &error, None)?;
+            return Err(CliError::JsonRpcErrorReported {
+                source: Box::new(error),
+            });
+        }
+        Err(error) => return Err(error),
+    };
 
     match command {
         CliCommand::Help => {
@@ -317,13 +332,40 @@ where
     W: Write,
     E: Write,
 {
+    let result = run_command_inner(&command, stdin, stdout, stderr);
+    if !command.json_events {
+        return result;
+    }
+
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            emit_json_rpc_error(stdout, &error, Some((&command.run_id, &command.turn_id)))?;
+            Err(CliError::JsonRpcErrorReported {
+                source: Box::new(error),
+            })
+        }
+    }
+}
+
+fn run_command_inner<R, W, E>(
+    command: &RunCommand,
+    stdin: &mut R,
+    stdout: &mut W,
+    stderr: &mut E,
+) -> Result<(), CliError>
+where
+    R: BufRead,
+    W: Write,
+    E: Write,
+{
     let workspace = fs::canonicalize(&command.workspace).map_err(|source| CliError::Io {
         path: command.workspace.clone(),
         source,
     })?;
     let store = RunLogStore::new(&workspace)?;
     let mut run_log = store.create_run(command.run_id.clone())?;
-    let provider = create_provider(&command)?;
+    let provider = create_provider(command)?;
     let config = AgentTurnLoopConfig {
         max_input_tokens: command.max_input_tokens,
         max_model_turns: command.max_model_turns,
@@ -385,7 +427,7 @@ where
             _ => Ok(None),
         };
         emit_human_summary(
-            &command,
+            command,
             run_log.events_path(),
             &turn_result,
             verification_result.as_ref().ok().and_then(Option::as_ref),
@@ -690,6 +732,188 @@ where
     }
 
     Ok(())
+}
+
+fn emit_json_rpc_error<W>(
+    stdout: &mut W,
+    error: &CliError,
+    run_context: Option<(&str, &str)>,
+) -> Result<(), CliError>
+where
+    W: Write,
+{
+    let mut data = serde_json::Map::new();
+    data.insert(
+        "symbolicCode".to_owned(),
+        Value::String(cli_error_symbolic_code(error).to_owned()),
+    );
+    data.insert(
+        "kind".to_owned(),
+        Value::String(cli_error_kind(error).to_owned()),
+    );
+    if let Some((run_id, turn_id)) = run_context {
+        data.insert("runId".to_owned(), Value::String(run_id.to_owned()));
+        data.insert("turnId".to_owned(), Value::String(turn_id.to_owned()));
+    }
+    if let CliError::VerificationFailed { exit_code } = error {
+        data.insert(
+            "exitCode".to_owned(),
+            exit_code.map_or(Value::Null, |exit_code| json!(exit_code)),
+        );
+    }
+
+    let error = JsonRpcErrorObject::new(cli_error_json_rpc_code(error), error.to_string())
+        .with_data(Value::Object(data));
+    let response = JsonRpcErrorResponse::new(Value::String(CLI_RUN_JSON_RPC_ID.to_owned()), error);
+    let response = serde_json::to_string(&response)?;
+    stdout.write_all(response.as_bytes())?;
+    stdout.write_all(b"\n")?;
+    stdout.flush()?;
+    Ok(())
+}
+
+fn cli_error_json_rpc_code(error: &CliError) -> i64 {
+    match error {
+        CliError::Usage(_) => JSON_RPC_INVALID_PARAMS,
+        CliError::StdIo(_) | CliError::Io { .. } | CliError::JsonSerialization(_) => {
+            JSON_RPC_INTERNAL_ERROR
+        }
+        CliError::DeepSeek(_) | CliError::EmptyFinalMessage => RPC_PROVIDER_ERROR,
+        CliError::RunLog(error) => run_log_error_json_rpc_code(error),
+        CliError::Turn(error) => turn_loop_error_json_rpc_code(error),
+        CliError::ToolExecution(_) | CliError::VerificationFailed { .. } => {
+            RPC_TOOL_EXECUTION_FAILED
+        }
+        CliError::Rpc(_) | CliError::EventSink(_) => RPC_INTERNAL_INVARIANT,
+        CliError::JsonRpcErrorReported { source } => cli_error_json_rpc_code(source),
+    }
+}
+
+fn turn_loop_error_json_rpc_code(error: &AgentTurnLoopError) -> i64 {
+    match error {
+        AgentTurnLoopError::InvalidConfig { .. } => JSON_RPC_INVALID_PARAMS,
+        AgentTurnLoopError::ContextBuild(ContextBuildError::RequiredContextExceedsBudget {
+            ..
+        }) => RPC_CONTEXT_BUDGET_EXCEEDED,
+        AgentTurnLoopError::ContextBuild(
+            ContextBuildError::InvalidMaxInputTokens
+            | ContextBuildError::EmptyReason
+            | ContextBuildError::InvalidPath { .. }
+            | ContextBuildError::InvalidCommandId { .. }
+            | ContextBuildError::DuplicateSingletonItem { .. }
+            | ContextBuildError::DuplicateFilePath { .. }
+            | ContextBuildError::DuplicateCommandId { .. },
+        ) => JSON_RPC_INVALID_PARAMS,
+        AgentTurnLoopError::ContextBuild(ContextBuildError::TokenCountOverflow) => {
+            RPC_INTERNAL_INVARIANT
+        }
+        AgentTurnLoopError::Reasoning(_)
+        | AgentTurnLoopError::Provider(_)
+        | AgentTurnLoopError::ProviderStreamEndedWithoutCompletion
+        | AgentTurnLoopError::ProviderCompletedMultipleTimes
+        | AgentTurnLoopError::ProviderEventAfterCompletion
+        | AgentTurnLoopError::MissingAssistantReasoningContent
+        | AgentTurnLoopError::MaxModelTurnsExceeded { .. } => RPC_PROVIDER_ERROR,
+        AgentTurnLoopError::RunLog(error) => run_log_error_json_rpc_code(error),
+        AgentTurnLoopError::EventSink(_) | AgentTurnLoopError::ApprovalPolicy(_) => {
+            RPC_INTERNAL_INVARIANT
+        }
+        AgentTurnLoopError::ToolExecution(_)
+        | AgentTurnLoopError::UnknownTool { .. }
+        | AgentTurnLoopError::UnsupportedTool { .. }
+        | AgentTurnLoopError::Serialization(_) => RPC_TOOL_EXECUTION_FAILED,
+        AgentTurnLoopError::InvalidToolArguments { .. } => RPC_INVALID_TOOL_ARGUMENTS,
+        AgentTurnLoopError::Canceled { .. }
+        | AgentTurnLoopError::ApprovalCanceled { .. }
+        | AgentTurnLoopError::ApprovalExpired { .. } => RPC_RUN_CANCELED,
+        AgentTurnLoopError::ApprovalRejected { .. } => RPC_APPROVAL_DENIED,
+    }
+}
+
+fn run_log_error_json_rpc_code(error: &RunLogError) -> i64 {
+    match error {
+        RunLogError::RunAlreadyExists { .. } => RPC_RUN_ALREADY_ACTIVE,
+        RunLogError::RunNotFound { .. } | RunLogError::RunSummaryNotFound { .. } => {
+            RPC_RUN_NOT_FOUND
+        }
+        RunLogError::InvalidIdentifier { .. }
+        | RunLogError::InvalidEventType { .. }
+        | RunLogError::InvalidStatePath { .. }
+        | RunLogError::WorkspaceRootNotDirectory { .. } => JSON_RPC_INVALID_PARAMS,
+        _ => RPC_INTERNAL_INVARIANT,
+    }
+}
+
+fn cli_error_symbolic_code(error: &CliError) -> &'static str {
+    match error {
+        CliError::Usage(_) => "E_INVALID_PARAMS",
+        CliError::StdIo(_) | CliError::Io { .. } => "E_IO",
+        CliError::DeepSeek(_) | CliError::EmptyFinalMessage => "E_PROVIDER_ERROR",
+        CliError::RunLog(error) => run_log_error_symbolic_code(error),
+        CliError::Turn(error) => turn_loop_error_symbolic_code(error),
+        CliError::ToolExecution(_) => "E_TOOL_EXECUTION_FAILED",
+        CliError::Rpc(_) => "E_RPC_ERROR",
+        CliError::EventSink(_) => "E_EVENT_SINK",
+        CliError::VerificationFailed { .. } => "E_VERIFICATION_FAILED",
+        CliError::JsonSerialization(_) => "E_SERIALIZATION",
+        CliError::JsonRpcErrorReported { source } => cli_error_symbolic_code(source),
+    }
+}
+
+fn turn_loop_error_symbolic_code(error: &AgentTurnLoopError) -> &'static str {
+    match error {
+        AgentTurnLoopError::ContextBuild(ContextBuildError::RequiredContextExceedsBudget {
+            ..
+        }) => "E_CONTEXT_BUDGET_EXCEEDED",
+        _ => error.code(),
+    }
+}
+
+fn run_log_error_symbolic_code(error: &RunLogError) -> &'static str {
+    match error {
+        RunLogError::RunAlreadyExists { .. } => "E_RUN_ALREADY_ACTIVE",
+        RunLogError::RunNotFound { .. } | RunLogError::RunSummaryNotFound { .. } => {
+            "E_RUN_NOT_FOUND"
+        }
+        RunLogError::InvalidIdentifier { .. }
+        | RunLogError::InvalidEventType { .. }
+        | RunLogError::InvalidStatePath { .. }
+        | RunLogError::WorkspaceRootNotDirectory { .. } => "E_INVALID_PARAMS",
+        _ => "E_INTERNAL_INVARIANT",
+    }
+}
+
+fn cli_error_kind(error: &CliError) -> &'static str {
+    match error {
+        CliError::Usage(_) => "usage",
+        CliError::StdIo(_) | CliError::Io { .. } => "io",
+        CliError::DeepSeek(_) | CliError::EmptyFinalMessage => "provider",
+        CliError::RunLog(_) => "run_log",
+        CliError::Turn(_) => "turn",
+        CliError::ToolExecution(_) => "tool",
+        CliError::Rpc(_) => "rpc",
+        CliError::EventSink(_) => "event_sink",
+        CliError::VerificationFailed { .. } => "verification",
+        CliError::JsonSerialization(_) => "serialization",
+        CliError::JsonRpcErrorReported { source } => cli_error_kind(source),
+    }
+}
+
+fn args_request_json_run(args: &[String]) -> bool {
+    if args.get(1).map(String::as_str) != Some("run") {
+        return false;
+    }
+
+    for arg in args.iter().skip(2) {
+        if arg == "--" {
+            return false;
+        }
+        if arg == "--json" {
+            return true;
+        }
+    }
+
+    false
 }
 
 fn create_provider(command: &RunCommand) -> Result<CliTurnProvider, CliError> {
@@ -1018,8 +1242,18 @@ pub enum CliError {
     EventSink(#[from] TurnEventSinkError),
     #[error("verification command failed with exit code {exit_code:?}")]
     VerificationFailed { exit_code: Option<i32> },
+    #[error("JSON serialization failed: {0}")]
+    JsonSerialization(#[from] serde_json::Error),
+    #[error("{source}")]
+    JsonRpcErrorReported { source: Box<CliError> },
     #[error("agent returned an empty final message")]
     EmptyFinalMessage,
+}
+
+impl CliError {
+    pub fn is_reported(&self) -> bool {
+        matches!(self, Self::JsonRpcErrorReported { .. })
+    }
 }
 
 fn next_value(args: &[String], index: &mut usize, option: &str) -> Result<String, CliError> {
