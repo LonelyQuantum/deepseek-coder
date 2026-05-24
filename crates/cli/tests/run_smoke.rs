@@ -3,6 +3,7 @@
 use std::{fs, process::Command};
 
 use deepseek_coder_agent_core::run_log::RunLogStore;
+use deepseek_coder_agent_rpc::JSON_RPC_INVALID_PARAMS;
 use serde_json::Value;
 
 #[test]
@@ -70,6 +71,36 @@ fn fixture_readme_json_smoke_from_binary() {
             .iter()
             .any(|event| event.event_type == "run.completed")
     );
+}
+
+#[test]
+fn run_json_usage_error_from_binary_is_json_rpc_error() {
+    let output = Command::new(env!("CARGO_BIN_EXE_deepseek-coder"))
+        .args(["run", "--json", "--provider", "fixture"])
+        .output()
+        .expect("CLI binary should run");
+
+    assert!(!output.status.success());
+    assert!(
+        output.stderr.is_empty(),
+        "stderr should be empty: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
+    let lines = stdout
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("stdout line should be JSON"))
+        .collect::<Vec<_>>();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["jsonrpc"], "2.0");
+    assert_eq!(lines[0]["id"], "cli.run");
+    assert_eq!(lines[0]["error"]["code"], JSON_RPC_INVALID_PARAMS);
+    assert_eq!(
+        lines[0]["error"]["data"]["symbolicCode"],
+        "E_INVALID_PARAMS"
+    );
+    assert_eq!(lines[0]["error"]["data"]["kind"], "usage");
 }
 
 struct TestWorkspace {
