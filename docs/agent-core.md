@@ -1,6 +1,6 @@
 # 智能体核心（Agent Core）
 
-状态：草案，Phase 1 部分实现。
+状态：草案，Phase 1 Agent Core MVP 已完成。
 
 Agent Core 是 CLI、TUI 和 VS Code 共用的执行引擎。它负责模型回合、上下文构建、工具执行、审批和 run log。
 
@@ -78,21 +78,24 @@ Phase 1 已实现基础 Run Log 存储层，详见 `docs/run-log.md`。它提供
 
 Phase 1 已实现基础 Agent Turn Loop，详见 `docs/turn-loop.md`。当前编排层可以用 fake provider 跑通 Context Builder、`ReasoningContentStateMachine`、工具请求、审批、工具执行、脱敏工具结果、Run Log 写入和继续 provider 请求。
 
-当前 Turn Loop 已改为 async / streaming provider 边界：`TurnProvider::complete_stream` 返回 `TurnProviderEvent` 流，Turn Loop 会把 content delta 写入 `assistant.delta`，并要求 provider 最终发送唯一的完整 `Completed` 响应。CLI 已通过 fixture provider 和 DeepSeek streaming wrapper 接入该边界；真实 DeepSeek 文本 streaming 和 tool call delta accumulator 已完成联网验收。`run_turn_with_event_sink` 会把每条成功持久化的 run event 交给实时 sink，CLI `--json` 和 `StdioEventBridge` 已使用该机制；CLI 失败路径也会输出 JSON-RPC error response。Agent RPC request loop 已能分发 `agent.sendTurn` / `agent.approve` / `agent.reject` / `agent.cancel`，`AgentTurnLoopRpcHandler` 已能驱动真实 Core Turn Loop，并通过内存 pending approval 队列等待 RPC 审批；CLI 已有交互式审批。
+当前 Turn Loop 已改为 async / streaming provider 边界：`TurnProvider::complete_stream` 返回 `TurnProviderEvent` 流，Turn Loop 会把 content delta 写入 `assistant.delta`，并要求 provider 最终发送唯一的完整 `Completed` 响应。CLI 已通过 fixture provider 和 DeepSeek streaming wrapper 接入该边界；真实 DeepSeek 文本 streaming、tool call delta accumulator 和小型真实仓库 CLI 验收已完成联网验收。`run_turn_with_event_sink` 会把每条成功持久化的 run event 交给实时 sink，CLI `--json` 和 `StdioEventBridge` 已使用该机制；CLI 失败路径也会输出 JSON-RPC error response。Agent RPC request loop 已能分发 `agent.sendTurn` / `agent.approve` / `agent.reject` / `agent.cancel`，`AgentTurnLoopRpcHandler` 已能驱动真实 Core Turn Loop，并通过内存 pending approval 队列等待 RPC 审批；CLI 已有交互式审批。
 
-## Phase 1 收敛顺序
+## Phase 1 验收状态
 
-当前最重要的目标不是继续扩展工具数量，而是把已有模块串成可运行闭环：
+Phase 1 已通过以下闭环验收：
 
-1. 异步 RPC run 执行队列：让 `agent.sendTurn` 先返回 accepted，再后台持续输出事件。
-2. TUI/VS Code 接入真实 RPC pending approval 队列。
-3. 真实仓库验收：通过 `deepseek-coder run "<task>"` 跑通小型仓库上的读取、修改、验证和报告。
+1. 本地 fixture 端到端 smoke test。
+2. 进程级 CLI fixture smoke test。
+3. 真实 DeepSeek provider streaming 联网验收。
+4. 真实 streaming tool call delta 拼装验收。
+5. 小型真实仓库 CLI 验收：通过 `deepseek-coder run` 在临时 Rust 仓库上跑通读取、修改、验证和报告。
 
 ## 后续增强
 
-- 增加真实 CLI 工具调用端到端验收，把 tool call accumulator、schema 校验、审批、工具执行和继续请求串成一个可取消的回合。
-- 扩展 Run Log 接入范围，保证 provider streaming 摘要、patch、验证命令、取消和恢复都能被本地复现。
-- 在调用 provider 前统一运行 `ReasoningContentStateMachine`，确保 thinking + tool calls 的 `reasoning_content` 回放规则不分散到前端。
-- 扩展 Context Builder 接入，把 workspace manifest、git 状态、选中文件、工具结果和计划步骤纳入 provider 请求。
-- 在工具结果进入 run log 或下一轮 prompt 前增加统一脱敏与大小限制。
-- 扩展 `crates/agent-rpc` 的全双工事件发送队列、client 断连取消和多 active run 管理，供 CLI/TUI/VS Code 共享。
+- 实现 RPC 全双工事件 writer 队列，让 `agent.sendTurn` 可以更早返回 accepted，并在后台持续推送事件。
+- 将 TUI/VS Code 接入真实 RPC pending approval 队列。
+- 增加 tool call 参数 JSON Schema 校验层，补足当前仅依赖 Rust 反序列化的基础校验。
+- 实现命令风险分类器和更强 sandbox，区分普通测试命令、网络访问、删除、reset、发布等高风险操作。
+- 扩展 Phase 2 Context Capsule，把 workspace manifest、稳定前缀、缓存命中统计和更精确 token 预算纳入 provider 请求。
+- 在工具结果进入 run log 或下一轮 prompt 前增加统一大小限制。
+- 扩展 `crates/agent-rpc` 的 client 断连取消和多 active run 管理，供 CLI/TUI/VS Code 共享。

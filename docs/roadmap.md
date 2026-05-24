@@ -1,6 +1,6 @@
 # 路线图
 
-状态：草案，随 Phase 1 实现持续更新。
+状态：草案，Phase 1 Agent Core MVP 已完成，后续随 Phase 2 实现持续更新。
 
 本文档把 README 中的大阶段拆成更可执行的优先级。README 保留项目入口和高层计划；这里记录跨模块的落地顺序、取舍和验收重点。
 
@@ -49,11 +49,12 @@
 - Run summary metadata / `agent.listRuns`：每个 run 目录维护 `summary.json`，记录标题、状态、时间、事件数、最终摘要、变更文件和验证状态；RPC `agent.listRuns` 通过 summary 快速列出 run。
 - RPC provider/tool 取消信号：Agent Core 已提供协作式 `CancellationToken`；RPC active run 会把 token 注入 Turn Loop，`agent.cancel` 会通知 provider request、命令类工具和 pending approval，并以 `run.canceled` 收口。
 - CLI JSON error response：`run --json` 失败路径会在 stdout 输出 JSON-RPC error response，保留非零退出码，并避免把人类错误摘要混入 stdout。
+- 小型真实仓库 CLI 验收：`live_deepseek_cli_real_repo_acceptance_test` 已通过，真实 DeepSeek provider 在临时 Rust 仓库中完成“读取 -> 修改 -> 验证 -> 报告”。
 
 下一步：
 
 - RPC 全双工事件 writer 队列：当前 pending approval 已真实等待，但事件仍在 request 返回时 flush；后续让 `agent.sendTurn` 更早返回 accepted 并持续推送事件。
-- 真实仓库验收：使用 DeepSeek provider 在小型仓库中执行一次“读取 -> 修改 -> 验证 -> 报告”。
+- Phase 2 Context Capsule：从 workspace manifest、稳定前缀、token 预算报告和缓存命中统计开始，把 Phase 1 的最小闭环扩展到 1M 上下文形态。
 - 测试替身收敛：如果 CLI fixture 场景继续增加，把 CLI fixture 与 Agent Core scripted provider 抽成共享测试 harness。
 
 P0 不追求：

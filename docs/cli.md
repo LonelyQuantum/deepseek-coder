@@ -116,7 +116,7 @@ CLI 二进制默认会在 `apply_patch`、`shell` 等需要审批的工具执行
 
 ## 当前限制
 
-- CLI DeepSeek provider 已能聚合 streaming tool call delta；但复杂工具调用的端到端 CLI live test 还没有覆盖真实写入、审批和继续请求。
+- CLI DeepSeek provider 已能聚合 streaming tool call delta；`live_deepseek_cli_real_repo_acceptance_test` 已作为 ignored live test 覆盖真实写入、验证和 run log，并已在 Windows 本机通过。
 - verification 只支持用户显式提供的单条 shell command。
 - `rpc` 子命令已接入 `agent-rpc` request loop 和真实 pending approval 队列；长 provider 请求仍会占用当前 request，后续需要全双工异步 run 队列。
 - 如果 fixture 场景继续增加，应把 CLI fixture 与 `agent-core` 的 scripted provider 抽成共享测试 harness，减少两套测试替身并行维护。
@@ -160,3 +160,12 @@ cargo test -p deepseek-coder-cli --test deepseek_cli_live live_deepseek_cli_stre
 该测试会从编译出的 `deepseek-coder` 二进制启动真实 `deepseek` provider，使用 streaming completion，并断言 JSON event 中存在 `stream: true` 的 `assistant.delta` 和最终 `run.completed`。模型默认使用项目默认的 `deepseek-v4-pro`；如果要临时改为其他模型，可以在当前 shell 设置 `DEEPSEEK_MODEL`。API Key 仍只来自当前环境变量或被忽略的 `.secrets/deepseek-api-key`。
 
 当前已在 Windows 本机通过该 live smoke test。普通文本 streaming 由 CLI 二进制测试覆盖；真实 tool call delta 形态由 `agent-core` 的 `live_streaming_tool_call_accumulator_smoke_test` 覆盖。
+
+小型真实仓库 CLI 验收：
+
+```powershell
+$env:DEEPSEEK_CODER_LIVE_TESTS = "1"
+cargo test -p deepseek-coder-cli --test deepseek_cli_live live_deepseek_cli_real_repo_acceptance_test -- --ignored --exact --nocapture
+```
+
+该测试会创建一个临时 Rust 仓库，通过真实 CLI 启动 DeepSeek provider，要求模型读取文件、使用 `apply_patch` 修改 `src/lib.rs`，随后由 harness 运行 `cargo test --quiet` 并校验 JSON event 与 run log。测试默认使用 `deepseek-v4-flash`，也可以通过 `DEEPSEEK_CLI_ACCEPTANCE_MODEL` 单独覆盖，避免被普通 `DEEPSEEK_MODEL` 配置影响。当前已在 Windows 本机通过。若 DeepSeek 返回 524，应视为上游网关超时或服务繁忙，先暂停重试；adapter 默认 HTTP timeout 已长于该窗口，单纯加长本地等待时间通常不能解决。

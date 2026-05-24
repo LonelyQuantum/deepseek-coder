@@ -184,6 +184,7 @@ crates/agent-core/tests/deepseek_api_live.rs
 - `live_reasoning_content_tool_replay_smoke_test`：thinking + tool call + `reasoning_content` 回传。
 - `live_streaming_tool_call_accumulator_smoke_test`：强制真实 streaming tool call，验证 delta 可由 `ChatToolCallAccumulator` 拼装为完整工具调用，并确认 include_usage chunk 存在。
 - `crates/cli/tests/deepseek_cli_live.rs` 中的 `live_deepseek_cli_streaming_smoke_test`：从 CLI 二进制启动真实 DeepSeek provider，验收 TurnProvider streaming wrapper、run log 和 JSON event 输出。
+- `crates/cli/tests/deepseek_cli_live.rs` 中的 `live_deepseek_cli_real_repo_acceptance_test`：创建临时小型 Rust 仓库，从 CLI 二进制启动真实 DeepSeek provider，验收读取、`apply_patch` 写入、验证命令、JSON event 和 run log。当前该测试已在 Windows 本机通过，但仍不在 CI 默认运行；遇到 DeepSeek 524 时应暂停真实联网验收，待上游稳定后重跑。
 
 Windows PowerShell 示例：
 
@@ -195,6 +196,8 @@ cargo test -p deepseek-coder-agent-core --test deepseek_api_live -- --ignored --
 ```
 
 不要把真实 API Key 写入 Git 跟踪文件。推荐只放在当前 shell 环境变量、系统密钥管理器，或被 `.gitignore` 忽略的 `.secrets/deepseek-api-key` 中。base URL 和模型名不属于密钥，可以通过 `DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL` 或外部测试配置选择。CI 默认不会运行这些 ignored live tests。
+
+`DeepSeekApiConfig` 默认 HTTP timeout 为 600 秒。若复杂 live test 在约 120 秒收到 HTTP 524，这通常是上游网关已经结束请求，而不是本地 HTTP client 过早超时；单纯把本地 timeout 调得更长一般不能让该请求恢复。
 
 ## 后续增强
 

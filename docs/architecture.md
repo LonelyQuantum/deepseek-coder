@@ -1,6 +1,6 @@
 # 总体架构
 
-状态：草案，Phase 1 部分实现。
+状态：草案，Phase 1 Agent Core MVP 已完成。
 
 `deepseek-coder` 分为 Rust 核心和 TypeScript 前端/共享包。
 
