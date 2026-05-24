@@ -14,6 +14,8 @@ import {
   type ApprovalRequest,
   type ApproveParams,
   type ApproveResult,
+  type CancelParams,
+  type CancelResult,
   type RejectParams,
   type RejectResult,
   type ToolApprovalRequiredPayload,
@@ -137,12 +139,30 @@ test("approval request and decision params use stable protocol fields", () => {
     state: "rejected",
     reason: "not now",
   } satisfies RejectResult;
+  const cancel = {
+    runId: "run_1",
+    reason: "user canceled",
+  } satisfies CancelParams;
+  const cancelResult = {
+    runId: cancel.runId,
+    state: "canceled",
+    reason: cancel.reason,
+  } satisfies CancelResult;
+  const expiredPayload = {
+    approvalId: request.approvalId,
+    toolCallId: request.toolCallId,
+    toolName: request.toolName,
+    decision: "expired",
+    reason: "approval timed out",
+  } satisfies ToolApprovalResolvedPayload;
 
   assert.equal(approve.approvalId, "approval_1");
   assert.equal(requiredPayload.toolName, "shell");
   assert.equal(resolvedPayload.decision, "approved");
   assert.equal(approveResult.state, "approved");
   assert.equal(reject.reason, rejectResult.reason);
+  assert.equal(cancelResult.state, "canceled");
+  assert.equal(expiredPayload.decision, "expired");
 });
 
 test("tool registry contains every declared tool exactly once", () => {

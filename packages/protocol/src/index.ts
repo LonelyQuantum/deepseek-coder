@@ -371,6 +371,17 @@ export interface RejectResult {
   readonly reason?: string;
 }
 
+export interface CancelParams {
+  readonly runId: string;
+  readonly reason?: string;
+}
+
+export interface CancelResult {
+  readonly runId: string;
+  readonly state: "canceled";
+  readonly reason?: string;
+}
+
 export interface ApprovalRequest {
   readonly approvalId: string;
   readonly risk: RiskLevel;
@@ -447,7 +458,7 @@ export interface ToolApprovalResolvedPayload {
   readonly approvalId: string;
   readonly toolCallId: string;
   readonly toolName: ToolName;
-  readonly decision: "approved" | "rejected";
+  readonly decision: "approved" | "rejected" | "canceled" | "expired";
   readonly reason?: string;
 }
 
