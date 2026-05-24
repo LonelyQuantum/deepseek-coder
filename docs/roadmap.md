@@ -46,12 +46,12 @@
 - RPC 真实审批等待队列：`AgentTurnLoopRpcHandler` 会在 `tool.approvalRequired` 处登记 pending approval，后台 Turn Loop worker 等待 `agent.approve` / `agent.reject`，批准后继续执行工具，拒绝后记录 `tool.approvalResolved` 和 `run.failed`。
 - RPC 审批超时/取消：pending approval 已记录过期时间；`agent.cancel` 会取消等待审批的 active run，超时会自动解析为 expired，两者都会记录 `tool.approvalResolved` 和 `run.canceled`。
 - Run Log 写入串行化：Agent Core 已提供 `RunLogWriter` trait 和 `SerializedRunLog`；CLI 继续使用单 writer `RunLog`，RPC active run 使用共享锁串行化 append/load，避免同一 run 被多个前端请求并发读写时出现序列错乱。
+- Run summary metadata / `agent.listRuns`：每个 run 目录维护 `summary.json`，记录标题、状态、时间、事件数、最终摘要、变更文件和验证状态；RPC `agent.listRuns` 通过 summary 快速列出 run。
+- RPC provider/tool 取消信号：Agent Core 已提供协作式 `CancellationToken`；RPC active run 会把 token 注入 Turn Loop，`agent.cancel` 会通知 provider request、命令类工具和 pending approval，并以 `run.canceled` 收口。
 
 下一步：
 
-- Run summary metadata：为 `agent.listRuns` 设计并实现 `summary.json` 或等价索引，避免每次列出 run 都扫描完整 JSONL。
 - RPC 全双工事件 writer 队列：当前 pending approval 已真实等待，但事件仍在 request 返回时 flush；后续让 `agent.sendTurn` 更早返回 accepted 并持续推送事件。
-- RPC provider/tool 取消信号：当前 `agent.cancel` 已覆盖 pending approval，后续需要取消进行中的 provider request、工具进程和 client 断连场景。
 - CLI JSON error response：让 `--json` 失败路径输出结构化 JSON-RPC error，而不是只写人类可读 stderr。
 - 真实仓库验收：使用 DeepSeek provider 在小型仓库中执行一次“读取 -> 修改 -> 验证 -> 报告”。
 - 测试替身收敛：如果 CLI fixture 场景继续增加，把 CLI fixture 与 Agent Core scripted provider 抽成共享测试 harness。

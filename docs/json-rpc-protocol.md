@@ -287,9 +287,10 @@ interface CancelResult {
 规则：
 
 - 当前 Rust request loop 已能解析 `agent.cancel` 并分发给 `AgentRpcRequestHandler`。
-- Phase 1 实现支持取消正在等待审批的 active run。取消会把对应 pending approval 解析为 `decision: "canceled"`，随后写入 `run.canceled`。
+- Phase 1 实现支持取消 active run。取消会设置该 run 的协作式 `CancellationToken`；如果当前正在等待审批，会把对应 pending approval 解析为 `decision: "canceled"`，随后写入 `run.canceled`。
+- provider wrapper 和命令类工具必须在可中断边界检查 token。DeepSeek streaming wrapper 会在 stream 事件之间检查 token；shell/search/git 等子进程工具会在轮询子进程状态时检查 token，并在取消时 kill child。
 - 当前内存队列默认审批超时为 300 秒；超时会把 approval 解析为 `decision: "expired"`，随后写入 `run.canceled`。测试和嵌入方可以通过 handler 配置缩短该时间。
-- 当前还没有 provider request、tool process 和完全全双工 writer 的强制取消信号；这部分属于后续异步 run 执行队列。
+- 当前取消是协作式，不是强制杀线程；完全全双工 writer、client 断连自动取消和更强进程树清理属于后续异步 run 执行队列。
 
 ### `agent.resume`
 
@@ -323,14 +324,37 @@ interface ResumeResult {
 列出当前 workspace 已知的本地 run。
 
 ```ts
+interface ListRunsParams {
+  limit?: number;
+}
+
 interface RunSummary {
   runId: string;
   title: string;
   status: "running" | "completed" | "failed" | "canceled";
   startedAt: string;
+  updatedAt: string;
   completedAt?: string;
+  lastSeq: number;
+  eventCount: number;
+  mode?: "plan" | "edit" | "review" | "ask";
+  summary?: string;
+  changedFiles?: string[];
+  verificationStatus?: "passed" | "failed" | "skipped";
+}
+
+interface ListRunsResult {
+  runs: RunSummary[];
 }
 ```
+
+规则：
+
+- `agent.listRuns` 读取每个 run 目录内的 `summary.json`，不扫描完整 `events.jsonl`。
+- 缺少 `summary.json` 的旧 run 目录不会出现在列表中；后续若需要兼容旧日志，可增加显式迁移命令。
+- 返回顺序按 `updatedAt` 从新到旧排序；时间相同时按 `runId` 升序稳定排序。
+- `limit` 省略时返回全部已知 run；传入时只返回前 N 条。
+- 当前 Rust request loop 已能解析 `agent.listRuns` 并分发给 handler；`AgentTurnLoopRpcHandler` 已能从 Run Log summary metadata 返回列表。
 
 ## 事件封装
 
