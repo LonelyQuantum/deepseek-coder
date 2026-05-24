@@ -382,12 +382,20 @@ pnpm run check
 每次 Agent 回合生成一个 `Context Capsule`：
 
 ```text
+[StablePrefix]
 system policy
 project rules
-user task
-workspace manifest
+workspace manifest summary
+stable file snapshots
+
+[DynamicPrelude]
 git status and diff summary
+current diagnostics summary
+
+[TurnSuffix]
+user task
 selected file contents
+explicit attachments
 tool results
 active plan
 acceptance criteria
@@ -396,7 +404,7 @@ previous run summary
 
 上下文构建必须满足：
 
-- 稳定排序：项目规则、manifest、文件内容和日志摘要顺序固定，提升缓存命中率。
+- 稳定排序：Context Capsule 使用 `StablePrefix`、`DynamicPrelude`、`TurnSuffix` 三层布局，避免把展示顺序和缓存前缀混为一谈。
 - 精确计量：所有片段在进入请求前计算 token 预算，并记录在 run log。
 - 明确来源：每段内容带 path、mtime、git object id 或命令 id。
 - 边界完整：文件片段按语法单元或整文件进入；不能把函数、类、JSON、Markdown 表格截断成不可解析状态。
@@ -404,16 +412,34 @@ previous run summary
 
 ### Workspace Manifest
 
-Manifest 是长上下文的骨架，建议使用 JSONL：
+Manifest 是长上下文的骨架。内部使用结构化 JSON 保存，并通过 canonical serialization 计算 `manifestHash`；进入 prompt 时渲染为紧凑、稳定、适合模型阅读的摘要，而不是把完整 JSON 原样塞入上下文。
 
 ```json
-{"path":"src/main.rs","kind":"rust","bytes":12345,"tokens":3210,"sha256":"...","git":"HEAD:..."}
-{"path":"README.md","kind":"markdown","bytes":8000,"tokens":1800,"sha256":"...","git":"working-tree"}
+{
+  "manifestVersion": 1,
+  "manifestHash": "sha256:...",
+  "maxEntries": 500,
+  "entries": [
+    {
+      "path": "src/main.rs",
+      "kind": "rust",
+      "sizeBytes": 12345,
+      "sha256": "...",
+      "git": "working-tree"
+    }
+  ],
+  "omitted": [
+    {
+      "reason": "max_entries_exceeded",
+      "count": 42
+    }
+  ]
+}
 ```
 
 Manifest 还应记录：
 
-- ignore 规则：`.gitignore`、用户配置、秘密文件规则。
+- ignore 规则：硬安全排除、默认工程排除、`.gitignore` 和 `.deepseek-coderignore`。
 - 语言与构建系统：package manager、test command、formatter、linter。
 - 入口点：bin、library、VS Code extension activation、MCP server。
 - 风险标记：大文件、生成文件、锁文件、二进制文件、秘密疑似文件。
@@ -422,8 +448,9 @@ Manifest 还应记录：
 
 DeepSeek API 默认支持上下文硬盘缓存。为了提高命中率：
 
-- 把稳定内容放在前缀：系统约束、项目规则、manifest、固定文件快照。
-- 把易变内容放在后缀：用户新消息、最新命令输出、临时计划。
+- `StablePrefix` 放系统约束、项目规则、manifest 摘要和固定文件快照。
+- `DynamicPrelude` 放 git 变化摘要和当前诊断等每轮常变但全局相关的信息。
+- `TurnSuffix` 放用户新消息、选中文件、工具输出和当前计划。
 - 每轮记录 `prompt_cache_hit_tokens` 与 `prompt_cache_miss_tokens`。
 - 对大仓库任务优先使用“整仓前缀 + 变更后缀”的回合结构。
 
@@ -586,17 +613,17 @@ extension.ts
 
 ### Phase 2：1M Context Capsule
 
-- [ ] workspace manifest。
-- [ ] 稳定前缀构建。
-- [ ] token 预算报告。
-- [ ] 缓存命中统计。
-- [ ] 超预算停止机制。
-- [ ] 大仓库基准测试。
+- [ ] Phase 2a：Context Capsule 数据模型与 Manifest v0。先给 `read_file` 增加 `sha256` / `sizeBytes`，再定义 `ContextCapsule`、`ContextSection`、`CachePlacement` 和稳定 renderer，随后实现 workspace manifest v0，并把 manifest summary 接入 Context Builder 与 `context.built` 事件。
+- [ ] Phase 2b：TokenEstimator 与稳定前缀。建立 `TokenEstimator` trait，保留 `utf8_bytes` 默认估算器，增加本地校准估算器，并按 `CachePlacement::{StablePrefix, DynamicPrelude, TurnSuffix}` 构建缓存友好 prompt。
+- [ ] Phase 2c：Attachments、provider summary 和 cache 实验。让 `agent.sendTurn.attachments` 接入 file/selection/diagnostic 等来源，新增 `provider.completed` 事件记录 usage/cache/stream 摘要，并提供 DeepSeek cache hit/miss ignored live 验收。
+- [ ] Phase 2d：大仓库验收、超预算解释、Run Log 体积控制和 JSON Schema 校验层。覆盖 200K、500K、900K 样例仓库，统一输出截断/脱敏边界，并在 typed deserialization 前执行 tool call JSON Schema 校验。
 
 验收标准：
 
 - 在 200K、500K、900K token 三档样例仓库上生成可审计 Context Capsule。
 - 能展示哪些文件进入上下文、哪些没有进入，以及原因。
+- 同一 workspace 的稳定前缀可重复渲染，修改 `TurnSuffix` 不改变 `StablePrefix`。
+- 能记录 provider usage、cache hit/miss 和 token estimator 元数据。
 
 ### Phase 3：TUI
 

@@ -107,6 +107,22 @@ cargo demo-live
 
 如果上游服务返回 5xx、524 或限流，应记录为外部服务不稳定，不直接等同于代码回归；同一 commit 可在服务恢复后重跑。
 
+## Phase 2 Context Capsule 验收分层
+
+Phase 2 的默认 CI 应优先覆盖离线、确定性测试：
+
+- manifest fixture：固定工作区结构、ignore 规则、`sha256`、`manifestHash`、`maxEntries` 和 omitted reason。
+- Context Capsule renderer：同一输入两次渲染完全一致；修改 `TurnSuffix` 不改变 `StablePrefix`。
+- token estimator metadata：`utf8_bytes` 和校准估算器都必须明确 `exact=false`，不能误报为真实 tokenizer。
+- attachment fixture：路径越界、重复 attachment、超大小 selection / explicit content 和 diagnostic 形状错误均有稳定错误或省略原因。
+- JSON Schema validation：tool call arguments 在 typed deserialization 前通过 schema validator。
+
+以下验收必须保持 ignored/manual，不进入普通 CI：
+
+- DeepSeek cache hit/miss 实验：相同 `StablePrefix` + 不同 user task 的两次请求应记录 cache hit/miss。
+- 200K、500K、900K 样例仓库 Context Capsule 生成和 token 预算报告。
+- 真实多文件任务展示 manifest、选中文件/诊断、token 预算、provider usage/cache 和最终验证结果。
+
 ### 可选：合并前人工检查
 
 - 检查 `docs/demos.md` 中的展示命令是否仍能覆盖最新功能。

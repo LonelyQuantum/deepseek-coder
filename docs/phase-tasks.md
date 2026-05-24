@@ -51,16 +51,16 @@
 
 | 状态 | 任务 | 来源 | 说明 |
 | --- | --- | --- | --- |
-| [ ] | workspace manifest 自动构建 | `README.md`、`docs/context-capsule.md`、`docs/tool-system.md` | 包含文件清单、忽略规则、摘要和可审计来源。 |
-| [ ] | 稳定前缀构建和缓存友好 prompt 布局 | `README.md`、`docs/context-capsule.md`、`docs/deepseek-api-adapter.md` | 面向 DeepSeek 1M 长上下文和 prompt cache。 |
-| [ ] | 真实 provider tokenizer 或校准后的 token estimator | `docs/roadmap.md`、`docs/context-capsule.md` | 当前 `utf8_bytes` 是确定性代理估算。 |
-| [ ] | token 预算报告扩展到 200K、500K、900K 样例仓库 | `README.md`、`docs/testing.md`、`docs/context-capsule.md` | 需要 ignored/manual benchmark，不能默认进入 CI。 |
-| [ ] | Context Builder 接入选中文件、诊断、工具结果、计划步骤和显式 attachment | `docs/json-rpc-protocol.md`、`docs/context-capsule.md` | `agent.sendTurn.attachments` 当前会被拒绝。 |
-| [ ] | 缓存命中统计与 provider summary 事件 | `README.md`、`docs/roadmap.md`、`docs/deepseek-api-adapter.md` | 记录模型名、usage、cache hit/miss、stream 统计等稳定 schema。 |
-| [ ] | 超预算停止机制和上下文省略原因展示 | `README.md`、`docs/context-capsule.md` | 当前已有基础 required/optional budget 行为；Phase 2 需要面向用户可解释。 |
-| [ ] | Run Log 体积、输出截断和脱敏包边界 | `docs/run-log.md`、`docs/roadmap.md`、`docs/security-model.md` | 包含工具输出、verification 输出和 provider 摘要的统一大小限制。 |
-| [ ] | `read_file` / manifest 内容摘要字段，例如 `sha256` | `docs/tool-system.md` | 当前 Phase 1 `read_file` 不返回内容摘要。 |
-| [ ] | tool call JSON Schema 通用校验层 | `docs/agent-core.md`、`docs/tool-system.md` | 当前主要依赖结构化参数反序列化和工具定义；后续补统一 schema validator。 |
+| [ ] | Phase 2a-1：`read_file` 增加 `sha256` / `sizeBytes` | `docs/tool-system.md`、`docs/context-capsule.md` | 第一轮低风险入口；为 manifest 文件摘要和工具结果一致性校验提供基础。 |
+| [ ] | Phase 2a-2：定义 `ContextCapsule` / `ContextSection` / `CachePlacement` 和稳定 renderer | `README.md`、`docs/context-capsule.md`、`docs/agent-core.md` | 明确 `StablePrefix`、`DynamicPrelude`、`TurnSuffix` 三层布局，和现有 priority 排序解耦。 |
+| [ ] | Phase 2a-3：workspace manifest v0 自动构建 | `README.md`、`docs/context-capsule.md`、`docs/tool-system.md` | 结构化 JSON、canonical `manifestHash`、默认 `maxEntries=500`、硬安全排除、默认工程排除、`.gitignore` + `.deepseek-coderignore`。 |
+| [ ] | Phase 2a-4：Context Builder 接入 manifest summary 和扩展 `context.built` payload | `docs/context-capsule.md`、`docs/json-rpc-protocol.md` | 输出 stable/dynamic/suffix token、included/omitted source、manifest hash 和截断原因；补离线 fixture 测试。 |
+| [ ] | Phase 2b-1：TokenEstimator trait 与 `CalibratedEstimator` | `docs/roadmap.md`、`docs/context-capsule.md`、`docs/deepseek-api-adapter.md` | 默认保持 `utf8_bytes`；校准数据只本地保存；无官方 tokenizer 或等价证明前 `exact=false`。 |
+| [ ] | Phase 2b-2：稳定前缀和缓存友好 prompt 布局 | `README.md`、`docs/context-capsule.md`、`docs/deepseek-api-adapter.md` | 使用 `CachePlacement` 构建 provider 输入；验证修改 `TurnSuffix` 不改变 `StablePrefix`。 |
+| [ ] | Phase 2c-1：Context Builder 接入 attachments 和 diagnostics | `docs/json-rpc-protocol.md`、`docs/context-capsule.md`、`docs/vscode-extension.md` | `agent.sendTurn.attachments` 从拒绝改为消费；先支持 file、selection/explicit content、diagnostic；验证路径、重复和大小限制。 |
+| [ ] | Phase 2c-2：`provider.completed` 事件和 DeepSeek cache hit/miss 实验 | `README.md`、`docs/roadmap.md`、`docs/deepseek-api-adapter.md`、`docs/testing.md` | 独立事件记录模型、duration、usage、cache hit/miss 和 stream 摘要；cache 实验为 ignored/manual live test。 |
+| [ ] | Phase 2d-1：200K、500K、900K 样例仓库 token 预算与 Context Capsule 验收 | `README.md`、`docs/testing.md`、`docs/context-capsule.md` | 需要 ignored/manual benchmark，不能默认进入 CI。 |
+| [ ] | Phase 2d-2：超预算解释、Run Log 体积/截断/脱敏边界和 tool call JSON Schema 校验层 | `docs/run-log.md`、`docs/security-model.md`、`docs/agent-core.md`、`docs/tool-system.md` | required context 超预算失败；optional context 给出 omitted reason；统一工具/provider/verification 输出大小限制；schema validation 在 typed deserialization 前执行。 |
 
 ## Phase 3：TUI 与共享 RPC 交互管线
 

@@ -94,7 +94,7 @@ pub struct ToolDefinition {
 - `content`
 - `lineCount`
 
-文件内容摘要字段如 `sha256` 属于 manifest 和缓存增强项，当前 Phase 1 `read_file` 执行结果尚不返回该字段。
+Phase 2a 会把 `sha256` 和 `sizeBytes` 加入 `read_file` 结果，供 workspace manifest、Context Capsule 来源审计和工具结果一致性校验使用。
 
 ## 内置工具
 
@@ -330,9 +330,16 @@ fixture 中的 `tools` 被当作无序集合校验；测试会按工具名规整
 
 ### `read_file`
 
-- 增加 `sha256`、字节长度、编码信息和内容截断元数据。
+- Phase 2a 增加 `sha256` 和 `sizeBytes`，并补充对应单元测试。
+- 后续增加编码信息和内容截断元数据。
 - 支持按 token 预算或语法边界读取片段，避免长文件被随意切断。
 - 增加文件快照 id，方便 run log 复现“读取时看到的内容”。
+
+### Tool call JSON Schema 校验
+
+- Phase 2d 增加通用 `ToolCallValidator`，优先使用工具注册表中的 JSON Schema 校验模型参数。
+- 校验顺序为：解析 arguments 字符串为 `serde_json::Value` -> schema validation -> typed deserialization -> 执行工具。
+- Schema 校验不能只作为 typed deserialization 失败后的补救，因为 Rust 结构体反序列化可能忽略未知字段，而 schema 才能稳定表达 `additionalProperties`、枚举、范围和互斥字段。
 
 ### `search`
 

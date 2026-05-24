@@ -113,8 +113,9 @@ crates/agent-core/src/run_log.rs
 
 ## 后续增强
 
-- 扩展 Agent Turn Loop 接入，自动记录 provider streaming 摘要、patch proposal、验证命令、取消和恢复事件。
+- Phase 2c 增加独立 `provider.completed` 事件，记录 provider usage、cache hit/miss、duration 和 streaming 摘要。
+- 扩展 Agent Turn Loop 接入，自动记录 patch proposal、验证命令、取消和恢复事件。
 - 增加事件 payload 的强类型 schema，并与 `docs/json-rpc-protocol.md` 和 `packages/protocol` 做兼容性测试。
 - 增加日志轮转或分片策略，防止长时间运行和高频 streaming 事件让单个 `events.jsonl` 过大。
-- 增加输出截断信息，区分“字段不存在”“输出为空”和“输出因安全或大小限制被截断”。
+- Phase 2d 增加统一输出截断信息，区分“字段不存在”“输出为空”和“输出因安全或大小限制被截断”；工具输出、verification 输出和 provider 摘要必须使用同一套大小限制与脱敏边界。
 - 增加 run export 审计包，导出前再次做敏感信息扫描。

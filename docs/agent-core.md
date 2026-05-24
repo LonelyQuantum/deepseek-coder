@@ -62,6 +62,8 @@ Phase 1 已实现基础 Context Builder，详见 `docs/context-capsule.md`。它
 
 当前 token 统计使用 `utf8_bytes` 估算器，不是 DeepSeek tokenizer 的精确 token 数。Context Builder 已接入基础 Agent Turn Loop，并会写入 `context.built` run log 事件；基础 RPC 事件桥接已能把该事件转换为 JSON-RPC notification，`TurnEventSink` 已能在事件写入后立即输出，RPC request loop 和真实 Turn Loop handler 已接入。
 
+Phase 2 将把基础 builder 升级为结构化 `ContextCapsule`：先构建可审计的 sections、sources、token report 和 deterministic renderer，再按 `CachePlacement::{StablePrefix, DynamicPrelude, TurnSuffix}` 生成 provider 输入。workspace manifest、attachments、provider cache usage 和大仓库 token 预算均接入该结构，而不是各自拼接 prompt 字符串。
+
 ## 本地工具执行
 
 Phase 1 已实现 `WorkspaceToolExecutor`，作为 read/search/apply_patch/shell/git 工具的基础执行层。它负责 workspace 路径解析、敏感路径拒绝、命令超时和结构化工具结果。详细设计见 `docs/tool-system.md`。
@@ -96,6 +98,6 @@ Phase 1 已通过以下闭环验收：
 - 将 TUI/VS Code 接入真实 RPC pending approval 队列。
 - 增加 tool call 参数 JSON Schema 校验层，补足当前仅依赖 Rust 反序列化的基础校验。
 - 实现命令风险分类器和更强 sandbox，区分普通测试命令、网络访问、删除、reset、发布等高风险操作。
-- 扩展 Phase 2 Context Capsule，把 workspace manifest、稳定前缀、缓存命中统计和更精确 token 预算纳入 provider 请求。
+- 扩展 Phase 2 Context Capsule：定义结构化 capsule 与三层 `CachePlacement`，实现 workspace manifest v0、校准 token estimator、attachments、`provider.completed` usage/cache 事件和大仓库验收。
 - 在工具结果进入 run log 或下一轮 prompt 前增加统一大小限制。
 - 扩展 `crates/agent-rpc` 的 client 断连取消和多 active run 管理，供 CLI/TUI/VS Code 共享。

@@ -191,7 +191,7 @@ interface SendTurnParams {
 }
 
 interface TurnAttachment {
-  kind: "file" | "selection" | "diagnostic";
+  kind: "file" | "selection" | "explicit_content" | "diagnostic";
   path?: string;
   range?: {
     startLine: number;
@@ -217,7 +217,7 @@ Result 返回后，进度通过 `agent.event` notification 持续到达。
 
 当前 Rust request loop 已能解析 `agent.sendTurn` 并分发给 `AgentRpcRequestHandler`。`crates/agent-rpc::AgentTurnLoopRpcHandler` 已能创建 run、选择注入的 provider factory、启动后台 Turn Loop worker，并把 Run Log 事件返回给 request loop 输出。当前实现会收集事件直到 run 结束或遇到 `tool.approvalRequired`：遇到审批时，response 后会输出审批请求事件，worker 在 pending approval 队列中等待 `agent.approve` / `agent.reject` / `agent.cancel`，并在超时时写入取消事件。如果 request loop 读到 EOF，会调用 handler shutdown；对于已经暂停在 pending approval 的 active run，shutdown 会把审批解析为 `decision: "canceled"` 并写入 `run.canceled`。完全全双工的“先发送 accepted response，再独立事件 writer 持续推送”仍是后续异步执行队列目标。
 
-当前 handler 尚未消费 `attachments`；如果请求携带 attachment，会返回 `Invalid params`。选中文件、诊断和显式上下文条目会在 Context Builder 输入协议稳定后接入。
+当前 handler 尚未消费 `attachments`；如果请求携带 attachment，会返回 `Invalid params`。Phase 2c 会在 Context Capsule 来源模型稳定后接入：`file` 由 Core 在工作区内读取，`selection` / `explicit_content` 由前端提供文本但必须有大小限制和来源标签，`diagnostic` 由 VS Code/TUI 等前端传入结构化诊断。
 
 ### `agent.approve`
 
@@ -526,6 +526,31 @@ interface ProviderRequested {
 }
 ```
 
+### `provider.completed`
+
+Phase 2c 新增。该事件表示一次 provider 调用结束，用于记录 usage、cache 和 streaming 摘要；它不替代 `provider.requested`。
+
+```ts
+interface ProviderCompleted {
+  iteration: number;
+  model: string;
+  durationMs: number;
+  finishReason: "stop" | "length" | "tool_calls" | "content_filter" | "error";
+  usage?: {
+    promptTokens?: number;
+    completionTokens?: number;
+    totalTokens?: number;
+    promptCacheHitTokens?: number;
+    promptCacheMissTokens?: number;
+    reasoningTokens?: number;
+  };
+  streaming?: {
+    chunkCount: number;
+    toolCallDeltaCount: number;
+  };
+}
+```
+
 ### `tool.requested`
 
 ```ts
@@ -808,6 +833,8 @@ Run log 持久化前必须脱敏密钥。
 
 - 为 `tool.completed`、`patch.proposed` 等事件补齐与 Rust 结果类型一致的详细 payload schema。
 - 将现有工具注册表和错误码注册表 fixture 扩展到事件 payload 和 RPC method，确保 `docs/json-rpc-protocol.md`、`packages/protocol` 和 `crates/agent-rpc` 不分叉。
+- Phase 2c 接入 `agent.sendTurn.attachments`，并为 file、selection / explicit content、diagnostic 增加路径、大小和重复来源校验。
+- Phase 2c 增加 `provider.completed`，并把 usage/cache/streaming 字段纳入 Rust/TypeScript 协议交叉校验。
 - 建立 `assistant.delta` 高频事件的批量发送、节流或合并策略，并用 benchmark 验证 stdio JSON-RPC 在 VS Code 扩展中的流畅度。
 - 明确事件重放规则：run resume 时哪些事件原样回放，哪些事件需要标记为历史事件。
 - 增加输出截断和脱敏字段约定，使前端能区分“没有输出”和“输出被安全策略截断”。

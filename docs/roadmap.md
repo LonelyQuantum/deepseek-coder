@@ -123,21 +123,41 @@ P0 不追求：
 
 目标：把 DeepSeek V4 的长上下文和思考模式变成可见、可审计的工作流。
 
-优先事项：
+Phase 2 的 1M Context Capsule 按 4 个增量轮次推进：
 
-- 1M Context Capsule。
-- 稳定前缀与缓存命中统计。
-- 真实 provider tokenizer 或经校准的 token estimator。
+1. **Phase 2a：Context Capsule 数据模型与 Manifest v0**
+   - `read_file` 增加 `sha256` / `sizeBytes`。
+   - 定义 `ContextCapsule`、`ContextSection`、`CachePlacement` 和稳定 renderer。
+   - 实现 workspace manifest v0：结构化 JSON、canonical `manifestHash`、默认 `maxEntries=500`、硬安全排除、默认工程排除、`.gitignore` + `.deepseek-coderignore`。
+   - Context Builder 接入 manifest summary，并扩展 `context.built` payload。
+
+2. **Phase 2b：TokenEstimator 与稳定前缀**
+   - 建立 `TokenEstimator` trait，保留 `utf8_bytes` 默认估算器。
+   - 增加基于真实 provider usage 的 `CalibratedEstimator`，但仍标注 `exact=false`。
+   - 按 `CachePlacement::{StablePrefix, DynamicPrelude, TurnSuffix}` 构建缓存友好 prompt。
+
+3. **Phase 2c：Attachments、provider summary 与 cache 实验**
+   - 接入 `agent.sendTurn.attachments` 的 file、selection/explicit content、diagnostic。
+   - 新增 `provider.completed` 事件，记录模型、duration、usage、cache hit/miss 和 stream 摘要。
+   - 建立 DeepSeek cache hit/miss ignored live experiment。
+
+4. **Phase 2d：大仓库验收与体积控制**
+   - 200K、500K、900K 样例仓库 token 预算和 Context Capsule 验收。
+   - 超预算解释、Run Log 输出截断和脱敏包边界。
+   - tool call JSON Schema 通用校验层，且在 typed deserialization 前执行。
+
+后续 DeepSeek 差异化事项：
+
 - `reasoning_content` replay 状态摘要。
 - FIM completion preview。
 - 高频 JSON-RPC streaming 性能基准和必要的 delta 合并策略。
-- Run Log 轮转和导出体积控制。
-- 小型真实仓库 benchmark，验证 1M 上下文、缓存布局和可审计 run log 是否带来可度量收益。
 
 验收重点：
 
 - 能解释哪些内容进入上下文、哪些没有进入，以及原因。
 - 能记录 `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` 并展示给前端。
+- 同一输入两次构建的 `StablePrefix` 渲染完全一致，修改 `TurnSuffix` 不影响稳定前缀。
+- Manifest 的 ignore、sha256、manifest hash、截断和 omitted reason 均可离线测试。
 
 ## P3：生态扩展
 
