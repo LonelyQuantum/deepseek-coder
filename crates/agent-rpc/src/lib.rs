@@ -2905,6 +2905,82 @@ mod tests {
     }
 
     #[test]
+    fn request_loop_rejects_concurrent_turn_and_cancels_pending_approval_on_eof() {
+        let workspace = TestWorkspace::new("rpc");
+        workspace.write("README.md", "old\n");
+        let input = [
+            json!({
+                "jsonrpc": "2.0",
+                "id": "init_1",
+                "method": "agent.initialize",
+                "params": initialize_params_for(workspace.path_str())
+            })
+            .to_string(),
+            json!({
+                "jsonrpc": "2.0",
+                "id": "turn_1",
+                "method": "agent.sendTurn",
+                "params": {
+                    "runId": "run_rpc_active_disconnect",
+                    "message": "Update README and wait for approval",
+                    "mode": "edit"
+                }
+            })
+            .to_string(),
+            json!({
+                "jsonrpc": "2.0",
+                "id": "turn_2",
+                "method": "agent.sendTurn",
+                "params": {
+                    "runId": "run_rpc_second",
+                    "message": "This turn must be rejected while the first run is active",
+                    "mode": "ask"
+                }
+            })
+            .to_string(),
+        ]
+        .join("\n");
+        let mut output = Vec::new();
+
+        let handler = run_stdio_request_loop(
+            Cursor::new(input),
+            &mut output,
+            AgentTurnLoopRpcHandler::new(patch_provider_factory),
+        )
+        .expect("request loop should cancel the active run after EOF");
+
+        assert!(
+            handler.active_run.is_none(),
+            "EOF shutdown should finish the active run"
+        );
+        let lines = output_lines(output);
+        let first_turn_response_index = line_index(&lines, |line| line["id"] == "turn_1");
+        assert_eq!(
+            lines[first_turn_response_index]["result"]["runId"],
+            "run_rpc_active_disconnect"
+        );
+
+        let second_turn_error_index = line_index(&lines, |line| line["id"] == "turn_2");
+        assert_eq!(
+            lines[second_turn_error_index]["error"]["code"],
+            RPC_RUN_ALREADY_ACTIVE
+        );
+        assert!(lines.iter().any(|line| {
+            line["method"] == "agent.event"
+                && line["params"]["type"] == "tool.approvalResolved"
+                && line["params"]["runId"] == "run_rpc_active_disconnect"
+                && line["params"]["payload"]["decision"] == "canceled"
+                && line["params"]["payload"]["reason"] == "RPC client disconnected"
+        }));
+        assert!(lines.iter().any(|line| {
+            line["method"] == "agent.event"
+                && line["params"]["type"] == "run.canceled"
+                && line["params"]["runId"] == "run_rpc_active_disconnect"
+                && line["params"]["payload"]["code"] == "E_APPROVAL_CANCELED"
+        }));
+    }
+
+    #[test]
     fn turn_loop_rpc_handler_expires_pending_approval_without_running_tool() {
         let workspace = TestWorkspace::new("rpc");
         workspace.write("README.md", "old\n");
