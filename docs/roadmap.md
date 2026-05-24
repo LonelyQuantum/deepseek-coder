@@ -16,7 +16,7 @@
 
 因此短期不和成熟 VS Code 扩展正面拼功能覆盖率，而是先做出一个可审计、可复现、能稳定闭环的小型 Agent。
 
-## P0：Phase 1 MVP 收敛
+## P0：Phase 1 MVP 与合并主线前收敛
 
 目标：完成一个最小但真实可用的 Agent 回合。
 
@@ -34,7 +34,7 @@
 - CLI `run` 最小闭环，支持 DeepSeek provider、fixture provider、run log 摘要、JSON event 重放和显式 verification command。
 - 本地 fixture 端到端 smoke test，覆盖 CLI、Turn Loop、工具执行、Run Log 和 JSON-RPC event 输出。
 - CLI 审查修复：DeepSeek provider 改为专用 current-thread runtime，fixture provider 改为响应队列，verification 输出在写入 run log 前脱敏。
-- 进程级 CLI fixture smoke test：从编译出的 `deepseek-coder` 二进制启动，验证 CLI、Turn Loop、Run Log 和 JSON-RPC event 输出的最小闭环。
+- 进程级 CLI fixture smoke test：从编译出的 `deepseek-coder` 二进制启动，验证 CLI、Turn Loop、Run Log、JSON-RPC event 输出、事件序号连续性和关键事件顺序的最小闭环。
 - TurnProvider async / streaming 边界：`TurnProvider::complete_stream` 返回异步事件流，支持 `assistant.delta` 与最终 `Completed` 响应。
 - CLI DeepSeek provider streaming wrapper：CLI provider 通过 `create_chat_completion_stream` 聚合 content、`reasoning_content` 和 tool calls，并把 content delta 写入 run log。
 - 真实 provider streaming 联网验收：`deepseek_cli_live` 从编译出的 CLI 二进制启动真实 DeepSeek provider，验证 `stream: true` 的 `assistant.delta` 和最终 `run.completed`。
@@ -51,11 +51,28 @@
 - CLI JSON error response：`run --json` 失败路径会在 stdout 输出 JSON-RPC error response，保留非零退出码，并避免把人类错误摘要混入 stdout。
 - 小型真实仓库 CLI 验收：`live_deepseek_cli_real_repo_acceptance_test` 已通过，真实 DeepSeek provider 在临时 Rust 仓库中完成“读取 -> 修改 -> 验证 -> 报告”。
 
+合并主线前已完成：
+
+- `pnpm run check` 基线验证：Windows 本机已通过默认 CI 等价检查。
+- Context Builder token 预算测试：当前已覆盖 token 报告、可选上下文超预算省略、必需上下文超预算失败和 `context.built` payload 形状。
+- Patch apply 失败恢复：`apply_patch` 已改为先 staging 再写盘，并有多文件失败不留半修改的回归测试。
+- `reasoning_content` 状态机边界：已覆盖空消息、多个 tool-call assistant message 和 replay 计数。
+- `CancellationToken` 并发语义：已覆盖 clone 共享状态、首次取消原因保持和并发取消。
+- CLI event stream 顺序：进程级 smoke test 已验证 event `seq` 连续递增和关键事件子序列。
+
+合并主线前剩余工作：
+
+- 提取共享 `TestWorkspace`，统一当前分散在 agent-core、agent-rpc、cli、demo/live 测试中的临时工作区实现。
+- 统一 live API key 测试 helper，明确项目专用环境变量、通用环境变量和 `.secrets/deepseek-api-key` 的优先级。
+- 补 RPC request loop 并发与断连测试，覆盖 active run、pending approval、cancel/disconnect 和事件 replay。
+- 补 CLI `rpc` 模式进程级测试，从真实二进制启动 stdio RPC 并验证 initialize、sendTurn、事件输出和错误响应。
+- 补协议错误码交叉校验，确保 Rust、TypeScript 与协议文档保持一致。
+- 最终合并前再跑 `pnpm run check`、测试清单盘点、展示 demo、必要 live suite 和敏感信息扫描。
+
 下一步：
 
+- 完成 Phase 1 合并主线前收敛后，再进入 Phase 2 Context Capsule。
 - RPC 全双工事件 writer 队列：当前 pending approval 已真实等待，但事件仍在 request 返回时 flush；后续让 `agent.sendTurn` 更早返回 accepted 并持续推送事件。
-- Phase 2 Context Capsule：从 workspace manifest、稳定前缀、token 预算报告和缓存命中统计开始，把 Phase 1 的最小闭环扩展到 1M 上下文形态。
-- 测试替身收敛：如果 CLI fixture 场景继续增加，把 CLI fixture 与 Agent Core scripted provider 抽成共享测试 harness。
 
 Phase 1 收官后优化池：
 
