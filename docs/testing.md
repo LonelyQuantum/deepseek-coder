@@ -57,6 +57,70 @@
 - demo 测试必须默认 `#[ignore]`，输出服务于阅读，不承担唯一正确性证明。
 - 新 fixture 应优先放在可复用 helper 中；只有某个测试独有的数据才放在测试本地。
 
+## 合并主线前测试清单
+
+合并 Phase 1 这类阶段性分支前，建议按风险从低到高执行以下清单。默认 CI 必须通过；联网和展示项不阻塞所有 PR，但在阶段合并前应至少由维护者手动跑一轮并记录结果。
+
+### 必跑：默认 CI 等价检查
+
+```powershell
+pnpm run check
+```
+
+覆盖范围：
+
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo test --workspace`
+- `pnpm -r typecheck`
+- `pnpm -r test`
+
+### 必跑：测试清单盘点
+
+```powershell
+cargo test --workspace -- --list
+```
+
+该命令不执行测试，只列出 Rust 测试和 ignored 测试。阶段合并前用于确认 live/demo/stress 测试仍然按预期标记为 `#[ignore]`。
+
+### 建议：离线展示验收
+
+```powershell
+cargo demo
+```
+
+该命令不联网，用于人工检查 Agent event transcript、审批、补丁、验证和 run summary 的展示效果。
+
+### 建议：真实 DeepSeek 联网验收
+
+联网验收需要 API key 和 `DEEPSEEK_CODER_LIVE_TESTS=1`。阶段合并前建议至少跑以下几类：
+
+```powershell
+$env:DEEPSEEK_CODER_LIVE_TESTS = "1"
+cargo test -p deepseek-coder-agent-core --test deepseek_api_live -- --ignored --nocapture
+cargo test -p deepseek-coder-cli --test deepseek_cli_live -- --ignored --nocapture
+cargo demo-live
+```
+
+如果上游服务返回 5xx、524 或限流，应记录为外部服务不稳定，不直接等同于代码回归；同一 commit 可在服务恢复后重跑。
+
+### 可选：合并前人工检查
+
+- 检查 `docs/demos.md` 中的展示命令是否仍能覆盖最新功能。
+- 检查 `.github/workflows/ci.yml` 与 `package.json` 的 `check` 脚本是否一致。
+- 对本地工作区运行敏感信息扫描，确保没有 API key、本机路径或 `.secrets/` 内容进入可提交文件。
+- 查看最新 code review / discussion 文件，确认已接受的问题要么已修复，要么已进入 roadmap。
+
+建议的手动敏感信息检查：
+
+```powershell
+git diff --check
+git ls-files .env .secrets
+rg -n "sk-[A-Za-z0-9_-]+|C:\\User[s]\\|/Users/[^/]+/|/home/[^/]+/|DEEPSEEK_(CODER_)?API_KEY\\s*=" README.md docs crates packages vscode .github .cargo Cargo.toml Cargo.lock package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json .env.example .gitignore --glob "!target/**" --glob "!node_modules/**" --glob "!.git/**" --glob "!.secrets/**"
+```
+
+如果只命中类似 `<your-deepseek-api-key>` 的占位示例，应在记录中说明；如果命中真实密钥、本机绝对路径或 `.secrets/` 已被 Git 跟踪，必须先处理再合并。
+
 ## 文件位置约定
 
 - Rust 单元测试放在对应模块的 `#[cfg(test)]` 中。
