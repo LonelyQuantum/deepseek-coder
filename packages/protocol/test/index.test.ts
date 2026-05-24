@@ -16,6 +16,9 @@ import {
   type ApproveResult,
   type CancelParams,
   type CancelResult,
+  type ListRunsParams,
+  type ListRunsResult,
+  type RunSummary,
   type RejectParams,
   type RejectResult,
   type ToolApprovalRequiredPayload,
@@ -163,6 +166,34 @@ test("approval request and decision params use stable protocol fields", () => {
   assert.equal(reject.reason, rejectResult.reason);
   assert.equal(cancelResult.state, "canceled");
   assert.equal(expiredPayload.decision, "expired");
+});
+
+test("run summary params and results use stable protocol fields", () => {
+  const params = {
+    limit: 20,
+  } satisfies ListRunsParams;
+  const summary = {
+    runId: "run_1",
+    title: "Fix README",
+    status: "completed",
+    startedAt: "1970-01-01T00:00:00.000Z",
+    updatedAt: "1970-01-01T00:00:02.000Z",
+    completedAt: "1970-01-01T00:00:02.000Z",
+    lastSeq: 8,
+    eventCount: 8,
+    mode: "edit",
+    summary: "Updated README.",
+    changedFiles: ["README.md"],
+    verificationStatus: "passed",
+  } satisfies RunSummary;
+  const result = {
+    runs: [summary],
+  } satisfies ListRunsResult;
+
+  assert.equal(params.limit, 20);
+  assert.equal(result.runs[0]?.runId, "run_1");
+  assert.equal(result.runs[0]?.status, "completed");
+  assert.equal(result.runs[0]?.lastSeq, 8);
 });
 
 test("tool registry contains every declared tool exactly once", () => {

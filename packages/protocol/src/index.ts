@@ -349,6 +349,31 @@ export interface ResumeResult {
   readonly replayStarted: boolean;
 }
 
+export type RunSummaryStatus = "running" | "completed" | "failed" | "canceled";
+
+export interface ListRunsParams {
+  readonly limit?: number;
+}
+
+export interface RunSummary {
+  readonly runId: string;
+  readonly title: string;
+  readonly status: RunSummaryStatus;
+  readonly startedAt: string;
+  readonly updatedAt: string;
+  readonly completedAt?: string;
+  readonly lastSeq: number;
+  readonly eventCount: number;
+  readonly mode?: RpcRunMode;
+  readonly summary?: string;
+  readonly changedFiles?: readonly string[];
+  readonly verificationStatus?: "passed" | "failed" | "skipped";
+}
+
+export interface ListRunsResult {
+  readonly runs: readonly RunSummary[];
+}
+
 export interface ApproveParams {
   readonly approvalId: string;
   readonly persist?: ApprovalPersistence;
