@@ -42,16 +42,15 @@
 - Agent RPC Server 双向 request loop：`agent-rpc` 已支持 newline-delimited JSON-RPC request 读取、初始化顺序检查、`agent.initialize` / `agent.sendTurn` / `agent.resume` 分发、response/error 写回，以及 handler 返回事件的 `agent.event` 有序输出。
 - RPC/CLI 实时事件输出：`AgentTurnLoop::run_turn_with_event_sink` 会在 Run Log 事件追加成功后立即调用 `TurnEventSink`；`StdioEventBridge` 已实现该接口，CLI `--json` 输出顺序与本地 `events.jsonl` 的 `seq` 一致，不再等 run 完成后批量回放。
 - CLI/RPC/TUI/VS Code 审批基础：Turn Loop 会写入 `tool.approvalRequired` 和 `tool.approvalResolved`；CLI 二进制支持 stdin/stderr 交互式 y/n 审批；RPC request loop 已分发 `agent.approve` / `agent.reject`；TypeScript 协议类型已补齐；TUI prompt 状态机和 VS Code modal approval adapter 已有测试覆盖。
-
+- 真实 RPC Turn Loop handler：`AgentTurnLoopRpcHandler` 已通过 provider factory 复用 Core Turn Loop，`agent.sendTurn` 会创建 run log、驱动 provider 和工具执行，并把结果事件交给 request loop；CLI `rpc` 子命令已提供 stdio 入口。
+- RPC 真实审批等待队列：`AgentTurnLoopRpcHandler` 会在 `tool.approvalRequired` 处登记 pending approval，后台 Turn Loop worker 等待 `agent.approve` / `agent.reject`，批准后继续执行工具，拒绝后记录 `tool.approvalResolved` 和 `run.failed`。
+- RPC 审批超时/取消：pending approval 已记录过期时间；`agent.cancel` 会取消等待审批的 active run，超时会自动解析为 expired，两者都会记录 `tool.approvalResolved` 和 `run.canceled`。
 下一步：
 
 - Run Log 写入串行化：Turn Loop / RPC 层必须保证同一 run 的事件由单 writer 或同步队列按顺序写入。
 - Run summary metadata：为 `agent.listRuns` 设计并实现 `summary.json` 或等价索引，避免每次列出 run 都扫描完整 JSONL。
-- 真实 RPC Turn Loop handler：把 CLI 当前 provider / Turn Loop 选择逻辑抽成 `AgentRpcRequestHandler` 实现，让 `agent.sendTurn` 真正创建 run 并驱动 Core。
-- RPC 真实审批等待：把 `tool.approvalRequired` 暂存为 pending approval，等待 `agent.approve` / `agent.reject` 唤醒对应 run。
-- VS Code RPC server 管理：插件启动并监管 Rust Agent RPC Server，处理进程退出、版本不匹配、workspace trust 和启动失败提示。
-- TUI RPC 入口：TUI 不直接初始化 Turn Loop，而是连接同一套 RPC request loop，消费 `agent.event` 并把审批决定发送为 `agent.approve` / `agent.reject`。
-- TUI/VS Code 审批 UI：把已实现的审批交互原语接入真实 RPC pending 队列。
+- RPC 全双工事件 writer 队列：当前 pending approval 已真实等待，但事件仍在 request 返回时 flush；后续让 `agent.sendTurn` 更早返回 accepted 并持续推送事件。
+- RPC provider/tool 取消信号：当前 `agent.cancel` 已覆盖 pending approval，后续需要取消进行中的 provider request、工具进程和 client 断连场景。
 - CLI JSON error response：让 `--json` 失败路径输出结构化 JSON-RPC error，而不是只写人类可读 stderr。
 - 真实仓库验收：使用 DeepSeek provider 在小型仓库中执行一次“读取 -> 修改 -> 验证 -> 报告”。
 - 测试替身收敛：如果 CLI fixture 场景继续增加，把 CLI fixture 与 Agent Core scripted provider 抽成共享测试 harness。
@@ -60,11 +59,19 @@ P0 不追求：
 
 - 完整 TUI。
 - 完整 VS Code Sidebar。
+- TUI/VS Code 真实前端 UI 接入。
 - MCP 生态。
 - 多 provider UI。
 - 大仓库 1M token 基准。
 
 这些功能应在核心闭环可复现之后再推进。
+
+## 跨阶段前置项
+
+这些工作已提前实现，用于压低后续前端集成风险，但不作为 Phase 1 / Agent Core MVP 的阻塞验收条件：
+
+- VS Code RPC server 管理：插件激活后可按配置启动 `deepseek-coder rpc`，发送 `agent.initialize`，转发 `agent.event`，并在进程退出或启动失败时提示用户；停止插件会关闭子进程。
+- VS Code JSON-RPC request client：`RpcServerManager.sendRequest()` 统一管理 request id、pending response、error response 和进程退出时的 pending request 清理。
 
 ## P1：编辑器核心体验
 
@@ -72,7 +79,7 @@ P0 不追求：
 
 优先事项：
 
-- 插件启动并监管 Rust Agent RPC Server。
+- 在已完成的 RPC server 管理和 request client 基础上，接入真实 Chat / Approval / Diff UI。
 - Sidebar Chat 渲染 run events。
 - 原生 diff editor 展示 patch。
 - Problems 面板诊断进入 Context Builder。

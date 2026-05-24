@@ -1,6 +1,6 @@
 # 审批模型
 
-状态：`0.1.0` 设计已确定，基础类型已实现，审批编排尚未实现。
+状态：`0.1.0` 设计已确定，基础类型、Turn Loop 审批编排、RPC pending approval 等待队列、审批超时和取消语义已实现。
 
 审批模型用于保护工作区，避免未审阅的写入、命令执行、网络访问和破坏性操作。审批是 Agent Core 的核心安全边界，不由前端单独实现。
 
@@ -100,13 +100,13 @@ pending
 
 - Rust：`crates/agent-core/src/approval.rs`。
 - TypeScript：`packages/protocol/src/index.ts`。
-- JSON-RPC 事件：`docs/json-rpc-protocol.md` 中的 `tool.approvalRequired`、`agent.approve`、`agent.reject`。
+- JSON-RPC 事件：`docs/json-rpc-protocol.md` 中的 `tool.approvalRequired`、`tool.approvalResolved`、`agent.approve`、`agent.reject`、`agent.cancel`。
 
-当前 Rust 和 TypeScript 已定义风险等级、审批要求、持久化枚举和状态机转换规则。Agent Turn Loop 已能在工具执行前写入 `tool.approvalRequired`，根据审批策略等待批准/拒绝，并写入 `tool.approvalResolved`。CLI 二进制已有 stdin/stderr prompt；`agent-rpc` request loop 已能分发 `agent.approve` / `agent.reject`；TUI 已有可测试的 prompt 状态机；VS Code 插件已有 modal approval adapter。尚未实现的是 RPC 真实 pending approval 队列、过期策略、持久批准存储、TUI/VS Code 接入真实 RPC 队列的完整界面和工具执行前的动态风险升级。
+当前 Rust 和 TypeScript 已定义风险等级、审批要求、持久化枚举和状态机转换规则。Agent Turn Loop 已能在工具执行前写入 `tool.approvalRequired`，根据审批策略等待批准、拒绝、取消或过期，并写入 `tool.approvalResolved`。CLI 二进制已有 stdin/stderr prompt；`agent-rpc` request loop 已能分发 `agent.approve` / `agent.reject` / `agent.cancel`；`AgentTurnLoopRpcHandler` 已实现单 active run 的内存 pending approval 队列：`tool.approvalRequired` 先登记为待决请求，`agent.approve` / `agent.reject` / `agent.cancel` 或默认 300 秒超时再唤醒后台 Turn Loop worker。取消和过期会写入 `run.canceled`，对应工具不会执行。TUI 已有可测试的 prompt 状态机；VS Code 插件已有 modal approval adapter。尚未实现的是持久批准存储、TUI/VS Code 接入真实 RPC 队列的完整界面和工具执行前的动态风险升级。
 
 ## 后续增强
 
-- 实现 RPC 真实审批队列：创建 pending approval、等待 `agent.approve` / `agent.reject`、处理过期、记录拒绝和阻止绕过。
+- 扩展 RPC 审批队列到多 active run、跨进程恢复和前端断连后的自动取消；当前 Phase 1 实现只支持单 active run 的内存等待队列。
 - 实现命令与 patch 的动态风险升级；例如 `shell` 的静态风险是 `exec`，但下载依赖、访问网络、删除文件或远程 git 操作必须升级到更高风险。
 - 增加 session/workspace 持久批准，但只允许明确可持久化的低风险操作使用；`network` 和 `destructive` 不允许持久化。
 - 把 TUI/VS Code 的审批 UI 原语接到真实 RPC pending 队列，消费 `tool.approvalRequired` 并发送 `agent.approve` / `agent.reject`。

@@ -1,6 +1,6 @@
 # 运行日志（Run Log）
 
-状态：Phase 1 基础存储层已实现，并已接入基础 Agent Turn Loop；RPC/CLI 接入尚未实现。
+状态：Phase 1 基础存储层已实现，并已接入基础 Agent Turn Loop、CLI `run` 和 RPC Turn Loop handler。
 
 Run Log 是 Agent Core 的本地审计记录。它记录一次 run 中发生的事件，使 CLI、TUI、VS Code 和后续调试工具能够读取同一份事实来源。Run Log 不等同于模型上下文；进入上下文前仍需要 Context Capsule 做筛选、摘要、脱敏和 token 预算。
 

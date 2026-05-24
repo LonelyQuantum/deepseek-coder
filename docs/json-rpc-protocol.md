@@ -215,7 +215,9 @@ interface SendTurnResult {
 
 Result 返回后，进度通过 `agent.event` notification 持续到达。
 
-当前 Rust request loop 已能解析 `agent.sendTurn` 并分发给 `AgentRpcRequestHandler`。`crates/agent-rpc::StdioEventBridge` 已实现 Core 的 `TurnEventSink`，可以把 Turn Loop 写入后的事件实时转换为 `agent.event`。具体如何创建 run、选择 provider、驱动 Turn Loop、在发送 accepted response 后持续运行真实任务，仍由后续真实 handler 实现。
+当前 Rust request loop 已能解析 `agent.sendTurn` 并分发给 `AgentRpcRequestHandler`。`crates/agent-rpc::AgentTurnLoopRpcHandler` 已能创建 run、选择注入的 provider factory、启动后台 Turn Loop worker，并把 Run Log 事件返回给 request loop 输出。当前实现会收集事件直到 run 结束或遇到 `tool.approvalRequired`：遇到审批时，response 后会输出审批请求事件，worker 在 pending approval 队列中等待 `agent.approve` / `agent.reject` / `agent.cancel`，并在超时时写入取消事件。完全全双工的“先发送 accepted response，再独立事件 writer 持续推送”仍是后续异步执行队列目标。
+
+当前 handler 尚未消费 `attachments`；如果请求携带 attachment，会返回 `Invalid params`。选中文件、诊断和显式上下文条目会在 Context Builder 输入协议稳定后接入。
 
 ### `agent.approve`
 
@@ -239,7 +241,7 @@ interface ApproveResult {
 - `persist` 默认是 `never`。
 - 只有明确标记为 persistable 的审批类型才能使用 `workspace` 持久化。
 - 批准已过期或未知审批时返回 `E_APPROVAL_NOT_FOUND`。
-- 当前 Rust request loop 已能解析 `agent.approve` 并分发给 `AgentRpcRequestHandler`；真实 pending approval 队列由后续真实 Turn Loop handler 实现。
+- 当前 Rust request loop 已能解析 `agent.approve` 并分发给 `AgentRpcRequestHandler`；`AgentTurnLoopRpcHandler` 已能批准当前 active run 的 pending approval，并继续输出 `tool.approvalResolved`、后续工具事件和 run 结束事件。未知、已使用或已过期的 approval 会返回 `E_APPROVAL_NOT_FOUND`。
 
 ### `agent.reject`
 
@@ -263,7 +265,7 @@ interface RejectResult {
 - Agent Core 将拒绝记录到 run log。
 - Agent Core 不得用等价操作绕过拒绝。
 - 拒绝后，Agent Core 要么请求新路径，要么继续只读工作，要么停止 run。
-- 当前 Rust request loop 已能解析 `agent.reject` 并分发给 `AgentRpcRequestHandler`；真实 pending approval 队列由后续真实 Turn Loop handler 实现。
+- 当前 Rust request loop 已能解析 `agent.reject` 并分发给 `AgentRpcRequestHandler`；`AgentTurnLoopRpcHandler` 已能拒绝当前 active run 的 pending approval，并继续输出 `tool.approvalResolved` 和 `run.failed`。未知、已使用或已过期的 approval 会返回 `E_APPROVAL_NOT_FOUND`。
 
 ### `agent.cancel`
 
@@ -274,9 +276,20 @@ interface CancelParams {
   runId: string;
   reason?: string;
 }
+
+interface CancelResult {
+  runId: string;
+  state: "canceled";
+  reason?: string;
+}
 ```
 
-取消完成后，server 发送 `run.canceled`。
+规则：
+
+- 当前 Rust request loop 已能解析 `agent.cancel` 并分发给 `AgentRpcRequestHandler`。
+- Phase 1 实现支持取消正在等待审批的 active run。取消会把对应 pending approval 解析为 `decision: "canceled"`，随后写入 `run.canceled`。
+- 当前内存队列默认审批超时为 300 秒；超时会把 approval 解析为 `decision: "expired"`，随后写入 `run.canceled`。测试和嵌入方可以通过 handler 配置缩短该时间。
+- 当前还没有 provider request、tool process 和完全全双工 writer 的强制取消信号；这部分属于后续异步 run 执行队列。
 
 ### `agent.resume`
 
@@ -303,7 +316,7 @@ interface ResumeResult {
 
 - 如果提供 `replayFromSeq`，server 从该 seq 重新发送事件。
 - 如果本地 run log 不存在，返回 `E_RUN_NOT_FOUND`。
-- 当前 Rust request loop 已能解析 `agent.resume` 并分发给 handler；真实 Run Log 重放策略由后续 handler 实现。
+- 当前 Rust request loop 已能解析 `agent.resume` 并分发给 handler；`AgentTurnLoopRpcHandler` 已能从 Run Log 按 `replayFromSeq` 重放事件。
 
 ### `agent.listRuns`
 
@@ -377,6 +390,10 @@ interface RunFailed {
 
 ```ts
 interface RunCanceled {
+  code?: string;
+  message?: string;
+  approvalId?: string;
+  toolCallId?: string;
   reason?: string;
 }
 ```
@@ -520,12 +537,12 @@ interface ToolApprovalResolved {
   approvalId: string;
   toolCallId: string;
   toolName: ToolName;
-  decision: "approved" | "rejected";
+  decision: "approved" | "rejected" | "canceled" | "expired";
   reason?: string;
 }
 ```
 
-该事件记录用户或策略对审批请求的决定。`decision: "approved"` 后续应进入 `tool.started`；`decision: "rejected"` 后当前工具调用不得执行，run 可以失败、继续只读工作或让模型请求不同操作。CLI 当前会把 prompt 的批准/拒绝写入该事件；RPC handler 接入后也必须写入同等事件。
+该事件记录用户、策略或 RPC 队列对审批请求的决定。`decision: "approved"` 后续应进入 `tool.started`；`decision: "rejected"` 后当前工具调用不得执行，run 可以失败、继续只读工作或让模型请求不同操作；`decision: "canceled"` 和 `decision: "expired"` 表示 active run 被用户取消或审批超时，后续必须写入 `run.canceled`，对应工具不得执行。CLI 当前会把 prompt 的批准/拒绝写入该事件；RPC handler 的 pending approval 队列会在 `agent.approve` / `agent.reject` / `agent.cancel` 或超时后写入同等事件。
 
 ### `tool.started`
 

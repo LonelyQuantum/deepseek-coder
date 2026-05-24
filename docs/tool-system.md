@@ -272,7 +272,7 @@ pub struct ToolDefinition {
 - TypeScript 协议类型：`packages/protocol/src/index.ts`。
 - 共享协议 fixture：`docs/protocol/tool-registry.v1.json`。
 
-`crates/agent-rpc` 已实现 Run Log 事件到 `agent.event` notification 的基础桥接，并已分发 `agent.approve` / `agent.reject`。后续真实 RPC handler 会继续把工具请求、审批请求、审批决定和工具结果暴露给 CLI/TUI/VS Code。
+`crates/agent-rpc` 已实现 Run Log 事件到 `agent.event` notification 的基础桥接，并已分发 `agent.approve` / `agent.reject`。真实 RPC handler 已能把工具请求、审批请求、审批决定和工具结果暴露给 CLI/TUI/VS Code；TUI/VS Code 仍需要把已有 UI 原语接入该 pending 队列。
 
 ## 协议一致性测试
 
@@ -311,7 +311,7 @@ fixture 中的 `tools` 被当作无序集合校验；测试会按工具名规整
 
 当前实现暂不包含 workspace manifest、LSP diagnostics 和 plan update 的执行逻辑；它们仍只有 schema 和静态风险定义。
 
-当前执行层已接入基础 Agent Turn Loop、审批策略和 run log。写入与命令执行会触发审批请求，并记录 `tool.approvalResolved`；CLI 二进制可以通过 stdin/stderr 做真实 y/n 审批，测试可使用显式 auto-approve 策略验证已批准路径。Run Log 事件已能通过基础 RPC 桥接发送给前端；TUI 和 VS Code 已有可测试的审批交互原语。RPC 真实 pending 审批等待、TUI/VS Code 接入真实 RPC 队列的完整 UI 和网络/破坏性风险升级仍需要后续实现。
+当前执行层已接入基础 Agent Turn Loop、审批策略和 run log。写入与命令执行会触发审批请求，并记录 `tool.approvalResolved`；CLI 二进制可以通过 stdin/stderr 做真实 y/n 审批，测试可使用显式 auto-approve 策略验证已批准路径。Run Log 事件已能通过基础 RPC 桥接发送给前端；`AgentTurnLoopRpcHandler` 已能通过 `agent.sendTurn` 真实驱动 Core，并在 `tool.approvalRequired` 处等待 `agent.approve` / `agent.reject` / `agent.cancel` 或审批超时。TUI/VS Code 接入真实 RPC 队列的完整 UI、provider/tool 执行中取消和网络/破坏性风险升级仍需要后续实现。
 
 ## 后续增强
 
@@ -320,7 +320,7 @@ fixture 中的 `tools` 被当作无序集合校验；测试会按工具名规整
 - 为 Rust 和 TypeScript 的每个工具补齐具体 `resultSchema`，替换当前通用 `statusResultSchema`。
 - 将当前 `docs/protocol/tool-registry.v1.json` 扩展为更完整的 schema fixture 或代码生成入口，避免协议文档、Rust 类型和 `packages/protocol` 分叉。
 - 如果 fixture 或代码生成入口继续扩展，再引入 workspace 级路径元数据或 build script，避免多个 crate 复制相对路径。
-- 在真实 RPC Turn Loop handler 中接入工具请求、pending 审批队列、工具结果和 patch 事件的实时发送与重放。
+- 在 RPC pending 审批队列上继续补充全双工实时发送、审批过期、取消、多 active run 关联和重放语义。
 
 ### 路径与敏感信息
 

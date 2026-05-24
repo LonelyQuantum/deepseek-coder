@@ -1,6 +1,6 @@
 # Agent Turn Loop
 
-状态：Phase 1 基础编排、TurnProvider async / streaming 边界、真实 DeepSeek 文本 streaming 联网验收、streaming tool call 增量拼装验证、基础 RPC 事件桥接、双向 request loop、`TurnEventSink` 实时事件输出和 CLI 交互式审批已实现；TUI/VS Code 已有审批交互原语；真实 RPC Turn Loop handler 和 RPC pending approval 队列尚未实现。
+状态：Phase 1 基础编排、TurnProvider async / streaming 边界、真实 DeepSeek 文本 streaming 联网验收、streaming tool call 增量拼装验证、基础 RPC 事件桥接、双向 request loop、真实 RPC Turn Loop handler、`TurnEventSink` 实时事件输出、CLI 交互式审批、RPC pending approval 等待队列、审批超时和取消语义已实现；TUI/VS Code 已有审批交互原语，尚未接入真实 RPC 队列。
 
 Agent Turn Loop 是 Agent Core 的回合编排层。它负责把已经实现的 Context Builder、`reasoning_content` 状态机、provider 边界、工具执行、审批和 Run Log 串成同一条可复现事件流。
 
@@ -15,7 +15,7 @@ crates/agent-core/src/turn_loop.rs
 - `AgentTurnLoop`：持有 provider、审批策略、工具执行器、reasoning 状态机和回合配置。
 - `TurnProvider`：异步 streaming provider trait。`complete_stream` 返回 `TurnProviderEvent` 流，provider 可以先发送 `AssistantDelta`，再发送唯一的 `Completed` 响应。
 - `TurnProviderEvent`：当前包含 `AssistantDelta` 和 `Completed`。`AssistantDelta` 只用于前端展示和 run log 增量；`Completed` 必须包含完整 content、`reasoning_content` 和 tool calls，供后续 reasoning replay 与工具执行使用。
-- `ApprovalPolicy`：审批策略 trait。策略可以批准、拒绝，或返回策略错误；Turn Loop 会把批准/拒绝写入 `tool.approvalResolved`。
+- `ApprovalPolicy`：审批策略 trait。策略可以批准、拒绝、取消、过期，或返回策略错误；Turn Loop 会把决定写入 `tool.approvalResolved`。
 - `RejectAllApprovalPolicy`：默认拒绝所有需要审批的工具，避免写入和命令被静默执行。
 - `AutoApprovePolicy`：测试用策略，用于验证已批准工具的执行路径。
 - `AgentTurnInput` / `AgentTurnOutcome`：最小 turn 输入与结果。
@@ -83,6 +83,8 @@ DeepSeek streaming tool call delta 在 CLI provider wrapper 内通过 `ChatToolC
 
 命令风险分类器尚未实现。也就是说，`shell` 当前只按静态 `exec` 风险处理，不会识别 `git push`、依赖安装、删除或发布命令并升级为 `network` / `destructive`。该能力应在审批链路接入 CLI/RPC 后实现。
 
+RPC handler 当前提供单 active run 的真实审批等待：当 `tool.approvalRequired` 写入 run log 后，RPC 层会把该请求登记为 pending approval，后台 Turn Loop worker 在 `ApprovalPolicy::decide` 中等待。前端发送 `agent.approve` 会继续进入 `tool.started` 和工具执行；发送 `agent.reject` 会写入拒绝事件并使当前 run 失败；发送 `agent.cancel` 会写入 `tool.approvalResolved(decision="canceled")` 和 `run.canceled`；超过默认 300 秒没有决定会写入 `tool.approvalResolved(decision="expired")` 和 `run.canceled`。这个实现解决了真实审批等待、取消和超时，但还没有全双工事件 writer，也不能强制取消已经进入中的 provider 请求或工具进程。
+
 ## 当前测试覆盖
 
 基础 Turn Loop 测试使用 fake provider 覆盖：
@@ -99,9 +101,8 @@ DeepSeek streaming tool call delta 在 CLI provider wrapper 内通过 `ChatToolC
 ## 尚未实现
 
 - tool call 参数的 JSON Schema 校验层；当前由具体 Rust 参数类型反序列化保证基础结构。
-- 真实 RPC Turn Loop handler；当前 `agent-rpc` 已有 `AgentRpcRequestHandler` 边界和 `agent.approve` / `agent.reject` 分发，但尚未把 CLI provider / Turn Loop 选择逻辑抽成共享实现。
-- Agent RPC Server 对 approval request 的真实 pending 队列、异步等待和取消。
-- 真实 RPC Turn Loop handler 的事件发送队列；当前 `StdioEventBridge` 已可作为 `TurnEventSink` 使用，但 request loop 还没有把 provider / Turn Loop 选择逻辑抽成共享 handler。
+- 全双工异步 RPC run 执行、独立事件发送队列和取消；当前 `AgentTurnLoopRpcHandler` 已有后台 worker 和审批等待，但事件仍在 request 返回时由 request loop flush。
+- 审批过期、多 active run 关联和持久批准存储。
 - run summary metadata。
 - 命令风险分类器和更强 sandbox。
 - RPC request loop 里的 verification 编排；CLI `run` 已支持用户显式 `--verify`。
