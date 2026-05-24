@@ -1416,6 +1416,40 @@ mod tests {
     }
 
     #[test]
+    fn apply_patch_rejects_partial_multi_file_failure_without_modifying_files() {
+        let workspace = TestWorkspace::new();
+        workspace.write("README.md", "old\n");
+        workspace.write("CHANGELOG.md", "current\n");
+        let tools = WorkspaceToolExecutor::new(workspace.path()).expect("workspace should open");
+
+        let error = tools
+            .apply_patch(ApplyPatchArgs {
+                unified_diff: concat!(
+                    "--- a/README.md\n",
+                    "+++ b/README.md\n",
+                    "@@ -1 +1 @@\n",
+                    "-old\n",
+                    "+new\n",
+                    "--- a/CHANGELOG.md\n",
+                    "+++ b/CHANGELOG.md\n",
+                    "@@ -1 +1 @@\n",
+                    "-missing\n",
+                    "+updated\n",
+                )
+                .to_owned(),
+                expected_files: vec!["README.md".to_owned(), "CHANGELOG.md".to_owned()],
+            })
+            .expect_err("second file hunk mismatch should fail");
+
+        assert!(matches!(
+            error,
+            ToolExecutionError::PatchHunkMismatch { .. }
+        ));
+        assert_eq!(workspace.read("README.md"), "old\n");
+        assert_eq!(workspace.read("CHANGELOG.md"), "current\n");
+    }
+
+    #[test]
     fn shell_runs_non_interactive_command() {
         let workspace = TestWorkspace::new();
         let tools = WorkspaceToolExecutor::new(workspace.path()).expect("workspace should open");
