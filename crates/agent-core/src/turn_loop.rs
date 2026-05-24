@@ -94,19 +94,12 @@ where
                 AgentTurnLoopError::RunLog(_) | AgentTurnLoopError::EventSink(_)
             )
         {
-            let append_result = append_turn_event(
-                run_log,
-                event_sink,
-                "run.failed",
-                Some(turn_id),
-                json!({
-                    "code": error.code(),
-                    "message": error.to_string(),
-                }),
-            );
+            let (event_type, payload) = terminal_error_event(error);
+            let append_result =
+                append_turn_event(run_log, event_sink, event_type, Some(turn_id), payload);
             if let Err(append_error) = append_result {
                 eprintln!(
-                    "failed to append run.failed event after `{}`: {append_error}",
+                    "failed to append {event_type} event after `{}`: {append_error}",
                     error.code()
                 );
             }
@@ -606,6 +599,34 @@ where
                     reason,
                 })
             }
+            ApprovalDecision::Canceled { reason } => {
+                append_turn_event(
+                    run_log,
+                    event_sink,
+                    "tool.approvalResolved",
+                    Some(turn_id.to_owned()),
+                    approval_resolved_payload(&request, "canceled", Some(reason.as_str())),
+                )?;
+                Err(AgentTurnLoopError::ApprovalCanceled {
+                    approval_id: request.approval_id,
+                    tool_call_id: request.tool_call_id,
+                    reason,
+                })
+            }
+            ApprovalDecision::Expired { reason } => {
+                append_turn_event(
+                    run_log,
+                    event_sink,
+                    "tool.approvalResolved",
+                    Some(turn_id.to_owned()),
+                    approval_resolved_payload(&request, "expired", Some(reason.as_str())),
+                )?;
+                Err(AgentTurnLoopError::ApprovalExpired {
+                    approval_id: request.approval_id,
+                    tool_call_id: request.tool_call_id,
+                    reason,
+                })
+            }
         }
     }
 }
@@ -855,6 +876,8 @@ pub struct TurnApprovalRequest {
 pub enum ApprovalDecision {
     Approved,
     Rejected { reason: String },
+    Canceled { reason: String },
+    Expired { reason: String },
 }
 
 pub trait ApprovalPolicy {
@@ -952,6 +975,18 @@ pub enum AgentTurnLoopError {
         tool_call_id: String,
         reason: String,
     },
+    #[error("approval `{approval_id}` canceled for tool call `{tool_call_id}`: {reason}")]
+    ApprovalCanceled {
+        approval_id: String,
+        tool_call_id: String,
+        reason: String,
+    },
+    #[error("approval `{approval_id}` expired for tool call `{tool_call_id}`: {reason}")]
+    ApprovalExpired {
+        approval_id: String,
+        tool_call_id: String,
+        reason: String,
+    },
     #[error("approval policy failed: {0}")]
     ApprovalPolicy(#[from] ApprovalPolicyError),
     #[error("model did not finish after {max_model_turns} turns")]
@@ -977,6 +1012,8 @@ impl AgentTurnLoopError {
             Self::Serialization(_) => "E_SERIALIZATION",
             Self::MissingAssistantReasoningContent => "E_MISSING_REASONING_CONTENT",
             Self::ApprovalRejected { .. } => "E_APPROVAL_REJECTED",
+            Self::ApprovalCanceled { .. } => "E_APPROVAL_CANCELED",
+            Self::ApprovalExpired { .. } => "E_APPROVAL_EXPIRED",
             Self::ApprovalPolicy(_) => "E_APPROVAL_POLICY",
             Self::MaxModelTurnsExceeded { .. } => "E_MAX_MODEL_TURNS",
         }
@@ -1135,9 +1172,44 @@ fn approval_resolved_payload(
     Value::Object(payload)
 }
 
+fn terminal_error_event(error: &AgentTurnLoopError) -> (&'static str, Value) {
+    match error {
+        AgentTurnLoopError::ApprovalCanceled {
+            approval_id,
+            tool_call_id,
+            reason,
+        }
+        | AgentTurnLoopError::ApprovalExpired {
+            approval_id,
+            tool_call_id,
+            reason,
+        } => (
+            "run.canceled",
+            json!({
+                "code": error.code(),
+                "message": error.to_string(),
+                "approvalId": approval_id,
+                "toolCallId": tool_call_id,
+                "reason": reason,
+            }),
+        ),
+        _ => (
+            "run.failed",
+            json!({
+                "code": error.code(),
+                "message": error.to_string(),
+            }),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::{collections::VecDeque, fs};
+    use std::{
+        collections::VecDeque,
+        fs,
+        sync::atomic::{AtomicU64, Ordering},
+    };
 
     use futures_util::stream;
     use serde_json::json;
@@ -1154,6 +1226,8 @@ mod tests {
         TurnProviderEvent, TurnProviderFuture, TurnProviderRequest, TurnProviderResponse,
         TurnProviderStream, turn_provider_response_stream,
     };
+
+    static NEXT_WORKSPACE_ID: AtomicU64 = AtomicU64::new(1);
 
     #[tokio::test]
     async fn turn_loop_runs_read_tool_and_continues_to_final_answer() {
@@ -1480,9 +1554,11 @@ mod tests {
 
     impl TestWorkspace {
         fn new() -> Self {
+            let id = NEXT_WORKSPACE_ID.fetch_add(1, Ordering::Relaxed);
             let unique = format!(
-                "deepseek-coder-turn-loop-test-{}-{}",
+                "deepseek-coder-turn-loop-test-{}-{}-{}",
                 std::process::id(),
+                id,
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .expect("clock should be after epoch")
