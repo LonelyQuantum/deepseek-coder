@@ -10,6 +10,7 @@ use std::{
 
 use deepseek_coder_agent_core::{
     AGENT_METADATA,
+    cancellation::CancellationToken,
     provider::deepseek_api::{
         ChatCompletionStream, ChatFunctionDefinition, ChatTool, ChatToolCall,
         ChatToolCallAccumulator, DeepSeekApiAdapter, DeepSeekApiConfig, StreamEvent,
@@ -796,13 +797,17 @@ impl TurnProvider for DeepSeekTurnProvider {
                 .await
                 .map_err(|error| TurnProviderError::new(error.to_string()))?;
 
-            Ok(deepseek_chat_stream_to_turn_provider_stream(stream))
+            Ok(deepseek_chat_stream_to_turn_provider_stream(
+                stream,
+                request.cancellation_token,
+            ))
         })
     }
 }
 
 fn deepseek_chat_stream_to_turn_provider_stream(
     mut stream: ChatCompletionStream,
+    cancellation_token: CancellationToken,
 ) -> TurnProviderStream {
     Box::pin(async_stream::try_stream! {
         let mut content = String::new();
@@ -810,6 +815,9 @@ fn deepseek_chat_stream_to_turn_provider_stream(
         let mut tool_call_accumulator = ChatToolCallAccumulator::new();
 
         while let Some(event) = stream.next().await {
+            if cancellation_token.is_canceled() {
+                Err(TurnProviderError::new(cancellation_token.cancellation_reason()))?;
+            }
             match event.map_err(|error| TurnProviderError::new(error.to_string()))? {
                 StreamEvent::Chunk(chunk) => {
                     for choice in chunk.choices {
@@ -845,6 +853,12 @@ fn deepseek_chat_stream_to_turn_provider_stream(
                 }
                 StreamEvent::Done => break,
             }
+            if cancellation_token.is_canceled() {
+                Err(TurnProviderError::new(cancellation_token.cancellation_reason()))?;
+            }
+        }
+        if cancellation_token.is_canceled() {
+            Err(TurnProviderError::new(cancellation_token.cancellation_reason()))?;
         }
 
         let tool_calls = tool_call_accumulator
@@ -948,8 +962,13 @@ impl FixtureProvider {
 }
 
 impl TurnProvider for FixtureProvider {
-    fn complete_stream(&mut self, _request: TurnProviderRequest) -> TurnProviderFuture<'_> {
+    fn complete_stream(&mut self, request: TurnProviderRequest) -> TurnProviderFuture<'_> {
         Box::pin(async move {
+            if request.cancellation_token.is_canceled() {
+                return Err(TurnProviderError::new(
+                    request.cancellation_token.cancellation_reason(),
+                ));
+            }
             let response = self
                 .responses
                 .pop_front()
@@ -1121,6 +1140,7 @@ mod tests {
     use std::fs;
 
     use deepseek_coder_agent_core::{
+        cancellation::CancellationToken,
         provider::deepseek_api::{
             ChatCompletionChunk, ChatCompletionChunkChoice, ChatCompletionDelta,
             ChatFunctionCallDelta, ChatToolCallDelta, ChatToolType, StreamEvent,
@@ -1497,7 +1517,8 @@ mod tests {
             Ok(StreamEvent::Chunk(chat_chunk(Some("lo"), None))),
             Ok(StreamEvent::Done),
         ]));
-        let mut stream = deepseek_chat_stream_to_turn_provider_stream(stream);
+        let mut stream =
+            deepseek_chat_stream_to_turn_provider_stream(stream, CancellationToken::new());
         let runtime = tokio::runtime::Builder::new_current_thread()
             .build()
             .expect("test runtime should build");
@@ -1548,7 +1569,8 @@ mod tests {
             ]))),
             Ok(StreamEvent::Done),
         ]));
-        let mut stream = deepseek_chat_stream_to_turn_provider_stream(stream);
+        let mut stream =
+            deepseek_chat_stream_to_turn_provider_stream(stream, CancellationToken::new());
         let runtime = tokio::runtime::Builder::new_current_thread()
             .build()
             .expect("test runtime should build");
@@ -1586,7 +1608,8 @@ mod tests {
             ]))),
             Ok(StreamEvent::Done),
         ]));
-        let mut stream = deepseek_chat_stream_to_turn_provider_stream(stream);
+        let mut stream =
+            deepseek_chat_stream_to_turn_provider_stream(stream, CancellationToken::new());
         let runtime = tokio::runtime::Builder::new_current_thread()
             .build()
             .expect("test runtime should build");
