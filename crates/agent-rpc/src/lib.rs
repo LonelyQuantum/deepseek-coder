@@ -734,6 +734,30 @@ where
         }
     }
 
+    fn handle_cancel<W>(
+        &mut self,
+        id: Value,
+        params: Option<Value>,
+        writer: &mut W,
+    ) -> Result<(), AgentRpcError>
+    where
+        W: Write,
+    {
+        let params =
+            match parse_params::<CancelParams>(params, CANCEL_METHOD.qualified_name().as_str()) {
+                Ok(params) => params,
+                Err(error) => return write_error(writer, id, error),
+            };
+
+        match self.handler.cancel(params) {
+            Ok(output) => {
+                write_json_line(writer, &JsonRpcResponse::new(id, output.result))?;
+                emit_run_log_events(writer, &output.events)
+            }
+            Err(error) => write_error(writer, id, error.into_error_object()),
+        }
+    }
+
     fn handle_send_turn<W>(
         &mut self,
         id: Value,
