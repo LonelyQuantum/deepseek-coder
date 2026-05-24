@@ -1058,16 +1058,16 @@ fn parse_unified_diff(diff: &str) -> Result<ParsedPatch, ToolExecutionError> {
                     continue;
                 }
 
-                let (marker, text) = line.split_at(1);
-                let patch_line = match marker {
-                    " " => PatchLine::Context(text.to_owned()),
-                    "-" => PatchLine::Remove(text.to_owned()),
-                    "+" => PatchLine::Add(text.to_owned()),
-                    _ => {
-                        return Err(ToolExecutionError::InvalidPatch(format!(
-                            "invalid patch line `{line}`"
-                        )));
-                    }
+                let patch_line = if let Some(text) = line.strip_prefix(' ') {
+                    PatchLine::Context(text.to_owned())
+                } else if let Some(text) = line.strip_prefix('-') {
+                    PatchLine::Remove(text.to_owned())
+                } else if let Some(text) = line.strip_prefix('+') {
+                    PatchLine::Add(text.to_owned())
+                } else {
+                    return Err(ToolExecutionError::InvalidPatch(format!(
+                        "invalid patch line `{line}`"
+                    )));
                 };
                 hunk_lines.push(patch_line);
                 index += 1;
@@ -1371,6 +1371,28 @@ mod tests {
             error,
             ToolExecutionError::PatchFileMismatch { .. }
         ));
+    }
+
+    #[test]
+    fn apply_patch_rejects_empty_hunk_lines_without_panicking() {
+        let workspace = TestWorkspace::new();
+        workspace.write("README.md", "old\n");
+        let tools = WorkspaceToolExecutor::new(workspace.path()).expect("workspace should open");
+
+        let error = tools
+            .apply_patch(ApplyPatchArgs {
+                unified_diff: concat!(
+                    "--- a/README.md\n",
+                    "+++ b/README.md\n",
+                    "@@ -1 +1 @@\n",
+                    "\n",
+                )
+                .to_owned(),
+                expected_files: vec!["README.md".to_owned()],
+            })
+            .expect_err("malformed hunk line should fail");
+
+        assert!(matches!(error, ToolExecutionError::InvalidPatch(_)));
     }
 
     #[test]
