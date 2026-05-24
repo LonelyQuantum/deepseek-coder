@@ -19,6 +19,8 @@
 - `json-rpc-protocol.md`：前端与 Rust RPC Server 之间的内部协议。
 - `rpc-server.md`：Agent RPC Server stdio 事件桥接。
 - `cli.md`：CLI `run` 最小闭环。
+- `testing.md`：开发测试与结果展示测试的分组和短命令。
+- `demos.md`：展示型 demo 的集中清单、运行命令和预期输出。
 - `run-log.md`：本地运行日志、事件存储和回放基础。
 - `context-capsule.md`：长上下文构建和缓存友好的 prompt 布局。
 - `tool-system.md`：内置工具注册、schema 和执行结果格式。

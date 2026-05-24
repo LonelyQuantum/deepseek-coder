@@ -150,6 +150,31 @@ deepseek-coder run --provider fixture --fixture readme --json "Read README"
 deepseek-coder run --provider deepseek --mode ask "Summarize this workspace"
 ```
 
+## Agent 交互演示测试
+
+如果想直接观察 Agent 的交互过程，可以运行结果展示型 integration test。它会把 JSON-RPC event 转成人类可读转录，并打印最终文件内容和 `summary.json`。测试分组约定见 `testing.md`，完整 demo 清单见 `demos.md`。
+
+本地 fixture 演示不联网，稳定展示工具调用、审批、补丁、验证和 run log：
+
+```powershell
+cargo demo
+```
+
+真实 DeepSeek 演示默认 ignored，需要显式开启 live tests：
+
+```powershell
+$env:DEEPSEEK_CODER_LIVE_TESTS = "1"
+cargo demo-live
+```
+
+该演示默认使用项目默认模型 `deepseek-v4-pro`，以提高工具参数遵循度；需要临时改模型时可以设置 `DEEPSEEK_AGENT_DEMO_MODEL`。
+
+演示测试默认使用临时工作区并在结束后清理。如果需要保留工作区继续查看文件和 run log，可以先设置：
+
+```powershell
+$env:DEEPSEEK_CODER_KEEP_DEMO_WORKSPACE = "1"
+```
+
 真实 DeepSeek streaming 验收：
 
 ```powershell
