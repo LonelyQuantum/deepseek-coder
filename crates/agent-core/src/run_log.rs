@@ -841,10 +841,7 @@ fn redact_secret_like_tokens(text: &str) -> String {
 mod tests {
     use std::{
         fs,
-        sync::{
-            Arc, Barrier,
-            atomic::{AtomicU64, Ordering},
-        },
+        sync::{Arc, Barrier},
         thread,
     };
 
@@ -854,12 +851,11 @@ mod tests {
         REDACTED_VALUE, RUNS_DIR, RunLogError, RunLogStore, RunLogWriter, RunSummaryStatus,
         SerializedRunLog,
     };
-
-    static NEXT_WORKSPACE_ID: AtomicU64 = AtomicU64::new(1);
+    use crate::test_helpers::TestWorkspace;
 
     #[test]
     fn run_log_appends_and_loads_events_with_monotonic_sequences() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("run-log");
         let store = RunLogStore::new(workspace.path()).expect("store should open");
         let mut run = store.create_run("run_test").expect("run should be created");
 
@@ -907,7 +903,7 @@ mod tests {
 
     #[test]
     fn run_log_redacts_sensitive_payload_fields_and_secret_like_strings() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("run-log");
         let store = RunLogStore::new(workspace.path()).expect("store should open");
         let mut run = store
             .create_run("run_redaction")
@@ -942,7 +938,7 @@ mod tests {
 
     #[test]
     fn run_log_rejects_unsafe_run_ids_and_state_dirs() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("run-log");
         let store = RunLogStore::new(workspace.path()).expect("store should open");
 
         assert!(matches!(
@@ -957,7 +953,7 @@ mod tests {
 
     #[test]
     fn run_log_rejects_sequence_gaps() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("run-log");
         let store = RunLogStore::new(workspace.path()).expect("store should open");
         let mut run = store
             .create_run("run_corrupt")
@@ -984,7 +980,7 @@ mod tests {
 
     #[test]
     fn run_log_summary_tracks_terminal_status_and_metadata() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("run-log");
         let store = RunLogStore::new(workspace.path()).expect("store should open");
         let mut run = store
             .create_run("run_summary")
@@ -1046,7 +1042,7 @@ mod tests {
 
     #[test]
     fn run_log_lists_summaries_by_recent_update_without_scanning_events() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("run-log");
         let store = RunLogStore::new(workspace.path()).expect("store should open");
         let mut older = store
             .create_run("run_older")
@@ -1079,7 +1075,7 @@ mod tests {
 
     #[test]
     fn serialized_run_log_serializes_concurrent_appenders() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("run-log");
         let store = RunLogStore::new(workspace.path()).expect("store should open");
         let writer = SerializedRunLog::new(
             store
@@ -1141,37 +1137,5 @@ mod tests {
                 .next_seq(),
             9
         );
-    }
-
-    struct TestWorkspace {
-        path: std::path::PathBuf,
-    }
-
-    impl TestWorkspace {
-        fn new() -> Self {
-            let id = NEXT_WORKSPACE_ID.fetch_add(1, Ordering::Relaxed);
-            let unique = format!(
-                "deepseek-coder-run-log-test-{}-{}-{}",
-                std::process::id(),
-                id,
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .expect("clock should be after epoch")
-                    .as_nanos()
-            );
-            let path = std::env::temp_dir().join(unique);
-            fs::create_dir_all(&path).expect("temp workspace should be created");
-            Self { path }
-        }
-
-        fn path(&self) -> &std::path::Path {
-            &self.path
-        }
-    }
-
-    impl Drop for TestWorkspace {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.path);
-        }
     }
 }

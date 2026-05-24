@@ -2017,6 +2017,7 @@ mod tests {
     use deepseek_coder_agent_core::{
         provider::deepseek_api::ChatToolCall,
         run_log::{RunLogEvent, RunLogStore},
+        test_helpers::TestWorkspace,
         turn_loop::{
             AgentTurnInput, AgentTurnLoopConfig, TurnEventSink, TurnProvider, TurnProviderError,
             TurnProviderFuture, TurnProviderRequest, TurnProviderResponse,
@@ -2024,7 +2025,7 @@ mod tests {
         },
     };
     use serde_json::{Value, json};
-    use std::{collections::VecDeque, fs, io::Cursor, thread, time::Duration};
+    use std::{collections::VecDeque, io::Cursor, thread, time::Duration};
 
     use super::{
         APPROVE_METHOD, AgentInitializeParams, AgentInitializeResult, AgentRpcHandlerError,
@@ -2487,7 +2488,7 @@ mod tests {
 
     #[test]
     fn turn_loop_rpc_handler_runs_send_turn_and_replays_events() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("rpc");
         let input = [
             json!({
                 "jsonrpc": "2.0",
@@ -2585,7 +2586,7 @@ mod tests {
 
     #[test]
     fn turn_loop_rpc_handler_waits_for_approval_and_applies_after_approve() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("rpc");
         workspace.write("README.md", "old\n");
         let input = [
             json!({
@@ -2664,7 +2665,7 @@ mod tests {
 
     #[test]
     fn turn_loop_rpc_handler_rejects_pending_approval_without_running_tool() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("rpc");
         workspace.write("README.md", "old\n");
         let input = [
             json!({
@@ -2726,7 +2727,7 @@ mod tests {
 
     #[test]
     fn turn_loop_rpc_handler_cancels_pending_approval_without_running_tool() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("rpc");
         workspace.write("README.md", "old\n");
         let input = [
             json!({
@@ -2793,7 +2794,7 @@ mod tests {
 
     #[test]
     fn turn_loop_rpc_handler_cancels_provider_with_signal() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("rpc");
         let store = RunLogStore::new(workspace.path()).expect("store should open");
         let run_log = store
             .create_run("run_rpc_provider_cancel")
@@ -2837,7 +2838,7 @@ mod tests {
 
     #[test]
     fn turn_loop_rpc_handler_expires_pending_approval_without_running_tool() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("rpc");
         workspace.write("README.md", "old\n");
         let mut handler = AgentTurnLoopRpcHandler::new(patch_provider_factory)
             .with_approval_timeout(Duration::from_millis(20));
@@ -2901,7 +2902,7 @@ mod tests {
 
     #[test]
     fn turn_loop_rpc_handler_rejects_attachments_and_pending_approval_methods() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("rpc");
         let mut handler = AgentTurnLoopRpcHandler::new(final_provider_factory);
         handler
             .initialize(
@@ -3234,54 +3235,6 @@ mod tests {
                     request.cancellation_token.cancellation_reason(),
                 ))
             })
-        }
-    }
-
-    struct TestWorkspace {
-        path: std::path::PathBuf,
-        path_string: String,
-    }
-
-    impl TestWorkspace {
-        fn new() -> Self {
-            let unique = format!(
-                "deepseek-coder-rpc-test-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .expect("clock should be after epoch")
-                    .as_nanos()
-            );
-            let path = std::env::temp_dir().join(unique);
-            fs::create_dir_all(&path).expect("temp workspace should be created");
-            let path_string = path.display().to_string();
-            Self { path, path_string }
-        }
-
-        fn path(&self) -> &std::path::Path {
-            &self.path
-        }
-
-        fn path_str(&self) -> &str {
-            &self.path_string
-        }
-
-        fn write(&self, relative_path: &str, content: &str) {
-            let path = self.path.join(relative_path);
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent).expect("parent directory should be created");
-            }
-            fs::write(path, content).expect("workspace file should be written");
-        }
-
-        fn read(&self, relative_path: &str) -> String {
-            fs::read_to_string(self.path.join(relative_path)).expect("workspace file should read")
-        }
-    }
-
-    impl Drop for TestWorkspace {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.path);
         }
     }
 }

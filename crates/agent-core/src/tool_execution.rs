@@ -1260,8 +1260,6 @@ fn diff_file_paths(diff: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, process::Command};
-
     use super::{
         ApplyPatchArgs, GitDiffArgs, GitStatusArgs, ReadFileArgs, SearchArgs, ShellArgs,
         ShellResult, ToolExecutionError, ToolStatus, WorkspaceToolExecutor,
@@ -1269,10 +1267,11 @@ mod tests {
     };
     use crate::cancellation::CancellationToken;
     use crate::run_log::REDACTED_VALUE;
+    use crate::test_helpers::TestWorkspace;
 
     #[test]
     fn read_file_reads_full_file_and_line_range() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("tool-execution");
         workspace.write("src/main.rs", "fn main() {}\nprintln!(\"hi\");\n");
         let tools = WorkspaceToolExecutor::new(workspace.path()).expect("workspace should open");
 
@@ -1298,7 +1297,7 @@ mod tests {
 
     #[test]
     fn read_file_rejects_secret_paths_and_parent_traversal() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("tool-execution");
         workspace.write(".secrets/deepseek-api-key", "secret");
         let tools = WorkspaceToolExecutor::new(workspace.path()).expect("workspace should open");
 
@@ -1322,7 +1321,7 @@ mod tests {
 
     #[test]
     fn search_finds_text_and_excludes_secret_paths() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("tool-execution");
         workspace.write("README.md", "hello visible\n");
         workspace.write(".secrets/token.txt", "hello hidden\n");
         let tools = WorkspaceToolExecutor::new(workspace.path()).expect("workspace should open");
@@ -1343,7 +1342,7 @@ mod tests {
 
     #[test]
     fn apply_patch_modifies_expected_files_and_returns_reverse_patch() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("tool-execution");
         workspace.write("README.md", "old\n");
         let tools = WorkspaceToolExecutor::new(workspace.path()).expect("workspace should open");
 
@@ -1369,7 +1368,7 @@ mod tests {
 
     #[test]
     fn apply_patch_rejects_unexpected_files() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("tool-execution");
         workspace.write("README.md", "old\n");
         let tools = WorkspaceToolExecutor::new(workspace.path()).expect("workspace should open");
 
@@ -1395,7 +1394,7 @@ mod tests {
 
     #[test]
     fn apply_patch_rejects_empty_hunk_lines_without_panicking() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("tool-execution");
         workspace.write("README.md", "old\n");
         let tools = WorkspaceToolExecutor::new(workspace.path()).expect("workspace should open");
 
@@ -1417,7 +1416,7 @@ mod tests {
 
     #[test]
     fn apply_patch_rejects_partial_multi_file_failure_without_modifying_files() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("tool-execution");
         workspace.write("README.md", "old\n");
         workspace.write("CHANGELOG.md", "current\n");
         let tools = WorkspaceToolExecutor::new(workspace.path()).expect("workspace should open");
@@ -1451,7 +1450,7 @@ mod tests {
 
     #[test]
     fn shell_runs_non_interactive_command() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("tool-execution");
         let tools = WorkspaceToolExecutor::new(workspace.path()).expect("workspace should open");
 
         #[cfg(windows)]
@@ -1473,7 +1472,7 @@ mod tests {
 
     #[test]
     fn shell_cancels_running_command() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("tool-execution");
         let tools = WorkspaceToolExecutor::new(workspace.path()).expect("workspace should open");
         let cancellation_token = CancellationToken::new();
         let cancel_from_thread = cancellation_token.clone();
@@ -1528,7 +1527,7 @@ mod tests {
 
     #[test]
     fn git_status_and_diff_read_repository_state() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("tool-execution");
         workspace.git_init();
         workspace.write("README.md", "hello\n");
         let tools = WorkspaceToolExecutor::new(workspace.path()).expect("workspace should open");
@@ -1554,70 +1553,5 @@ mod tests {
             .expect("diff should run");
         assert!(diff.unified_diff.contains("+hello"));
         assert_eq!(diff.files, vec!["README.md"]);
-    }
-
-    struct TestWorkspace {
-        path: std::path::PathBuf,
-    }
-
-    impl TestWorkspace {
-        fn new() -> Self {
-            let unique = format!(
-                "deepseek-coder-agent-core-test-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .expect("clock should be after epoch")
-                    .as_nanos()
-            );
-            let path = std::env::temp_dir().join(unique);
-            fs::create_dir_all(&path).expect("temp workspace should be created");
-            Self { path }
-        }
-
-        fn path(&self) -> &std::path::Path {
-            &self.path
-        }
-
-        fn write(&self, relative: &str, content: &str) {
-            let path = self.path.join(relative);
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent).expect("parent should be created");
-            }
-            fs::write(path, content).expect("file should be written");
-        }
-
-        fn read(&self, relative: &str) -> String {
-            fs::read_to_string(self.path.join(relative)).expect("file should read")
-        }
-
-        fn git_init(&self) {
-            self.run_git(["init"]);
-            self.run_git(["config", "user.email", "test@example.invalid"]);
-            self.run_git(["config", "user.name", "DeepSeek Coder Test"]);
-        }
-
-        fn git_add(&self, path: &str) {
-            self.run_git(["add", path]);
-        }
-
-        fn run_git<const N: usize>(&self, args: [&str; N]) {
-            let output = Command::new("git")
-                .args(args)
-                .current_dir(&self.path)
-                .output()
-                .expect("git should run");
-            assert!(
-                output.status.success(),
-                "git command failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-    }
-
-    impl Drop for TestWorkspace {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.path);
-        }
     }
 }

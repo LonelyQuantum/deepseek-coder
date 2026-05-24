@@ -1,14 +1,14 @@
 #![forbid(unsafe_code)]
 
-use std::{fs, process::Command};
+use std::process::Command;
 
-use deepseek_coder_agent_core::run_log::RunLogStore;
+use deepseek_coder_agent_core::{run_log::RunLogStore, test_helpers::TestWorkspace};
 use deepseek_coder_agent_rpc::JSON_RPC_INVALID_PARAMS;
 use serde_json::Value;
 
 #[test]
 fn fixture_readme_json_smoke_from_binary() {
-    let workspace = TestWorkspace::new();
+    let workspace = TestWorkspace::new("cli-process");
     workspace.write("README.md", "hello from process smoke\n");
 
     let output = Command::new(env!("CARGO_BIN_EXE_deepseek-coder"))
@@ -137,49 +137,5 @@ fn assert_event_subsequence(actual: &[&str], expected: &[&str]) {
                 )
             });
         search_from += offset + 1;
-    }
-}
-
-struct TestWorkspace {
-    path: std::path::PathBuf,
-    path_string: String,
-}
-
-impl TestWorkspace {
-    fn new() -> Self {
-        let unique = format!(
-            "deepseek-coder-cli-process-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("clock should be after epoch")
-                .as_nanos()
-        );
-        let path = std::env::temp_dir().join(unique);
-        fs::create_dir_all(&path).expect("temp workspace should be created");
-        let path_string = path.display().to_string();
-        Self { path, path_string }
-    }
-
-    fn path(&self) -> &std::path::Path {
-        &self.path
-    }
-
-    fn path_str(&self) -> &str {
-        &self.path_string
-    }
-
-    fn write(&self, relative: &str, content: &str) {
-        let path = self.path.join(relative);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).expect("parent should be created");
-        }
-        fs::write(path, content).expect("file should be written");
-    }
-}
-
-impl Drop for TestWorkspace {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.path);
     }
 }

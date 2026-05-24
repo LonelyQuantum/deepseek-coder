@@ -7,23 +7,20 @@
 use std::{
     env,
     error::Error,
-    fs, io,
-    path::{Path, PathBuf},
+    fs,
     process::{Command, Output},
 };
 
-use deepseek_coder_agent_core::provider::deepseek_api::{DEFAULT_API_BASE_URL, DEFAULT_MODEL};
+use deepseek_coder_agent_core::{
+    provider::deepseek_api::{DEFAULT_API_BASE_URL, DEFAULT_MODEL},
+    test_helpers::{LIVE_TEST_FLAG, TestWorkspace, live_api_key, repo_root_from_crate_manifest},
+};
 use serde_json::Value;
-
-const LIVE_TEST_FLAG: &str = "DEEPSEEK_CODER_LIVE_TESTS";
-const KEEP_DEMO_WORKSPACE_FLAG: &str = "DEEPSEEK_CODER_KEEP_DEMO_WORKSPACE";
-const LIVE_API_KEY_FILE: &str = ".secrets/deepseek-api-key";
-const API_KEY_PLACEHOLDER: &str = "<put-your-deepseek-api-key-here>";
 
 #[test]
 #[ignore = "result display test; run `cargo demo`"]
 fn fixture_agent_interaction_transcript_demo() -> Result<(), Box<dyn Error>> {
-    let workspace = TestWorkspace::new("fixture-agent-demo");
+    let workspace = TestWorkspace::with_preserve("fixture-agent-demo");
     workspace.write("CLI_SMOKE.txt", "old\n");
 
     let verify_command = verification_command();
@@ -74,8 +71,8 @@ fn live_deepseek_agent_interaction_transcript_demo() -> Result<(), Box<dyn Error
         return Ok(());
     }
 
-    let api_key = live_api_key()?;
-    let workspace = TestWorkspace::new("live-agent-demo");
+    let api_key = live_api_key(repo_root_from_crate_manifest(env!("CARGO_MANIFEST_DIR")))?;
+    let workspace = TestWorkspace::with_preserve("live-agent-demo");
     workspace.write(
         "Cargo.toml",
         r#"[package]
@@ -107,6 +104,7 @@ mod tests {
 "#,
     );
     workspace.git_init();
+    workspace.git_commit_all("initial");
 
     let base_url =
         env::var("DEEPSEEK_BASE_URL").unwrap_or_else(|_| DEFAULT_API_BASE_URL.to_owned());
@@ -172,43 +170,6 @@ mod tests {
     );
 
     Ok(())
-}
-
-fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(|crates_dir| crates_dir.parent())
-        .expect("cli crate must be nested under crates/")
-        .to_path_buf()
-}
-
-fn live_api_key() -> Result<String, Box<dyn Error>> {
-    if let Ok(api_key) = env::var("DEEPSEEK_API_KEY") {
-        let api_key = api_key.trim();
-        if !api_key.is_empty() && api_key != API_KEY_PLACEHOLDER {
-            return Ok(api_key.to_owned());
-        }
-    }
-
-    let api_key_path = workspace_root().join(LIVE_API_KEY_FILE);
-    let api_key = fs::read_to_string(api_key_path).map_err(|source| {
-        io::Error::new(
-            source.kind(),
-            format!(
-                "DEEPSEEK_API_KEY is not set and {LIVE_API_KEY_FILE} could not be read: {source}"
-            ),
-        )
-    })?;
-    let api_key = api_key.trim();
-    if api_key.is_empty() || api_key == API_KEY_PLACEHOLDER {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("put a DeepSeek API key in {LIVE_API_KEY_FILE} or set DEEPSEEK_API_KEY"),
-        )
-        .into());
-    }
-
-    Ok(api_key.to_owned())
 }
 
 struct AgentDemoOutput {
@@ -300,7 +261,7 @@ fn print_agent_transcript(
     println!("workspace: {}", workspace.path_str());
     println!(
         "workspace cleanup: {}",
-        if workspace.preserve {
+        if workspace.is_preserved() {
             "preserved"
         } else {
             "temporary; set DEEPSEEK_CODER_KEEP_DEMO_WORKSPACE=1 to keep it"
@@ -512,81 +473,4 @@ fn verification_command() -> String {
 #[cfg(not(windows))]
 fn verification_command() -> String {
     "printf '%s\\n' 'VERIFY_OK_DEMO'; test \"$(cat CLI_SMOKE.txt)\" = new".to_owned()
-}
-
-struct TestWorkspace {
-    path: PathBuf,
-    path_string: String,
-    preserve: bool,
-}
-
-impl TestWorkspace {
-    fn new(label: &str) -> Self {
-        let unique = format!(
-            "deepseek-coder-{label}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("clock should be after epoch")
-                .as_nanos()
-        );
-        let path = env::temp_dir().join(unique);
-        fs::create_dir_all(&path).expect("temp workspace should be created");
-        let path_string = path.display().to_string();
-        let preserve = env::var(KEEP_DEMO_WORKSPACE_FLAG).ok().as_deref() == Some("1");
-        Self {
-            path,
-            path_string,
-            preserve,
-        }
-    }
-
-    fn path(&self) -> &Path {
-        &self.path
-    }
-
-    fn path_str(&self) -> &str {
-        &self.path_string
-    }
-
-    fn read(&self, relative: &str) -> String {
-        fs::read_to_string(self.path.join(relative)).expect("file should read")
-    }
-
-    fn write(&self, relative: &str, content: &str) {
-        let path = self.path.join(relative);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).expect("parent should be created");
-        }
-        fs::write(path, content).expect("file should be written");
-    }
-
-    fn git_init(&self) {
-        self.run_git(["init"]);
-        self.run_git(["config", "user.email", "test@example.invalid"]);
-        self.run_git(["config", "user.name", "DeepSeek Coder Test"]);
-        self.run_git(["add", "."]);
-        self.run_git(["commit", "-m", "initial"]);
-    }
-
-    fn run_git<const N: usize>(&self, args: [&str; N]) {
-        let output = Command::new("git")
-            .args(args)
-            .current_dir(&self.path)
-            .output()
-            .expect("git should run");
-        assert!(
-            output.status.success(),
-            "git command failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-}
-
-impl Drop for TestWorkspace {
-    fn drop(&mut self) {
-        if !self.preserve {
-            let _ = fs::remove_dir_all(&self.path);
-        }
-    }
 }

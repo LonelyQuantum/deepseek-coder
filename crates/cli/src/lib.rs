@@ -1381,8 +1381,6 @@ fn rpc_help_text() -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use deepseek_coder_agent_core::{
         cancellation::CancellationToken,
         provider::deepseek_api::{
@@ -1390,6 +1388,7 @@ mod tests {
             ChatFunctionCallDelta, ChatToolCallDelta, ChatToolType, StreamEvent,
         },
         run_log::{REDACTED_VALUE, RunLogStore},
+        test_helpers::TestWorkspace,
         turn_loop::TurnProviderEvent,
     };
     use deepseek_coder_agent_rpc::{
@@ -1471,7 +1470,7 @@ mod tests {
 
     #[test]
     fn fixture_run_reads_readme_and_writes_run_log() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("cli");
         workspace.write("README.md", "hello from cli\n");
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -1519,7 +1518,7 @@ mod tests {
 
     #[test]
     fn fixture_patch_run_can_verify_and_emit_json_events() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("cli");
         workspace.write("CLI_SMOKE.txt", "old\n");
         let verification_secret = verification_secret();
         let verify_command = verification_command(&verification_secret);
@@ -1592,7 +1591,7 @@ mod tests {
 
     #[test]
     fn fixture_patch_run_json_rejection_emits_json_rpc_error() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("cli");
         workspace.write("CLI_SMOKE.txt", "old\n");
         let mut stdin = std::io::Cursor::new(b"n\n".to_vec());
         let mut stdout = Vec::new();
@@ -1661,7 +1660,7 @@ mod tests {
 
     #[test]
     fn fixture_patch_run_json_verification_failure_emits_json_rpc_error() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("cli");
         workspace.write("CLI_SMOKE.txt", "old\n");
         let verify_command = verification_failure_command();
         let mut stdout = Vec::new();
@@ -1722,7 +1721,7 @@ mod tests {
 
     #[test]
     fn fixture_patch_run_prompts_for_approval_and_applies_when_approved() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("cli");
         workspace.write("CLI_SMOKE.txt", "old\n");
         let mut stdin = std::io::Cursor::new(b"y\n".to_vec());
         let mut stdout = Vec::new();
@@ -1765,7 +1764,7 @@ mod tests {
 
     #[test]
     fn fixture_patch_run_prompts_for_approval_and_rejects() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("cli");
         workspace.write("CLI_SMOKE.txt", "old\n");
         let mut stdin = std::io::Cursor::new(b"n\n".to_vec());
         let mut stdout = Vec::new();
@@ -1811,7 +1810,7 @@ mod tests {
 
     #[test]
     fn rpc_command_runs_fixture_turn_loop_handler() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("cli");
         let input = [
             json!({
                 "jsonrpc": "2.0",
@@ -2096,53 +2095,5 @@ mod tests {
             .lines()
             .map(|line| serde_json::from_str::<Value>(line).expect("line should be JSON"))
             .collect()
-    }
-
-    struct TestWorkspace {
-        path: std::path::PathBuf,
-        path_string: String,
-    }
-
-    impl TestWorkspace {
-        fn new() -> Self {
-            let unique = format!(
-                "deepseek-coder-cli-test-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .expect("clock should be after epoch")
-                    .as_nanos()
-            );
-            let path = std::env::temp_dir().join(unique);
-            fs::create_dir_all(&path).expect("temp workspace should be created");
-            let path_string = path.display().to_string();
-            Self { path, path_string }
-        }
-
-        fn path(&self) -> &std::path::Path {
-            &self.path
-        }
-
-        fn path_str(&self) -> &str {
-            &self.path_string
-        }
-
-        fn write(&self, relative: &str, content: &str) {
-            let path = self.path.join(relative);
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent).expect("parent should be created");
-            }
-            fs::write(path, content).expect("file should be written");
-        }
-
-        fn read(&self, relative: &str) -> String {
-            fs::read_to_string(self.path.join(relative)).expect("file should read")
-        }
-    }
-
-    impl Drop for TestWorkspace {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.path);
-        }
     }
 }

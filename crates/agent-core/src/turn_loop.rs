@@ -1302,11 +1302,7 @@ fn terminal_error_event(error: &AgentTurnLoopError) -> (&'static str, Value) {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::VecDeque,
-        fs,
-        sync::atomic::{AtomicU64, Ordering},
-    };
+    use std::{collections::VecDeque, fs};
 
     use futures_util::stream;
     use serde_json::json;
@@ -1316,6 +1312,7 @@ mod tests {
         provider::deepseek_api::ChatToolCall,
         reasoning::ReasoningContentMode,
         run_log::{RunLogEvent, RunLogStore},
+        test_helpers::TestWorkspace,
     };
 
     use super::{
@@ -1326,11 +1323,9 @@ mod tests {
         turn_provider_response_stream,
     };
 
-    static NEXT_WORKSPACE_ID: AtomicU64 = AtomicU64::new(1);
-
     #[tokio::test]
     async fn turn_loop_runs_read_tool_and_continues_to_final_answer() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("turn-loop");
         workspace.write("README.md", "hello from README\n");
         let store = RunLogStore::new(workspace.path()).expect("run log store should open");
         let mut run = store
@@ -1417,7 +1412,7 @@ mod tests {
 
     #[tokio::test]
     async fn turn_loop_requires_approval_for_shell_before_execution() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("turn-loop");
         let store = RunLogStore::new(workspace.path()).expect("run log store should open");
         let mut run = store
             .create_run("run_turn_reject")
@@ -1458,7 +1453,7 @@ mod tests {
 
     #[tokio::test]
     async fn turn_loop_executes_approved_patch_and_tracks_changed_files() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("turn-loop");
         workspace.write("README.md", "old\n");
         let store = RunLogStore::new(workspace.path()).expect("run log store should open");
         let mut run = store
@@ -1515,7 +1510,7 @@ mod tests {
 
     #[tokio::test]
     async fn turn_loop_allows_tool_calls_without_reasoning_when_thinking_is_disabled() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("turn-loop");
         workspace.write("README.md", "old\n");
         let store = RunLogStore::new(workspace.path()).expect("run log store should open");
         let mut run = store
@@ -1564,7 +1559,7 @@ mod tests {
 
     #[tokio::test]
     async fn turn_loop_logs_streamed_content_deltas_once() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("turn-loop");
         let store = RunLogStore::new(workspace.path()).expect("run log store should open");
         let mut run = store
             .create_run("run_turn_streaming")
@@ -1601,7 +1596,7 @@ mod tests {
 
     #[tokio::test]
     async fn turn_loop_sends_each_persisted_event_to_sink() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("turn-loop");
         let store = RunLogStore::new(workspace.path()).expect("run log store should open");
         let mut run = store
             .create_run("run_turn_sink")
@@ -1635,7 +1630,7 @@ mod tests {
 
     #[tokio::test]
     async fn turn_loop_cancels_provider_stream_when_token_is_signaled() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("turn-loop");
         let store = RunLogStore::new(workspace.path()).expect("run log store should open");
         let mut run = store
             .create_run("run_turn_provider_cancel")
@@ -1681,7 +1676,7 @@ mod tests {
 
     #[tokio::test]
     async fn turn_loop_cancels_shell_tool_when_token_is_signaled() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("turn-loop");
         let store = RunLogStore::new(workspace.path()).expect("run log store should open");
         let mut run = store
             .create_run("run_turn_tool_cancel")
@@ -1829,50 +1824,6 @@ mod tests {
                 self.cancellation_token.cancel(self.reason);
             }
             Ok(())
-        }
-    }
-
-    struct TestWorkspace {
-        path: std::path::PathBuf,
-    }
-
-    impl TestWorkspace {
-        fn new() -> Self {
-            let id = NEXT_WORKSPACE_ID.fetch_add(1, Ordering::Relaxed);
-            let unique = format!(
-                "deepseek-coder-turn-loop-test-{}-{}-{}",
-                std::process::id(),
-                id,
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .expect("clock should be after epoch")
-                    .as_nanos()
-            );
-            let path = std::env::temp_dir().join(unique);
-            fs::create_dir_all(&path).expect("temp workspace should be created");
-            Self { path }
-        }
-
-        fn path(&self) -> &std::path::Path {
-            &self.path
-        }
-
-        fn write(&self, relative: &str, content: &str) {
-            let path = self.path.join(relative);
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent).expect("parent should be created");
-            }
-            fs::write(path, content).expect("file should be written");
-        }
-
-        fn read(&self, relative: &str) -> String {
-            fs::read_to_string(self.path.join(relative)).expect("file should read")
-        }
-    }
-
-    impl Drop for TestWorkspace {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.path);
         }
     }
 }
