@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::run_log::redact_value;
+use crate::{cancellation::CancellationToken, run_log::redact_value};
 
 const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
 const DEFAULT_SEARCH_MAX_RESULTS: usize = 100;
@@ -40,6 +40,15 @@ impl WorkspaceToolExecutor {
     }
 
     pub fn read_file(&self, args: ReadFileArgs) -> Result<ReadFileResult, ToolExecutionError> {
+        self.read_file_with_cancellation(args, &CancellationToken::new())
+    }
+
+    pub fn read_file_with_cancellation(
+        &self,
+        args: ReadFileArgs,
+        cancellation_token: &CancellationToken,
+    ) -> Result<ReadFileResult, ToolExecutionError> {
+        check_canceled(cancellation_token, "read_file")?;
         let path = self.resolve_existing_workspace_path(&args.path)?;
         if !path.is_file() {
             return Err(ToolExecutionError::PathNotFile { path });
@@ -69,6 +78,15 @@ impl WorkspaceToolExecutor {
     }
 
     pub fn search(&self, args: SearchArgs) -> Result<SearchResult, ToolExecutionError> {
+        self.search_with_cancellation(args, &CancellationToken::new())
+    }
+
+    pub fn search_with_cancellation(
+        &self,
+        args: SearchArgs,
+        cancellation_token: &CancellationToken,
+    ) -> Result<SearchResult, ToolExecutionError> {
+        check_canceled(cancellation_token, "rg")?;
         if args.query.trim().is_empty() {
             return Err(ToolExecutionError::InvalidArgument(
                 "search query must not be empty".to_owned(),
@@ -120,6 +138,7 @@ impl WorkspaceToolExecutor {
             command_args.iter().map(String::as_str),
             &self.root,
             DEFAULT_COMMAND_TIMEOUT,
+            cancellation_token,
         )?;
 
         if !matches!(output.exit_code, Some(0) | Some(1)) {
@@ -204,6 +223,15 @@ impl WorkspaceToolExecutor {
         &self,
         args: ApplyPatchArgs,
     ) -> Result<ApplyPatchResult, ToolExecutionError> {
+        self.apply_patch_with_cancellation(args, &CancellationToken::new())
+    }
+
+    pub fn apply_patch_with_cancellation(
+        &self,
+        args: ApplyPatchArgs,
+        cancellation_token: &CancellationToken,
+    ) -> Result<ApplyPatchResult, ToolExecutionError> {
+        check_canceled(cancellation_token, "apply_patch")?;
         let parsed = parse_unified_diff(&args.unified_diff)?;
         if parsed.files.is_empty() {
             return Err(ToolExecutionError::InvalidPatch(
@@ -280,6 +308,15 @@ impl WorkspaceToolExecutor {
     }
 
     pub fn shell(&self, args: ShellArgs) -> Result<ShellResult, ToolExecutionError> {
+        self.shell_with_cancellation(args, &CancellationToken::new())
+    }
+
+    pub fn shell_with_cancellation(
+        &self,
+        args: ShellArgs,
+        cancellation_token: &CancellationToken,
+    ) -> Result<ShellResult, ToolExecutionError> {
+        check_canceled(cancellation_token, "shell")?;
         if args.command.trim().is_empty() {
             return Err(ToolExecutionError::InvalidArgument(
                 "shell command must not be empty".to_owned(),
@@ -298,7 +335,7 @@ impl WorkspaceToolExecutor {
             .timeout_ms
             .map(Duration::from_millis)
             .unwrap_or(DEFAULT_COMMAND_TIMEOUT);
-        let output = run_shell_command(&args.command, &cwd, timeout)?;
+        let output = run_shell_command(&args.command, &cwd, timeout, cancellation_token)?;
         let status = if output.exit_code == Some(0) {
             ToolStatus::Ok
         } else {
@@ -320,15 +357,31 @@ impl WorkspaceToolExecutor {
     }
 
     pub fn git_status(&self, args: GitStatusArgs) -> Result<GitStatusResult, ToolExecutionError> {
+        self.git_status_with_cancellation(args, &CancellationToken::new())
+    }
+
+    pub fn git_status_with_cancellation(
+        &self,
+        args: GitStatusArgs,
+        cancellation_token: &CancellationToken,
+    ) -> Result<GitStatusResult, ToolExecutionError> {
+        check_canceled(cancellation_token, "git status")?;
         let output = if args.porcelain.unwrap_or(true) {
             run_command(
                 "git",
                 ["status", "--short", "--branch"],
                 &self.root,
                 DEFAULT_COMMAND_TIMEOUT,
+                cancellation_token,
             )?
         } else {
-            run_command("git", ["status"], &self.root, DEFAULT_COMMAND_TIMEOUT)?
+            run_command(
+                "git",
+                ["status"],
+                &self.root,
+                DEFAULT_COMMAND_TIMEOUT,
+                cancellation_token,
+            )?
         };
         if output.exit_code != Some(0) {
             return Err(ToolExecutionError::CommandFailed {
@@ -359,6 +412,15 @@ impl WorkspaceToolExecutor {
     }
 
     pub fn git_diff(&self, args: GitDiffArgs) -> Result<GitDiffResult, ToolExecutionError> {
+        self.git_diff_with_cancellation(args, &CancellationToken::new())
+    }
+
+    pub fn git_diff_with_cancellation(
+        &self,
+        args: GitDiffArgs,
+        cancellation_token: &CancellationToken,
+    ) -> Result<GitDiffResult, ToolExecutionError> {
+        check_canceled(cancellation_token, "git diff")?;
         let mut command_args = vec!["diff".to_owned(), "--no-ext-diff".to_owned()];
         if args.staged.unwrap_or(false) {
             command_args.push("--cached".to_owned());
@@ -374,6 +436,7 @@ impl WorkspaceToolExecutor {
             command_args.iter().map(String::as_str),
             &self.root,
             DEFAULT_COMMAND_TIMEOUT,
+            cancellation_token,
         )?;
         if output.exit_code != Some(0) {
             return Err(ToolExecutionError::CommandFailed {
@@ -628,6 +691,8 @@ pub enum ToolExecutionError {
     },
     #[error("command `{program}` timed out after {timeout_ms}ms")]
     CommandTimedOut { program: String, timeout_ms: u128 },
+    #[error("command `{program}` canceled: {reason}")]
+    CommandCanceled { program: String, reason: String },
     #[error("tool result serialization failed: {source}")]
     Serialization { source: serde_json::Error },
     #[error("I/O error at {path}: {source}")]
@@ -648,6 +713,7 @@ fn run_shell_command(
     command: &str,
     cwd: &Path,
     timeout: Duration,
+    cancellation_token: &CancellationToken,
 ) -> Result<CommandOutput, ToolExecutionError> {
     #[cfg(windows)]
     {
@@ -656,12 +722,13 @@ fn run_shell_command(
             ["-NoProfile", "-NonInteractive", "-Command", command],
             cwd,
             timeout,
+            cancellation_token,
         )
     }
 
     #[cfg(not(windows))]
     {
-        run_command("sh", ["-c", command], cwd, timeout)
+        run_command("sh", ["-c", command], cwd, timeout, cancellation_token)
     }
 }
 
@@ -670,7 +737,9 @@ fn run_command<'a>(
     args: impl IntoIterator<Item = &'a str>,
     cwd: &Path,
     timeout: Duration,
+    cancellation_token: &CancellationToken,
 ) -> Result<CommandOutput, ToolExecutionError> {
+    check_canceled(cancellation_token, program)?;
     let start = Instant::now();
     let mut child = Command::new(program)
         .args(args)
@@ -685,6 +754,15 @@ fn run_command<'a>(
         })?;
 
     loop {
+        if cancellation_token.is_canceled() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(ToolExecutionError::CommandCanceled {
+                program: program.to_owned(),
+                reason: cancellation_token.cancellation_reason(),
+            });
+        }
+
         if child
             .try_wait()
             .map_err(|source| ToolExecutionError::CommandIo {
@@ -719,6 +797,20 @@ fn run_command<'a>(
 
         thread::sleep(Duration::from_millis(10));
     }
+}
+
+fn check_canceled(
+    cancellation_token: &CancellationToken,
+    program: &str,
+) -> Result<(), ToolExecutionError> {
+    if cancellation_token.is_canceled() {
+        return Err(ToolExecutionError::CommandCanceled {
+            program: program.to_owned(),
+            reason: cancellation_token.cancellation_reason(),
+        });
+    }
+
+    Ok(())
 }
 
 fn normalize_workspace_relative_path(path: &str) -> Result<String, ToolExecutionError> {
@@ -1155,6 +1247,7 @@ mod tests {
         ShellResult, ToolExecutionError, ToolStatus, WorkspaceToolExecutor,
         redacted_tool_result_value,
     };
+    use crate::cancellation::CancellationToken;
     use crate::run_log::REDACTED_VALUE;
 
     #[test]
@@ -1300,6 +1393,40 @@ mod tests {
 
         assert_eq!(result.status, ToolStatus::Ok);
         assert!(result.stdout.contains("hello"));
+    }
+
+    #[test]
+    fn shell_cancels_running_command() {
+        let workspace = TestWorkspace::new();
+        let tools = WorkspaceToolExecutor::new(workspace.path()).expect("workspace should open");
+        let cancellation_token = CancellationToken::new();
+        let cancel_from_thread = cancellation_token.clone();
+        let cancel_thread = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            cancel_from_thread.cancel("stop command");
+        });
+
+        #[cfg(windows)]
+        let command = "Start-Sleep -Seconds 5; Write-Output done";
+        #[cfg(not(windows))]
+        let command = "sleep 5; printf done";
+
+        let error = tools
+            .shell_with_cancellation(
+                ShellArgs {
+                    command: command.to_owned(),
+                    cwd: None,
+                    timeout_ms: Some(10_000),
+                },
+                &cancellation_token,
+            )
+            .expect_err("shell should be canceled");
+        cancel_thread.join().expect("cancel thread should join");
+
+        assert!(matches!(
+            error,
+            ToolExecutionError::CommandCanceled { ref reason, .. } if reason == "stop command"
+        ));
     }
 
     #[test]
