@@ -2,6 +2,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{self, BufRead, BufReader, Write},
     path::{Component, Path, PathBuf},
+    sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -132,10 +133,18 @@ impl RunLogStore {
     }
 }
 
+pub trait RunLogWriter {
+    fn run_id(&self) -> &str;
+
+    fn append_event(
+        &mut self,
+        event_type: String,
+        turn_id: Option<String>,
+        payload: Value,
+    ) -> Result<RunLogEvent, RunLogError>;
+}
+
 /// `RunLog` is a single-writer append handle.
-///
-/// It does not provide internal synchronization. Callers that share one run
-/// across async tasks or frontend requests must serialize writes externally.
 #[derive(Debug)]
 pub struct RunLog {
     run_id: String,
@@ -204,6 +213,86 @@ impl RunLog {
     }
 }
 
+impl RunLogWriter for RunLog {
+    fn run_id(&self) -> &str {
+        self.run_id()
+    }
+
+    fn append_event(
+        &mut self,
+        event_type: String,
+        turn_id: Option<String>,
+        payload: Value,
+    ) -> Result<RunLogEvent, RunLogError> {
+        self.append(event_type, turn_id, payload)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SerializedRunLog {
+    run_id: String,
+    events_path: PathBuf,
+    inner: Arc<Mutex<RunLog>>,
+}
+
+impl SerializedRunLog {
+    pub fn new(run_log: RunLog) -> Self {
+        Self {
+            run_id: run_log.run_id.clone(),
+            events_path: run_log.events_path.clone(),
+            inner: Arc::new(Mutex::new(run_log)),
+        }
+    }
+
+    pub fn run_id(&self) -> &str {
+        &self.run_id
+    }
+
+    pub fn events_path(&self) -> &Path {
+        &self.events_path
+    }
+
+    pub fn next_seq(&self) -> Result<u64, RunLogError> {
+        Ok(self.lock()?.next_seq())
+    }
+
+    pub fn append(
+        &self,
+        event_type: impl Into<String>,
+        turn_id: Option<String>,
+        payload: Value,
+    ) -> Result<RunLogEvent, RunLogError> {
+        self.lock()?.append(event_type, turn_id, payload)
+    }
+
+    pub fn load(&self) -> Result<Vec<RunLogEvent>, RunLogError> {
+        self.lock()?.load()
+    }
+
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, RunLog>, RunLogError> {
+        self.inner
+            .lock()
+            .map_err(|_| RunLogError::WriterLockPoisoned {
+                run_id: self.run_id.clone(),
+            })
+    }
+}
+
+impl RunLogWriter for SerializedRunLog {
+    fn run_id(&self) -> &str {
+        self.run_id()
+    }
+
+    fn append_event(
+        &mut self,
+        event_type: String,
+        turn_id: Option<String>,
+        payload: Value,
+    ) -> Result<RunLogEvent, RunLogError> {
+        self.append(event_type, turn_id, payload)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunLogEvent {
@@ -233,6 +322,8 @@ pub enum RunLogError {
     InvalidStatePath { path: PathBuf },
     #[error("run log sequence overflow")]
     SequenceOverflow,
+    #[error("run log writer lock was poisoned for run: {run_id}")]
+    WriterLockPoisoned { run_id: String },
     #[error("run log sequence mismatch in {path}: expected {expected}, got {actual}")]
     SequenceMismatch {
         path: PathBuf,
@@ -473,11 +564,20 @@ fn redact_secret_like_tokens(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{
+        fs,
+        sync::{
+            Arc, Barrier,
+            atomic::{AtomicU64, Ordering},
+        },
+        thread,
+    };
 
     use serde_json::json;
 
-    use super::{REDACTED_VALUE, RunLogError, RunLogStore};
+    use super::{REDACTED_VALUE, RunLogError, RunLogStore, RunLogWriter, SerializedRunLog};
+
+    static NEXT_WORKSPACE_ID: AtomicU64 = AtomicU64::new(1);
 
     #[test]
     fn run_log_appends_and_loads_events_with_monotonic_sequences() {
@@ -593,15 +693,83 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn serialized_run_log_serializes_concurrent_appenders() {
+        let workspace = TestWorkspace::new();
+        let store = RunLogStore::new(workspace.path()).expect("store should open");
+        let writer = SerializedRunLog::new(
+            store
+                .create_run("run_serialized")
+                .expect("run should be created"),
+        );
+        let barrier = Arc::new(Barrier::new(9));
+        let handles = (0..8)
+            .map(|index| {
+                let barrier = Arc::clone(&barrier);
+                let mut writer = writer.clone();
+                thread::spawn(move || {
+                    barrier.wait();
+                    writer
+                        .append_event(
+                            "assistant.delta".to_owned(),
+                            Some("turn_1".to_owned()),
+                            json!({ "index": index }),
+                        )
+                        .expect("event should append")
+                })
+            })
+            .collect::<Vec<_>>();
+
+        barrier.wait();
+        let mut appended = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("thread should join"))
+            .collect::<Vec<_>>();
+        appended.sort_by_key(|event| event.seq);
+
+        assert_eq!(
+            appended.iter().map(|event| event.seq).collect::<Vec<_>>(),
+            (1..=8).collect::<Vec<_>>()
+        );
+
+        let loaded = writer.load().expect("events should load");
+        assert_eq!(loaded.len(), 8);
+        assert_eq!(
+            loaded.iter().map(|event| event.seq).collect::<Vec<_>>(),
+            (1..=8).collect::<Vec<_>>()
+        );
+
+        let mut indexes = loaded
+            .iter()
+            .map(|event| {
+                event.payload["index"]
+                    .as_u64()
+                    .expect("index should be numeric")
+            })
+            .collect::<Vec<_>>();
+        indexes.sort_unstable();
+        assert_eq!(indexes, (0..8).collect::<Vec<_>>());
+        assert_eq!(writer.next_seq().expect("next seq should load"), 9);
+        assert_eq!(
+            store
+                .open_run("run_serialized")
+                .expect("run should reopen")
+                .next_seq(),
+            9
+        );
+    }
+
     struct TestWorkspace {
         path: std::path::PathBuf,
     }
 
     impl TestWorkspace {
         fn new() -> Self {
+            let id = NEXT_WORKSPACE_ID.fetch_add(1, Ordering::Relaxed);
             let unique = format!(
-                "deepseek-coder-run-log-test-{}-{}",
+                "deepseek-coder-run-log-test-{}-{}-{}",
                 std::process::id(),
+                id,
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .expect("clock should be after epoch")

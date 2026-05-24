@@ -12,7 +12,7 @@ use std::{
 use deepseek_coder_agent_core::{
     AGENT_METADATA,
     approval::{ALL_RISK_LEVELS, RiskLevel},
-    run_log::{RunLog, RunLogError, RunLogEvent, RunLogStore},
+    run_log::{RunLog, RunLogError, RunLogEvent, RunLogStore, SerializedRunLog},
     turn_loop::{
         AgentRunMode, AgentTurnInput, AgentTurnLoop, AgentTurnLoopConfig, AgentTurnLoopError,
         ApprovalDecision, ApprovalPolicy, ApprovalPolicyError, TurnApprovalRequest, TurnEventSink,
@@ -675,9 +675,16 @@ where
     ) -> Result<AgentRpcHandlerOutput<ResumeResult>, AgentRpcHandlerError> {
         self.drain_ready_active_run_events()?;
         let store = &self.workspace()?.store;
-        let events = store
-            .load_run(params.run_id.clone())
-            .map_err(map_run_log_error)?;
+        let events = match self
+            .active_run
+            .as_ref()
+            .filter(|active_run| active_run.run_id == params.run_id)
+        {
+            Some(active_run) => active_run.run_log.load().map_err(map_run_log_error)?,
+            None => store
+                .load_run(params.run_id.clone())
+                .map_err(map_run_log_error)?,
+        };
         let replay_from_seq = params.replay_from_seq.unwrap_or(1);
         let replay_events = events
             .iter()
@@ -798,6 +805,7 @@ struct RpcWorkspace {
 #[derive(Debug)]
 struct ActiveRpcRun {
     run_id: String,
+    run_log: SerializedRunLog,
     events: mpsc::Receiver<RunLogEvent>,
     join: thread::JoinHandle<Result<(), AgentRpcHandlerError>>,
 }
@@ -1085,6 +1093,8 @@ fn spawn_active_run<P>(
 where
     P: TurnProvider + Send + 'static,
 {
+    let run_log = SerializedRunLog::new(run_log);
+    let worker_run_log = run_log.clone();
     let (events_tx, events_rx) = mpsc::channel();
     let thread_name = format!("deepseek-coder-rpc-{run_id}");
     let join = thread::Builder::new()
@@ -1093,7 +1103,7 @@ where
             run_active_turn_loop(
                 workspace_root,
                 provider,
-                run_log,
+                worker_run_log,
                 input,
                 config,
                 events_tx,
@@ -1104,6 +1114,7 @@ where
 
     Ok(ActiveRpcRun {
         run_id,
+        run_log,
         events: events_rx,
         join,
     })
@@ -1112,7 +1123,7 @@ where
 fn run_active_turn_loop<P>(
     workspace_root: PathBuf,
     provider: P,
-    mut run_log: RunLog,
+    mut run_log: SerializedRunLog,
     input: AgentTurnInput,
     config: AgentTurnLoopConfig,
     events: mpsc::Sender<RunLogEvent>,

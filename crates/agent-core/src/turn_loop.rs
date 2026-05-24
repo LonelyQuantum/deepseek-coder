@@ -13,7 +13,7 @@ use crate::{
         ReasoningContentError, ReasoningContentMode, ReasoningContentState,
         ReasoningContentStateMachine,
     },
-    run_log::{RunLog, RunLogError, RunLogEvent},
+    run_log::{RunLogError, RunLogEvent, RunLogWriter},
     tool::{ToolDefinition, ToolName, find_builtin_tool},
     tool_execution::{
         ApplyPatchArgs, ShellArgs, ToolExecutionError, ToolStatus, WorkspaceToolExecutor,
@@ -67,23 +67,27 @@ where
     P: TurnProvider,
     A: ApprovalPolicy,
 {
-    pub async fn run_turn(
+    pub async fn run_turn<L>(
         &mut self,
         input: AgentTurnInput,
-        run_log: &mut RunLog,
-    ) -> Result<AgentTurnOutcome, AgentTurnLoopError> {
+        run_log: &mut L,
+    ) -> Result<AgentTurnOutcome, AgentTurnLoopError>
+    where
+        L: RunLogWriter + ?Sized,
+    {
         let mut event_sink = NoopTurnEventSink;
         self.run_turn_with_event_sink(input, run_log, &mut event_sink)
             .await
     }
 
-    pub async fn run_turn_with_event_sink<S>(
+    pub async fn run_turn_with_event_sink<L, S>(
         &mut self,
         input: AgentTurnInput,
-        run_log: &mut RunLog,
+        run_log: &mut L,
         event_sink: &mut S,
     ) -> Result<AgentTurnOutcome, AgentTurnLoopError>
     where
+        L: RunLogWriter + ?Sized,
         S: TurnEventSink + ?Sized,
     {
         let turn_id = input.turn_id.clone();
@@ -111,7 +115,7 @@ where
     async fn run_turn_inner(
         &mut self,
         input: AgentTurnInput,
-        run_log: &mut RunLog,
+        run_log: &mut (impl RunLogWriter + ?Sized),
         event_sink: &mut (impl TurnEventSink + ?Sized),
     ) -> Result<AgentTurnOutcome, AgentTurnLoopError> {
         if self.config.max_model_turns == 0 {
@@ -268,14 +272,17 @@ where
         })
     }
 
-    async fn collect_provider_response(
+    async fn collect_provider_response<L>(
         &mut self,
         request: TurnProviderRequest,
         turn_id: &str,
         iteration: usize,
-        run_log: &mut RunLog,
+        run_log: &mut L,
         event_sink: &mut (impl TurnEventSink + ?Sized),
-    ) -> Result<CollectedProviderTurn, AgentTurnLoopError> {
+    ) -> Result<CollectedProviderTurn, AgentTurnLoopError>
+    where
+        L: RunLogWriter + ?Sized,
+    {
         let mut stream = self.provider.complete_stream(request).await?;
         let mut response = None;
         let mut emitted_content_delta = false;
@@ -341,7 +348,7 @@ where
         turn_id: &str,
         iteration: usize,
         tool_index: usize,
-        run_log: &mut RunLog,
+        run_log: &mut (impl RunLogWriter + ?Sized),
         event_sink: &mut (impl TurnEventSink + ?Sized),
     ) -> Result<ExecutedToolCall, AgentTurnLoopError> {
         let tool_name = tool_call.function.name.as_str();
@@ -492,16 +499,17 @@ where
         }
     }
 
-    fn execute_without_approval<Args, F>(
+    fn execute_without_approval<L, Args, F>(
         &self,
         tool_call: &ChatToolCall,
         turn_id: &str,
         args: Args,
-        run_log: &mut RunLog,
+        run_log: &mut L,
         event_sink: &mut (impl TurnEventSink + ?Sized),
         execute: F,
     ) -> Result<ExecutedToolCall, AgentTurnLoopError>
     where
+        L: RunLogWriter + ?Sized,
         F: FnOnce(&WorkspaceToolExecutor, Args) -> Result<ExecutedToolCall, AgentTurnLoopError>,
     {
         append_turn_event(
@@ -543,7 +551,7 @@ where
         tool_index: usize,
         paths: Option<Vec<String>>,
         command: Option<String>,
-        run_log: &mut RunLog,
+        run_log: &mut (impl RunLogWriter + ?Sized),
         event_sink: &mut (impl TurnEventSink + ?Sized),
     ) -> Result<(), AgentTurnLoopError> {
         if definition.approval == ApprovalRequirement::None {
@@ -658,14 +666,17 @@ impl TurnEventSinkError {
     }
 }
 
-fn append_turn_event(
-    run_log: &mut RunLog,
+fn append_turn_event<L>(
+    run_log: &mut L,
     event_sink: &mut (impl TurnEventSink + ?Sized),
     event_type: impl Into<String>,
     turn_id: Option<String>,
     payload: Value,
-) -> Result<RunLogEvent, AgentTurnLoopError> {
-    let event = run_log.append(event_type, turn_id, payload)?;
+) -> Result<RunLogEvent, AgentTurnLoopError>
+where
+    L: RunLogWriter + ?Sized,
+{
+    let event = run_log.append_event(event_type.into(), turn_id, payload)?;
     event_sink.on_event(&event)?;
     Ok(event)
 }
