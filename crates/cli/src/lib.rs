@@ -1382,7 +1382,9 @@ mod tests {
         run_log::{REDACTED_VALUE, RunLogStore},
         turn_loop::TurnProviderEvent,
     };
-    use deepseek_coder_agent_rpc::PROTOCOL_VERSION;
+    use deepseek_coder_agent_rpc::{
+        PROTOCOL_VERSION, RPC_APPROVAL_DENIED, RPC_TOOL_EXECUTION_FAILED,
+    };
     use futures_util::{StreamExt, stream};
     use serde_json::{Value, json};
 
@@ -1576,6 +1578,136 @@ mod tests {
             .map(|event| Some(event.seq))
             .collect::<Vec<_>>();
         assert_eq!(notification_seqs, persisted_seqs);
+    }
+
+    #[test]
+    fn fixture_patch_run_json_rejection_emits_json_rpc_error() {
+        let workspace = TestWorkspace::new();
+        workspace.write("CLI_SMOKE.txt", "old\n");
+        let mut stdin = std::io::Cursor::new(b"n\n".to_vec());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run_cli_with_input(
+            [
+                "deepseek-coder",
+                "run",
+                "--provider",
+                "fixture",
+                "--fixture",
+                "patch",
+                "--json",
+                "--workspace",
+                workspace.path_str(),
+                "--run-id",
+                "run_cli_json_reject",
+                "--turn-id",
+                "turn_cli_json_reject",
+                "Patch smoke file",
+            ],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect_err("rejected json run should fail");
+
+        assert!(error.is_reported());
+        assert_eq!(workspace.read("CLI_SMOKE.txt"), "old\n");
+        let stderr = String::from_utf8(stderr).expect("stderr should be UTF-8");
+        assert!(stderr.contains("Approval required"));
+        assert!(!stderr.contains("status: failed"));
+
+        let lines = json_lines(stdout);
+        assert!(lines.len() >= 2);
+        let (events, error_response) = lines.split_at(lines.len() - 1);
+        assert!(events.iter().all(|value| value["method"] == "agent.event"));
+        assert!(events.iter().any(|value| {
+            value["params"]["type"] == "run.failed"
+                && value["params"]["payload"]["code"] == "E_APPROVAL_REJECTED"
+        }));
+        let error_response = &error_response[0];
+        assert_eq!(error_response["jsonrpc"], "2.0");
+        assert_eq!(error_response["id"], "cli.run");
+        assert_eq!(error_response["error"]["code"], RPC_APPROVAL_DENIED);
+        assert!(
+            error_response["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("rejected by user"))
+        );
+        assert_eq!(
+            error_response["error"]["data"]["symbolicCode"],
+            "E_APPROVAL_REJECTED"
+        );
+        assert_eq!(error_response["error"]["data"]["kind"], "turn");
+        assert_eq!(
+            error_response["error"]["data"]["runId"],
+            "run_cli_json_reject"
+        );
+        assert_eq!(
+            error_response["error"]["data"]["turnId"],
+            "turn_cli_json_reject"
+        );
+    }
+
+    #[test]
+    fn fixture_patch_run_json_verification_failure_emits_json_rpc_error() {
+        let workspace = TestWorkspace::new();
+        workspace.write("CLI_SMOKE.txt", "old\n");
+        let verify_command = verification_failure_command();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = run_cli(
+            [
+                "deepseek-coder",
+                "run",
+                "--provider",
+                "fixture",
+                "--fixture",
+                "patch",
+                "--auto-approve",
+                "--json",
+                "--workspace",
+                workspace.path_str(),
+                "--run-id",
+                "run_cli_json_verify_failed",
+                "--turn-id",
+                "turn_cli_json_verify_failed",
+                "--verify",
+                verify_command.as_str(),
+                "Patch smoke file",
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect_err("verification failure should fail");
+
+        assert!(error.is_reported());
+        assert_eq!(workspace.read("CLI_SMOKE.txt"), "new\n");
+        assert!(stderr.is_empty());
+
+        let lines = json_lines(stdout);
+        assert!(lines.len() >= 2);
+        let (events, error_response) = lines.split_at(lines.len() - 1);
+        assert!(events.iter().all(|value| value["method"] == "agent.event"));
+        assert!(events.iter().any(|value| {
+            value["params"]["type"] == "verification.completed"
+                && value["params"]["payload"]["status"] == "failed"
+        }));
+        let error_response = &error_response[0];
+        assert_eq!(error_response["jsonrpc"], "2.0");
+        assert_eq!(error_response["id"], "cli.run");
+        assert_eq!(error_response["error"]["code"], RPC_TOOL_EXECUTION_FAILED);
+        assert_eq!(
+            error_response["error"]["data"]["symbolicCode"],
+            "E_VERIFICATION_FAILED"
+        );
+        assert_eq!(error_response["error"]["data"]["kind"], "verification");
+        assert_eq!(error_response["error"]["data"]["exitCode"], 7);
+        assert_eq!(
+            error_response["error"]["data"]["runId"],
+            "run_cli_json_verify_failed"
+        );
     }
 
     #[test]
@@ -1936,6 +2068,24 @@ mod tests {
     #[cfg(not(windows))]
     fn verification_command(secret: &str) -> String {
         format!("printf '%s\\n' '{secret}'; test \"$(cat CLI_SMOKE.txt)\" = new")
+    }
+
+    #[cfg(windows)]
+    fn verification_failure_command() -> String {
+        "exit 7".to_owned()
+    }
+
+    #[cfg(not(windows))]
+    fn verification_failure_command() -> String {
+        "exit 7".to_owned()
+    }
+
+    fn json_lines(output: Vec<u8>) -> Vec<Value> {
+        String::from_utf8(output)
+            .expect("stdout should be UTF-8")
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("line should be JSON"))
+            .collect()
     }
 
     struct TestWorkspace {
