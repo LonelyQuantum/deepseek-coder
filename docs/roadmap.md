@@ -57,6 +57,15 @@
 - Phase 2 Context Capsule：从 workspace manifest、稳定前缀、token 预算报告和缓存命中统计开始，把 Phase 1 的最小闭环扩展到 1M 上下文形态。
 - 测试替身收敛：如果 CLI fixture 场景继续增加，把 CLI fixture 与 Agent Core scripted provider 抽成共享测试 harness。
 
+Phase 1 收官后优化池：
+
+- RPC 事件输出模型收敛：把当前 request 边界 flush 的事件输出升级为独立 writer 队列，明确 client 断连时的 active run 取消语义。
+- 工具执行安全打磨：实现命令风险分类器，补充进程树清理策略，并在审批信息中突出 cwd、命令摘要和风险升级原因。
+- Run Log 体积与隐私控制：为工具输出、verification 输出和 provider 摘要增加统一大小限制、截断原因和可导出的脱敏包边界。
+- Provider summary 事件：把 usage、cache 命中、模型名、stream 统计等写成稳定 schema，避免只依赖 provider 私有响应。
+- 本地环境诊断：增加 doctor 类检查，显式验证 `rg`、`git`、`cargo`、Node/pnpm、API key 来源和 workspace 信任状态；不做隐式搜索 backend 降级。
+- 展示型 demo 扩展：在已有 `cargo demo` / `cargo demo-live` 基础上，后续补 RPC 审批、JSON 错误、run list/resume 等展示场景，统一登记到 `docs/demos.md`。
+
 P0 不追求：
 
 - 完整 TUI。
