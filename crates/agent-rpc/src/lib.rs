@@ -52,7 +52,10 @@ pub const RPC_RUN_NOT_FOUND: i64 = -32003;
 pub const RPC_RUN_ALREADY_ACTIVE: i64 = -32004;
 pub const RPC_APPROVAL_NOT_FOUND: i64 = -32011;
 pub const RPC_APPROVAL_DENIED: i64 = -32012;
+pub const RPC_RUN_CANCELED: i64 = -32050;
 pub const RPC_INTERNAL_INVARIANT: i64 = -32060;
+
+pub const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JsonRpcRequest<TParams = Value> {
@@ -257,6 +260,17 @@ pub struct SendTurnResult {
     pub accepted: bool,
 }
 
+impl From<RpcRunMode> for AgentRunMode {
+    fn from(value: RpcRunMode) -> Self {
+        match value {
+            RpcRunMode::Plan => Self::Plan,
+            RpcRunMode::Edit => Self::Edit,
+            RpcRunMode::Review => Self::Review,
+            RpcRunMode::Ask => Self::Ask,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResumeParams {
@@ -288,6 +302,12 @@ pub enum RpcApprovalState {
     Rejected,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RpcRunState {
+    Canceled,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApproveParams {
@@ -317,6 +337,23 @@ pub struct RejectParams {
 pub struct RejectResult {
     pub approval_id: String,
     pub state: RpcApprovalState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelParams {
+    pub run_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelResult {
+    pub run_id: String,
+    pub state: RpcRunState,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
@@ -575,6 +612,9 @@ where
             }
             method if method == REJECT_METHOD.qualified_name() => {
                 self.handle_reject(id, message.params, writer)
+            }
+            method if method == CANCEL_METHOD.qualified_name() => {
+                self.handle_cancel(id, message.params, writer)
             }
             method if method == RESUME_METHOD.qualified_name() => {
                 self.handle_resume(id, message.params, writer)
@@ -941,6 +981,7 @@ mod tests {
         assert_eq!(SEND_TURN_METHOD.qualified_name(), "agent.sendTurn");
         assert_eq!(APPROVE_METHOD.qualified_name(), "agent.approve");
         assert_eq!(REJECT_METHOD.qualified_name(), "agent.reject");
+        assert_eq!(CANCEL_METHOD.qualified_name(), "agent.cancel");
         assert_eq!(RESUME_METHOD.qualified_name(), "agent.resume");
         assert_eq!(EVENT_METHOD.qualified_name(), "agent.event");
     }
