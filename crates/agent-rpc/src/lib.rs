@@ -12,7 +12,11 @@ use std::{
 use deepseek_coder_agent_core::{
     AGENT_METADATA,
     approval::{ALL_RISK_LEVELS, RiskLevel},
-    run_log::{RunLog, RunLogError, RunLogEvent, RunLogStore, SerializedRunLog},
+    cancellation::CancellationToken,
+    run_log::{
+        RunLog, RunLogError, RunLogEvent, RunLogStore, RunSummary, RunSummaryStatus,
+        SerializedRunLog,
+    },
     turn_loop::{
         AgentRunMode, AgentTurnInput, AgentTurnLoop, AgentTurnLoopConfig, AgentTurnLoopError,
         ApprovalDecision, ApprovalPolicy, ApprovalPolicyError, TurnApprovalRequest, TurnEventSink,
@@ -298,6 +302,50 @@ pub struct ResumeResult {
     pub replay_started: bool,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListRunsParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListRunsResult {
+    pub runs: Vec<RpcRunSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcRunSummary {
+    pub run_id: String,
+    pub title: String,
+    pub status: RpcRunSummaryStatus,
+    pub started_at: String,
+    pub updated_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<String>,
+    pub last_seq: u64,
+    pub event_count: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changed_files: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verification_status: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RpcRunSummaryStatus {
+    Running,
+    Completed,
+    Failed,
+    Canceled,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RpcApprovalPersistence {
@@ -449,6 +497,11 @@ pub trait AgentRpcRequestHandler {
         &mut self,
         params: ResumeParams,
     ) -> Result<AgentRpcHandlerOutput<ResumeResult>, AgentRpcHandlerError>;
+
+    fn list_runs(
+        &mut self,
+        params: ListRunsParams,
+    ) -> Result<AgentRpcHandlerOutput<ListRunsResult>, AgentRpcHandlerError>;
 }
 
 pub trait RpcTurnProviderFactory {
@@ -657,8 +710,9 @@ where
         let reason = params
             .reason
             .unwrap_or_else(|| "canceled by RPC client".to_owned());
+        active_run.cancellation_token.cancel(reason.clone());
         self.approval_queue
-            .cancel_run(&params.run_id, reason.clone())?;
+            .cancel_run_pending_approvals(&params.run_id, reason.clone())?;
         let events = self.collect_active_run_events_until_pause()?;
 
         Ok(AgentRpcHandlerOutput::new(CancelResult {
@@ -707,6 +761,27 @@ where
             replay_started: !replay_events.is_empty(),
         })
         .with_events(replay_events))
+    }
+
+    fn list_runs(
+        &mut self,
+        params: ListRunsParams,
+    ) -> Result<AgentRpcHandlerOutput<ListRunsResult>, AgentRpcHandlerError> {
+        self.drain_ready_active_run_events()?;
+        let mut summaries = self
+            .workspace()?
+            .store
+            .list_run_summaries()
+            .map_err(map_run_log_error)?;
+        if let Some(limit) = params.limit {
+            summaries.truncate(limit);
+        }
+        let runs = summaries
+            .iter()
+            .map(RpcRunSummary::try_from)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(AgentRpcHandlerOutput::new(ListRunsResult { runs }))
     }
 }
 
@@ -797,6 +872,42 @@ impl<F> AgentTurnLoopRpcHandler<F> {
     }
 }
 
+impl TryFrom<&RunSummary> for RpcRunSummary {
+    type Error = AgentRpcHandlerError;
+
+    fn try_from(summary: &RunSummary) -> Result<Self, Self::Error> {
+        Ok(Self {
+            run_id: summary.run_id.clone(),
+            title: summary.title.clone(),
+            status: RpcRunSummaryStatus::from(&summary.status),
+            started_at: format_unix_millis(summary.started_at_unix_ms).map_err(map_rpc_error)?,
+            updated_at: format_unix_millis(summary.updated_at_unix_ms).map_err(map_rpc_error)?,
+            completed_at: summary
+                .completed_at_unix_ms
+                .map(format_unix_millis)
+                .transpose()
+                .map_err(map_rpc_error)?,
+            last_seq: summary.last_seq,
+            event_count: summary.event_count,
+            mode: summary.mode.clone(),
+            summary: summary.summary.clone(),
+            changed_files: summary.changed_files.clone(),
+            verification_status: summary.verification_status.clone(),
+        })
+    }
+}
+
+impl From<&RunSummaryStatus> for RpcRunSummaryStatus {
+    fn from(value: &RunSummaryStatus) -> Self {
+        match value {
+            RunSummaryStatus::Running => Self::Running,
+            RunSummaryStatus::Completed => Self::Completed,
+            RunSummaryStatus::Failed => Self::Failed,
+            RunSummaryStatus::Canceled => Self::Canceled,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct RpcWorkspace {
     store: RunLogStore,
@@ -805,6 +916,7 @@ struct RpcWorkspace {
 #[derive(Debug)]
 struct ActiveRpcRun {
     run_id: String,
+    cancellation_token: CancellationToken,
     run_log: SerializedRunLog,
     events: mpsc::Receiver<RunLogEvent>,
     join: thread::JoinHandle<Result<(), AgentRpcHandlerError>>,
@@ -892,23 +1004,18 @@ impl RpcApprovalQueue {
         self.resolve(approval_id, ApprovalDecision::Rejected { reason }, None)
     }
 
-    fn cancel_run(&self, run_id: &str, reason: String) -> Result<(), AgentRpcHandlerError> {
+    fn cancel_run_pending_approvals(
+        &self,
+        run_id: &str,
+        reason: String,
+    ) -> Result<(), AgentRpcHandlerError> {
         let mut pending = self.lock_pending()?;
-        let mut matched = false;
         for entry in pending.values_mut() {
             if entry.run_id == run_id && entry.decision.is_none() {
                 entry.decision = Some(ApprovalDecision::Canceled {
                     reason: reason.clone(),
                 });
-                matched = true;
             }
-        }
-
-        if !matched {
-            return Err(AgentRpcHandlerError::new(
-                RPC_RUN_NOT_FOUND,
-                format!("run `{run_id}` has no pending approval that can be canceled"),
-            ));
         }
 
         self.inner.changed.notify_all();
@@ -1093,6 +1200,8 @@ fn spawn_active_run<P>(
 where
     P: TurnProvider + Send + 'static,
 {
+    let cancellation_token = CancellationToken::new();
+    let worker_input = input.with_cancellation_token(cancellation_token.clone());
     let run_log = SerializedRunLog::new(run_log);
     let worker_run_log = run_log.clone();
     let (events_tx, events_rx) = mpsc::channel();
@@ -1104,7 +1213,7 @@ where
                 workspace_root,
                 provider,
                 worker_run_log,
-                input,
+                worker_input,
                 config,
                 events_tx,
                 approval_queue,
@@ -1114,6 +1223,7 @@ where
 
     Ok(ActiveRpcRun {
         run_id,
+        cancellation_token,
         run_log,
         events: events_rx,
         join,
@@ -1287,6 +1397,10 @@ fn map_completed_turn_loop_error(error: AgentTurnLoopError) -> AgentRpcHandlerEr
 }
 
 fn map_io_error(error: io::Error) -> AgentRpcHandlerError {
+    AgentRpcHandlerError::new(RPC_INTERNAL_INVARIANT, error.to_string())
+}
+
+fn map_rpc_error(error: AgentRpcError) -> AgentRpcHandlerError {
     AgentRpcHandlerError::new(RPC_INTERNAL_INVARIANT, error.to_string())
 }
 
@@ -1487,6 +1601,9 @@ where
             method if method == RESUME_METHOD.qualified_name() => {
                 self.handle_resume(id, message.params, writer)
             }
+            method if method == LIST_RUNS_METHOD.qualified_name() => {
+                self.handle_list_runs(id, message.params, writer)
+            }
             method => write_error(
                 writer,
                 id,
@@ -1675,6 +1792,32 @@ where
             Err(error) => write_error(writer, id, error.into_error_object()),
         }
     }
+
+    fn handle_list_runs<W>(
+        &mut self,
+        id: Value,
+        params: Option<Value>,
+        writer: &mut W,
+    ) -> Result<(), AgentRpcError>
+    where
+        W: Write,
+    {
+        let params = match parse_optional_params::<ListRunsParams>(
+            params,
+            LIST_RUNS_METHOD.qualified_name().as_str(),
+        ) {
+            Ok(params) => params,
+            Err(error) => return write_error(writer, id, error),
+        };
+
+        match self.handler.list_runs(params) {
+            Ok(output) => {
+                write_json_line(writer, &JsonRpcResponse::new(id, output.result))?;
+                emit_run_log_events(writer, &output.events)
+            }
+            Err(error) => write_error(writer, id, error.into_error_object()),
+        }
+    }
 }
 
 pub fn run_stdio_request_loop<R, W, H>(
@@ -1799,6 +1942,21 @@ where
     })
 }
 
+fn parse_optional_params<T>(params: Option<Value>, method: &str) -> Result<T, JsonRpcErrorObject>
+where
+    T: Default + for<'de> Deserialize<'de>,
+{
+    match params {
+        None | Some(Value::Null) => Ok(T::default()),
+        Some(params) => serde_json::from_value(params).map_err(|source| {
+            JsonRpcErrorObject::new(
+                JSON_RPC_INVALID_PARAMS,
+                format!("invalid params for {method}: {source}"),
+            )
+        }),
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum AgentRpcError {
     #[error("JSON-RPC message serialization failed: {0}")]
@@ -1856,8 +2014,9 @@ mod tests {
         provider::deepseek_api::ChatToolCall,
         run_log::{RunLogEvent, RunLogStore},
         turn_loop::{
-            TurnEventSink, TurnProvider, TurnProviderError, TurnProviderFuture,
-            TurnProviderRequest, TurnProviderResponse, turn_provider_response_stream,
+            AgentTurnInput, AgentTurnLoopConfig, TurnEventSink, TurnProvider, TurnProviderError,
+            TurnProviderFuture, TurnProviderRequest, TurnProviderResponse,
+            turn_provider_response_stream,
         },
     };
     use serde_json::{Value, json};
@@ -1868,11 +2027,13 @@ mod tests {
         AgentRpcHandlerOutput, AgentRpcRequestHandler, AgentTurnLoopRpcHandler, ApproveParams,
         ApproveResult, CANCEL_METHOD, CancelParams, CancelResult, EVENT_METHOD, INITIALIZE_METHOD,
         JSON_RPC_INVALID_PARAMS, JSON_RPC_INVALID_REQUEST, JSON_RPC_METHOD_NOT_FOUND,
-        JSON_RPC_PARSE_ERROR, PROTOCOL_VERSION, REJECT_METHOD, RESUME_METHOD,
-        RPC_APPROVAL_NOT_FOUND, RPC_INTERNAL_INVARIANT, RPC_UNSUPPORTED_PROTOCOL, RejectParams,
-        RejectResult, ResumeParams, ResumeResult, RpcApprovalPersistence, RpcApprovalState,
-        RpcRunState, SEND_TURN_METHOD, SendTurnParams, SendTurnResult, StdioEventBridge,
-        format_unix_millis, run_log_event_to_notification, run_stdio_request_loop,
+        JSON_RPC_PARSE_ERROR, LIST_RUNS_METHOD, ListRunsParams, ListRunsResult, PROTOCOL_VERSION,
+        REJECT_METHOD, RESUME_METHOD, RPC_APPROVAL_NOT_FOUND, RPC_INTERNAL_INVARIANT,
+        RPC_UNSUPPORTED_PROTOCOL, RejectParams, RejectResult, ResumeParams, ResumeResult,
+        RpcApprovalPersistence, RpcApprovalQueue, RpcApprovalState, RpcRunState, RpcRunSummary,
+        RpcRunSummaryStatus, RpcWorkspace, SEND_TURN_METHOD, SendTurnParams, SendTurnResult,
+        StdioEventBridge, format_unix_millis, run_log_event_to_notification,
+        run_stdio_request_loop, spawn_active_run,
     };
 
     #[test]
@@ -1883,6 +2044,7 @@ mod tests {
         assert_eq!(REJECT_METHOD.qualified_name(), "agent.reject");
         assert_eq!(CANCEL_METHOD.qualified_name(), "agent.cancel");
         assert_eq!(RESUME_METHOD.qualified_name(), "agent.resume");
+        assert_eq!(LIST_RUNS_METHOD.qualified_name(), "agent.listRuns");
         assert_eq!(EVENT_METHOD.qualified_name(), "agent.event");
     }
 
@@ -2136,6 +2298,49 @@ mod tests {
     }
 
     #[test]
+    fn request_loop_lists_run_summaries() {
+        let input = [
+            json!({
+                "jsonrpc": "2.0",
+                "id": "init_1",
+                "method": "agent.initialize",
+                "params": initialize_params()
+            })
+            .to_string(),
+            json!({
+                "jsonrpc": "2.0",
+                "id": "list_1",
+                "method": "agent.listRuns",
+                "params": {
+                    "limit": 10
+                }
+            })
+            .to_string(),
+        ]
+        .join("\n");
+        let mut output = Vec::new();
+
+        let handler =
+            run_stdio_request_loop(Cursor::new(input), &mut output, TestHandler::default())
+                .expect("request loop should complete");
+
+        assert_eq!(handler.list_runs.len(), 1);
+        assert_eq!(handler.list_runs[0].limit, Some(10));
+        let lines = output_lines(output);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[1]["id"], "list_1");
+        assert_eq!(lines[1]["result"]["runs"][0]["runId"], "run_rpc");
+        assert_eq!(lines[1]["result"]["runs"][0]["title"], "Read README");
+        assert_eq!(lines[1]["result"]["runs"][0]["status"], "completed");
+        assert_eq!(lines[1]["result"]["runs"][0]["lastSeq"], 3);
+        assert_eq!(lines[1]["result"]["runs"][0]["eventCount"], 3);
+        assert_eq!(
+            lines[1]["result"]["runs"][0]["verificationStatus"],
+            "skipped"
+        );
+    }
+
+    #[test]
     fn request_loop_dispatches_approval_decisions() {
         let input = [
             json!({
@@ -2308,6 +2513,12 @@ mod tests {
                 }
             })
             .to_string(),
+            json!({
+                "jsonrpc": "2.0",
+                "id": "list_1",
+                "method": "agent.listRuns"
+            })
+            .to_string(),
         ]
         .join("\n");
         let mut output = Vec::new();
@@ -2340,6 +2551,22 @@ mod tests {
                     .as_u64()
                     .is_some_and(|seq| seq > 1)
         }));
+        let list_response = lines
+            .iter()
+            .find(|line| line["id"] == "list_1")
+            .expect("listRuns response should be present");
+        assert_eq!(list_response["result"]["runs"][0]["runId"], "run_real_rpc");
+        assert_eq!(list_response["result"]["runs"][0]["title"], "Say hello");
+        assert_eq!(list_response["result"]["runs"][0]["status"], "completed");
+        assert_eq!(
+            list_response["result"]["runs"][0]["summary"],
+            "RPC final answer"
+        );
+        assert!(
+            list_response["result"]["runs"][0]["lastSeq"]
+                .as_u64()
+                .is_some_and(|seq| seq > 1)
+        );
 
         let store = RunLogStore::new(workspace.path()).expect("store should open");
         let events = store
@@ -2561,6 +2788,50 @@ mod tests {
     }
 
     #[test]
+    fn turn_loop_rpc_handler_cancels_provider_with_signal() {
+        let workspace = TestWorkspace::new();
+        let store = RunLogStore::new(workspace.path()).expect("store should open");
+        let run_log = store
+            .create_run("run_rpc_provider_cancel")
+            .expect("run should be created");
+        let active_run = spawn_active_run(
+            "run_rpc_provider_cancel".to_owned(),
+            workspace.path().to_path_buf(),
+            WaitingForCancellationProvider,
+            run_log,
+            AgentTurnInput::new("turn_1", "Wait for cancellation"),
+            AgentTurnLoopConfig::default(),
+            RpcApprovalQueue::default(),
+        )
+        .expect("active run should spawn");
+        let mut handler = AgentTurnLoopRpcHandler::new(final_provider_factory);
+        handler.workspace = Some(RpcWorkspace { store });
+        handler.active_run = Some(active_run);
+
+        let output = handler
+            .cancel(CancelParams {
+                run_id: "run_rpc_provider_cancel".to_owned(),
+                reason: Some("client canceled provider".to_owned()),
+            })
+            .expect("cancel should signal provider");
+
+        assert_eq!(output.result.state, RpcRunState::Canceled);
+        assert_eq!(
+            output.result.reason.as_deref(),
+            Some("client canceled provider")
+        );
+        assert!(output.events.iter().any(|event| {
+            event.event_type == "run.canceled"
+                && event.payload["code"] == "E_RUN_CANCELED"
+                && event.payload["reason"] == "client canceled provider"
+        }));
+        assert!(
+            handler.active_run.is_none(),
+            "provider cancellation should finish active run"
+        );
+    }
+
+    #[test]
     fn turn_loop_rpc_handler_expires_pending_approval_without_running_tool() {
         let workspace = TestWorkspace::new();
         workspace.write("README.md", "old\n");
@@ -2755,6 +3026,7 @@ mod tests {
         rejections: Vec<RejectParams>,
         cancellations: Vec<CancelParams>,
         resumes: Vec<ResumeParams>,
+        list_runs: Vec<ListRunsParams>,
     }
 
     impl AgentRpcRequestHandler for TestHandler {
@@ -2844,6 +3116,29 @@ mod tests {
                 json!({ "text": "hello", "stream": true }),
             )]))
         }
+
+        fn list_runs(
+            &mut self,
+            params: ListRunsParams,
+        ) -> Result<AgentRpcHandlerOutput<ListRunsResult>, AgentRpcHandlerError> {
+            self.list_runs.push(params);
+            Ok(AgentRpcHandlerOutput::new(ListRunsResult {
+                runs: vec![RpcRunSummary {
+                    run_id: "run_rpc".to_owned(),
+                    title: "Read README".to_owned(),
+                    status: RpcRunSummaryStatus::Completed,
+                    started_at: "1970-01-01T00:00:00.000Z".to_owned(),
+                    updated_at: "1970-01-01T00:00:01.000Z".to_owned(),
+                    completed_at: Some("1970-01-01T00:00:01.000Z".to_owned()),
+                    last_seq: 3,
+                    event_count: 3,
+                    mode: Some("ask".to_owned()),
+                    summary: Some("Done".to_owned()),
+                    changed_files: Vec::new(),
+                    verification_status: Some("skipped".to_owned()),
+                }],
+            }))
+        }
     }
 
     fn run_log_event(
@@ -2919,6 +3214,21 @@ mod tests {
                     .pop_front()
                     .ok_or_else(|| TurnProviderError::new("scripted provider has no response"))?;
                 Ok(turn_provider_response_stream(response))
+            })
+        }
+    }
+
+    struct WaitingForCancellationProvider;
+
+    impl TurnProvider for WaitingForCancellationProvider {
+        fn complete_stream(&mut self, request: TurnProviderRequest) -> TurnProviderFuture<'_> {
+            Box::pin(async move {
+                while !request.cancellation_token.is_canceled() {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(TurnProviderError::new(
+                    request.cancellation_token.cancellation_reason(),
+                ))
             })
         }
     }
