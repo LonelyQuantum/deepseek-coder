@@ -8,7 +8,7 @@ import {
   APPROVAL_REJECTED_REASON,
   APPROVAL_REJECT_LABEL,
   OPEN_CHAT_COMMAND,
-  OPEN_CHAT_READY_MESSAGE,
+  OPEN_CHAT_NO_WORKSPACE_MESSAGE,
   type ApprovalPromptRequest,
   type ApprovalWindowMessenger,
   type CommandRegistry,
@@ -39,8 +39,8 @@ test("registerOpenChatCommand registers the public command id", () => {
   assert.equal(returned, disposable);
 });
 
-test("open chat command reports scaffold readiness", () => {
-  let callback: (() => void) | undefined;
+test("open chat command asks for a workspace when RPC server is unavailable", () => {
+  let callback: (() => unknown) | undefined;
   let message: string | undefined;
 
   const commands: CommandRegistry = {
@@ -61,9 +61,44 @@ test("open chat command reports scaffold readiness", () => {
 
   callback();
 
-  assert.equal(message, OPEN_CHAT_READY_MESSAGE);
-  assert.ok(message?.includes("CLI run command"));
-  assert.ok(message?.includes("RPC integration"));
+  assert.equal(message, OPEN_CHAT_NO_WORKSPACE_MESSAGE);
+  assert.ok(message?.includes("trusted workspace"));
+});
+
+test("open chat command starts the RPC server and reports readiness", async () => {
+  let callback: (() => unknown) | undefined;
+  let message: string | undefined;
+
+  const commands: CommandRegistry = {
+    registerCommand(_command, registeredCallback) {
+      callback = registeredCallback;
+      return { dispose: () => undefined };
+    },
+  };
+
+  const window: WindowMessenger = {
+    showInformationMessage(value) {
+      message = value;
+    },
+  };
+
+  registerOpenChatCommand(commands, window, {
+    status: "stopped",
+    async start() {
+      return {
+        server: {
+          name: "deepseek-coder-agent-rpc",
+          version: "0.1.0",
+        },
+      };
+    },
+  });
+  assert.ok(callback);
+
+  await callback();
+
+  assert.ok(message?.includes("RPC server ready"));
+  assert.ok(message?.includes("deepseek-coder-agent-rpc"));
 });
 
 test("requestApproval maps VS Code approve choices to approval params", async () => {

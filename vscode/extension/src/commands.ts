@@ -1,6 +1,6 @@
 export const OPEN_CHAT_COMMAND = "deepseek-coder.openChat";
-export const OPEN_CHAT_READY_MESSAGE =
-  "deepseek-coder extension scaffold is ready. Use the CLI run command for agent runs until RPC integration is available.";
+export const OPEN_CHAT_NO_WORKSPACE_MESSAGE =
+  "Open a trusted workspace before starting the deepseek-coder RPC server.";
 export const APPROVAL_APPROVE_LABEL = "Approve";
 export const APPROVAL_APPROVE_ONCE_LABEL = "Approve Once";
 export const APPROVAL_APPROVE_SESSION_LABEL = "Approve For Session";
@@ -9,11 +9,22 @@ export const APPROVAL_DISMISSED_REASON = "approval prompt dismissed";
 export const APPROVAL_REJECTED_REASON = "rejected in VS Code";
 
 export interface CommandRegistry {
-  registerCommand(command: string, callback: () => void): DisposableLike;
+  registerCommand(command: string, callback: () => unknown): DisposableLike;
 }
 
 export interface WindowMessenger {
   showInformationMessage(message: string): unknown;
+  showWarningMessage?(message: string): unknown;
+}
+
+export interface RpcServerStarter {
+  readonly status: string;
+  start(): Promise<{
+    readonly server: {
+      readonly name: string;
+      readonly version: string;
+    };
+  }>;
 }
 
 export interface ApprovalWindowMessenger {
@@ -57,9 +68,28 @@ export type ApprovalPromptDecision =
 export function registerOpenChatCommand(
   commands: CommandRegistry,
   window: WindowMessenger,
+  rpcServer?: RpcServerStarter,
 ): DisposableLike {
   return commands.registerCommand(OPEN_CHAT_COMMAND, () => {
-    void window.showInformationMessage(OPEN_CHAT_READY_MESSAGE);
+    if (rpcServer === undefined) {
+      return window.showInformationMessage(OPEN_CHAT_NO_WORKSPACE_MESSAGE);
+    }
+
+    return rpcServer
+      .start()
+      .then((ready) =>
+        window.showInformationMessage(
+          `deepseek-coder RPC server ready: ${ready.server.name} ${ready.server.version}`,
+        ),
+      )
+      .catch((error: unknown) => {
+        const message = `deepseek-coder RPC server failed to start: ${errorMessage(error)}`;
+        if (window.showWarningMessage !== undefined) {
+          return window.showWarningMessage(message);
+        }
+
+        return window.showInformationMessage(message);
+      });
   });
 }
 
@@ -124,4 +154,8 @@ function formatApprovalMessage(request: ApprovalPromptRequest): string {
   }
 
   return detail.join("\n");
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

@@ -12,7 +12,7 @@
     "vscode": "^1.100.0"
   },
   "categories": ["Other"],
-  "activationEvents": ["onCommand:deepseek-coder.openChat"],
+  "activationEvents": ["onStartupFinished", "onCommand:deepseek-coder.openChat"],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
@@ -20,7 +20,30 @@
         "command": "deepseek-coder.openChat",
         "title": "deepseek-coder: Open Chat"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "deepseek-coder",
+      "properties": {
+        "deepseek-coder.rpc.autoStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Start the Rust Agent RPC server when the extension activates in a trusted workspace."
+        },
+        "deepseek-coder.rpc.command": {
+          "type": "string",
+          "default": "deepseek-coder",
+          "description": "Command used to launch the Rust Agent RPC server."
+        },
+        "deepseek-coder.rpc.args": {
+          "type": "array",
+          "default": ["rpc"],
+          "items": {
+            "type": "string"
+          },
+          "description": "Arguments passed to the Rust Agent RPC server command."
+        }
+      }
+    }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
