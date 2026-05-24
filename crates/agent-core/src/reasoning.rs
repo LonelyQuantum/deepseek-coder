@@ -189,6 +189,58 @@ mod tests {
     }
 
     #[test]
+    fn prepares_empty_message_list_without_replay_requirement() {
+        let prepared = ReasoningContentStateMachine::default()
+            .prepare_messages(&[])
+            .expect("empty message list should prepare");
+
+        assert!(prepared.messages.is_empty());
+        assert_eq!(prepared.state, ReasoningContentState::NoReplayRequired);
+    }
+
+    #[test]
+    fn counts_multiple_tool_call_assistant_messages_requiring_replay() {
+        let messages = vec![
+            ChatMessage::user("read two files"),
+            ChatMessage::assistant_with_tool_calls(
+                Some("Reading first.".to_owned()),
+                Some("Need the first file.".to_owned()),
+                vec![tool_call()],
+            ),
+            ChatMessage::tool_result("call_1", "first"),
+            ChatMessage::assistant_with_tool_calls(
+                Some("Reading second.".to_owned()),
+                Some("Need the second file.".to_owned()),
+                vec![ChatToolCall::function(
+                    "call_2",
+                    "read_file",
+                    r#"{"path":"CHANGELOG.md"}"#,
+                )],
+            ),
+            ChatMessage::tool_result("call_2", "second"),
+        ];
+
+        let prepared = ReasoningContentStateMachine::default()
+            .prepare_messages(&messages)
+            .expect("messages should prepare");
+
+        assert_eq!(
+            prepared.state,
+            ReasoningContentState::ReplayRequired {
+                assistant_messages: 2
+            }
+        );
+        assert_eq!(
+            prepared.messages[1].reasoning_content.as_deref(),
+            Some("Need the first file.")
+        );
+        assert_eq!(
+            prepared.messages[3].reasoning_content.as_deref(),
+            Some("Need the second file.")
+        );
+    }
+
+    #[test]
     fn keeps_only_tool_call_reasoning_across_later_user_turns() {
         let messages = vec![
             ChatMessage::user("read the README"),
