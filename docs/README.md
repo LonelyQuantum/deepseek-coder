@@ -12,6 +12,7 @@
 
 - `architecture.md`：总体架构和 workspace 布局。
 - `roadmap.md`：跨模块路线图、阶段优先级和验收重点。
+- `phase-tasks.md`：详细任务阶段、状态、来源和维护规则。
 - `agent-core.md`：Agent Core 职责和回合生命周期。
 - `deepseek-api-adapter.md`：DeepSeek API adapter 设计。
 - `reasoning-content.md`：`reasoning_content` 状态机。

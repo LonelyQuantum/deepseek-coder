@@ -31,7 +31,7 @@ deepseek-coder rpc [options]
 - `--max-input-tokens <n>`、`--max-model-turns <n>`、`--max-output-tokens <n>`
 - `--thinking <enabled|disabled>`
 
-`deepseek-coder rpc` 从 stdin 读取 newline-delimited JSON-RPC request，并把 response / `agent.event` notification 写到 stdout。它当前接入 `AgentTurnLoopRpcHandler`：`agent.sendTurn` 会创建 run log、启动后台 Turn Loop worker，并在 run 结束或遇到 `tool.approvalRequired` 时返回 response 和事件；`agent.approve` / `agent.reject` 会唤醒 pending approval 队列并继续输出后续事件。完全全双工的后台事件 writer、取消和审批过期仍是后续任务。
+`deepseek-coder rpc` 从 stdin 读取 newline-delimited JSON-RPC request，并把 response / `agent.event` notification 写到 stdout。它当前接入 `AgentTurnLoopRpcHandler`：`agent.sendTurn` 会创建 run log、启动后台 Turn Loop worker，并在 run 结束或遇到 `tool.approvalRequired` 时返回 response 和事件；`agent.approve` / `agent.reject` 会唤醒 pending approval 队列并继续输出后续事件。显式取消、审批过期和 pending approval 场景下的 EOF shutdown 取消已实现；完全全双工的后台事件 writer 与长 provider request 期间的断连感知归入 Phase 3 共享 RPC 交互管线。
 
 ## Provider
 

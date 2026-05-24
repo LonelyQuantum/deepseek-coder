@@ -76,6 +76,8 @@ pnpm run check
 - `pnpm -r typecheck`
 - `pnpm -r test`
 
+Phase 1 合并前新增的离线验收已经纳入上述默认检查：RPC request loop 会覆盖 pending approval 并发拒绝与 EOF shutdown 取消，CLI `rpc` 会从真实二进制启动 stdio smoke，Rust/TypeScript 会共同校验协议错误码表与 `docs/json-rpc-protocol.md` 一致。
+
 ### 必跑：测试清单盘点
 
 ```powershell

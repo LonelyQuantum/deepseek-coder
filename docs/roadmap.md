@@ -1,8 +1,8 @@
 # 路线图
 
-状态：草案，Phase 1 Agent Core MVP 已完成，后续随 Phase 2 实现持续更新。
+状态：草案，Phase 1 Agent Core MVP 与合并主线前离线最终验收已完成，后续随 Phase 2 实现持续更新。
 
-本文档把 README 中的大阶段拆成更可执行的优先级。README 保留项目入口和高层计划；这里记录跨模块的落地顺序、取舍和验收重点。
+本文档把 README 中的大阶段拆成更可执行的优先级。README 保留项目入口和高层计划；这里记录跨模块的落地顺序、取舍和验收重点。具体任务的阶段、状态和来源统一登记在 `docs/phase-tasks.md`，阶段条目标记完成前应同步检查并更新该索引。
 
 ## 定位
 
@@ -39,12 +39,12 @@
 - CLI DeepSeek provider streaming wrapper：CLI provider 通过 `create_chat_completion_stream` 聚合 content、`reasoning_content` 和 tool calls，并把 content delta 写入 run log。
 - 真实 provider streaming 联网验收：`deepseek_cli_live` 从编译出的 CLI 二进制启动真实 DeepSeek provider，验证 `stream: true` 的 `assistant.delta` 和最终 `run.completed`。
 - streaming tool call 增量拼装验证：adapter 已区分 `ChatToolCallDelta` 与完整 `ChatToolCall`，`ChatToolCallAccumulator` 会按 `index` 拼接 arguments 并拒绝缺失或冲突元数据；`live_streaming_tool_call_accumulator_smoke_test` 已用真实 DeepSeek streaming 验收工具调用 delta 形态。
-- Agent RPC Server 双向 request loop：`agent-rpc` 已支持 newline-delimited JSON-RPC request 读取、初始化顺序检查、`agent.initialize` / `agent.sendTurn` / `agent.resume` 分发、response/error 写回，以及 handler 返回事件的 `agent.event` 有序输出。
+- Agent RPC Server 双向 request loop：`agent-rpc` 已支持 newline-delimited JSON-RPC request 读取、初始化顺序检查、`agent.initialize` / `agent.sendTurn` / `agent.resume` 分发、response/error 写回、EOF shutdown，以及 handler 返回事件的 `agent.event` 有序输出。
 - RPC/CLI 实时事件输出：`AgentTurnLoop::run_turn_with_event_sink` 会在 Run Log 事件追加成功后立即调用 `TurnEventSink`；`StdioEventBridge` 已实现该接口，CLI `--json` 输出顺序与本地 `events.jsonl` 的 `seq` 一致，不再等 run 完成后批量回放。
 - CLI/RPC/TUI/VS Code 审批基础：Turn Loop 会写入 `tool.approvalRequired` 和 `tool.approvalResolved`；CLI 二进制支持 stdin/stderr 交互式 y/n 审批；RPC request loop 已分发 `agent.approve` / `agent.reject`；TypeScript 协议类型已补齐；TUI prompt 状态机和 VS Code modal approval adapter 已有测试覆盖。
 - 真实 RPC Turn Loop handler：`AgentTurnLoopRpcHandler` 已通过 provider factory 复用 Core Turn Loop，`agent.sendTurn` 会创建 run log、驱动 provider 和工具执行，并把结果事件交给 request loop；CLI `rpc` 子命令已提供 stdio 入口。
 - RPC 真实审批等待队列：`AgentTurnLoopRpcHandler` 会在 `tool.approvalRequired` 处登记 pending approval，后台 Turn Loop worker 等待 `agent.approve` / `agent.reject`，批准后继续执行工具，拒绝后记录 `tool.approvalResolved` 和 `run.failed`。
-- RPC 审批超时/取消：pending approval 已记录过期时间；`agent.cancel` 会取消等待审批的 active run，超时会自动解析为 expired，两者都会记录 `tool.approvalResolved` 和 `run.canceled`。
+- RPC 审批超时/取消：pending approval 已记录过期时间；`agent.cancel` 和 request loop EOF shutdown 会取消等待审批的 active run，超时会自动解析为 expired，这些路径都会记录 `tool.approvalResolved` 和 `run.canceled`。
 - Run Log 写入串行化：Agent Core 已提供 `RunLogWriter` trait 和 `SerializedRunLog`；CLI 继续使用单 writer `RunLog`，RPC active run 使用共享锁串行化 append/load，避免同一 run 被多个前端请求并发读写时出现序列错乱。
 - Run summary metadata / `agent.listRuns`：每个 run 目录维护 `summary.json`，记录标题、状态、时间、事件数、最终摘要、变更文件和验证状态；RPC `agent.listRuns` 通过 summary 快速列出 run。
 - RPC provider/tool 取消信号：Agent Core 已提供协作式 `CancellationToken`；RPC active run 会把 token 注入 Turn Loop，`agent.cancel` 会通知 provider request、命令类工具和 pending approval，并以 `run.canceled` 收口。
@@ -61,22 +61,21 @@
 - CLI event stream 顺序：进程级 smoke test 已验证 event `seq` 连续递增和关键事件子序列。
 - 共享 `TestWorkspace`：`agent-core::test_helpers::TestWorkspace` 已统一 agent-core、agent-rpc、cli、demo/live 测试的临时工作区创建、保留、git 初始化和读写 helper。
 - live API key 测试 helper：真实联网测试已统一通过 `DEEPSEEK_CODER_API_KEY -> DEEPSEEK_API_KEY -> .secrets/deepseek-api-key` 读取本地密钥；运行时 provider 配置保持不变。
+- RPC/CLI/protocol 合并前验收：`agent-rpc` 新增 pending approval 并发拒绝与 EOF shutdown 取消测试，`cli` 新增真实二进制 `rpc` stdio smoke，`packages/protocol` 与 `agent-rpc` 共同校验错误码表和协议文档一致。
 
-合并主线前剩余工作：
+合并主线前最终验收：
 
-- 补 RPC request loop 并发与断连测试，覆盖 active run、pending approval、cancel/disconnect 和事件 replay。
-- 补 CLI `rpc` 模式进程级测试，从真实二进制启动 stdio RPC 并验证 initialize、sendTurn、事件输出和错误响应。
-- 补协议错误码交叉校验，确保 Rust、TypeScript 与协议文档保持一致。
-- 最终合并前再跑 `pnpm run check`、测试清单盘点、展示 demo、必要 live suite 和敏感信息扫描。
+- 已运行 `pnpm run check`、`cargo test --workspace -- --list`、离线展示 demo、`git diff --check` 和敏感信息扫描。
+- 本轮 RPC/CLI/protocol 离线变更未新增必须阻塞合并的 DeepSeek live suite；已有 live suite 仍按 `docs/testing.md` 保留为阶段合并前的手动验收选项。
 
 下一步：
 
-- 完成 Phase 1 合并主线前收敛后，再进入 Phase 2 Context Capsule。
-- RPC 全双工事件 writer 队列：当前 pending approval 已真实等待，但事件仍在 request 返回时 flush；后续让 `agent.sendTurn` 更早返回 accepted 并持续推送事件。
+- 进入 Phase 2 Context Capsule。
+- RPC 全双工事件 writer 队列已归入 Phase 3 共享 RPC 交互管线；当前 pending approval 已真实等待，但事件仍在 request 返回时 flush，后续让 `agent.sendTurn` 更早返回 accepted 并持续推送事件。
 
 Phase 1 收官后优化池：
 
-- RPC 事件输出模型收敛：把当前 request 边界 flush 的事件输出升级为独立 writer 队列，明确 client 断连时的 active run 取消语义。
+- RPC 事件输出模型收敛：把当前 request 边界 flush 的事件输出升级为独立 writer 队列，把 EOF shutdown 的 pending approval 取消扩展为长 provider request 期间也能即时感知 client 断连。
 - 工具执行安全打磨：实现命令风险分类器，补充进程树清理策略，并在审批信息中突出 cwd、命令摘要和风险升级原因。
 - Run Log 体积与隐私控制：为工具输出、verification 输出和 provider 摘要增加统一大小限制、截断原因和可导出的脱敏包边界。
 - Provider summary 事件：把 usage、cache 命中、模型名、stream 统计等写成稳定 schema，避免只依赖 provider 私有响应。

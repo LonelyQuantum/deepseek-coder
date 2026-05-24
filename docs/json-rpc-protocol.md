@@ -215,7 +215,7 @@ interface SendTurnResult {
 
 Result 返回后，进度通过 `agent.event` notification 持续到达。
 
-当前 Rust request loop 已能解析 `agent.sendTurn` 并分发给 `AgentRpcRequestHandler`。`crates/agent-rpc::AgentTurnLoopRpcHandler` 已能创建 run、选择注入的 provider factory、启动后台 Turn Loop worker，并把 Run Log 事件返回给 request loop 输出。当前实现会收集事件直到 run 结束或遇到 `tool.approvalRequired`：遇到审批时，response 后会输出审批请求事件，worker 在 pending approval 队列中等待 `agent.approve` / `agent.reject` / `agent.cancel`，并在超时时写入取消事件。完全全双工的“先发送 accepted response，再独立事件 writer 持续推送”仍是后续异步执行队列目标。
+当前 Rust request loop 已能解析 `agent.sendTurn` 并分发给 `AgentRpcRequestHandler`。`crates/agent-rpc::AgentTurnLoopRpcHandler` 已能创建 run、选择注入的 provider factory、启动后台 Turn Loop worker，并把 Run Log 事件返回给 request loop 输出。当前实现会收集事件直到 run 结束或遇到 `tool.approvalRequired`：遇到审批时，response 后会输出审批请求事件，worker 在 pending approval 队列中等待 `agent.approve` / `agent.reject` / `agent.cancel`，并在超时时写入取消事件。如果 request loop 读到 EOF，会调用 handler shutdown；对于已经暂停在 pending approval 的 active run，shutdown 会把审批解析为 `decision: "canceled"` 并写入 `run.canceled`。完全全双工的“先发送 accepted response，再独立事件 writer 持续推送”仍是后续异步执行队列目标。
 
 当前 handler 尚未消费 `attachments`；如果请求携带 attachment，会返回 `Invalid params`。选中文件、诊断和显式上下文条目会在 Context Builder 输入协议稳定后接入。
 
@@ -290,7 +290,7 @@ interface CancelResult {
 - Phase 1 实现支持取消 active run。取消会设置该 run 的协作式 `CancellationToken`；如果当前正在等待审批，会把对应 pending approval 解析为 `decision: "canceled"`，随后写入 `run.canceled`。
 - provider wrapper 和命令类工具必须在可中断边界检查 token。DeepSeek streaming wrapper 会在 stream 事件之间检查 token；shell/search/git 等子进程工具会在轮询子进程状态时检查 token，并在取消时 kill child。
 - 当前内存队列默认审批超时为 300 秒；超时会把 approval 解析为 `decision: "expired"`，随后写入 `run.canceled`。测试和嵌入方可以通过 handler 配置缩短该时间。
-- 当前取消是协作式，不是强制杀线程；完全全双工 writer、client 断连自动取消和更强进程树清理属于后续异步 run 执行队列。
+- 当前取消是协作式，不是强制杀线程；stdio EOF 已能通过 shutdown 取消已经暂停在 pending approval 的 active run。长时间 provider request 期间的即时 client 断连感知、完全全双工 writer 和更强进程树清理属于后续异步 run 执行队列。
 
 ### `agent.resume`
 
@@ -673,6 +673,7 @@ JSON-RPC 标准错误保留标准语义。项目特定错误使用 `-32000` 到 
 | -32600 | Invalid Request | 消息不是 JSON-RPC object、版本错误或初始化顺序错误。 |
 | -32601 | Method not found | method 尚未被当前 request loop 支持。 |
 | -32602 | Invalid params | params 无法反序列化为对应方法参数。 |
+| -32603 | Internal error | server 或 CLI 在无法归类到项目错误码时出现内部错误。 |
 
 | Code | Name | 含义 |
 | --- | --- | --- |
@@ -798,15 +799,15 @@ Run log 持久化前必须脱敏密钥。
 
 ## 实现说明
 
-- `packages/protocol` 定义与本文档匹配的 TypeScript 类型。
+- `packages/protocol` 定义与本文档匹配的 TypeScript 类型、method 常量和错误码注册表。
 - `crates/agent-rpc` 负责 Rust 协议结构和 JSON-RPC framing；当前已实现 Run Log 事件到 `agent.event` notification 的桥接，并让 `StdioEventBridge` 直接实现 `TurnEventSink`。
 - `docs/protocol/tool-registry.v1.json` 当前用于校验 Rust 与 TypeScript 的基础工具注册表一致，包含工具风险、默认审批和当前实现状态。
-- 后续应继续增加事件 payload 和 RPC method 的兼容性测试，验证 Rust 和 TypeScript 的协议定义一致。
+- 当前 Rust 和 TypeScript 测试都会校验协议错误码表，避免实现常量与文档漂移。后续应继续增加事件 payload 和 RPC method 的兼容性测试，验证 Rust 和 TypeScript 的协议定义一致。
 
 ## 后续增强
 
 - 为 `tool.completed`、`patch.proposed` 等事件补齐与 Rust 结果类型一致的详细 payload schema。
-- 将现有工具注册表 fixture 扩展到事件 payload 和 RPC method，确保 `docs/json-rpc-protocol.md`、`packages/protocol` 和 `crates/agent-rpc` 不分叉。
+- 将现有工具注册表和错误码注册表 fixture 扩展到事件 payload 和 RPC method，确保 `docs/json-rpc-protocol.md`、`packages/protocol` 和 `crates/agent-rpc` 不分叉。
 - 建立 `assistant.delta` 高频事件的批量发送、节流或合并策略，并用 benchmark 验证 stdio JSON-RPC 在 VS Code 扩展中的流畅度。
 - 明确事件重放规则：run resume 时哪些事件原样回放，哪些事件需要标记为历史事件。
 - 增加输出截断和脱敏字段约定，使前端能区分“没有输出”和“输出被安全策略截断”。

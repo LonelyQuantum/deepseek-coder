@@ -83,6 +83,7 @@ User
 
 - `docs/architecture.md`：总体架构。
 - `docs/roadmap.md`：详细路线图和阶段优先级。
+- `docs/phase-tasks.md`：详细任务阶段、状态和来源索引。
 - `docs/agent-core.md`：Agent Core 回合与职责。
 - `docs/deepseek-api-adapter.md`：DeepSeek API adapter。
 - `docs/reasoning-content.md`：`reasoning_content` 状态机。
@@ -538,7 +539,7 @@ extension.ts
 
 ## 开发计划
 
-当前进度：Phase 1 Agent Core MVP 功能闭环已完成，正在做合并主线前收敛。DeepSeek provider、基础工具执行、Context Builder、Run Log、Turn Loop、CLI、RPC、审批、取消、真实 DeepSeek streaming/tool-call 验收、本地 fixture smoke、进程级 CLI smoke、小型真实仓库 CLI 联网验收、合并前第一轮测试增强、测试基础设施收敛和 live 测试配置收敛均已完成；VS Code RPC server 启动监管与 JSON-RPC request client 已作为 Phase 4 前置项提前完成，不作为 Agent Core MVP 的必需验收条件。下一步补齐 Phase 1 合并前 RPC/CLI/protocol 验收，再进入 Phase 2 的 1M Context Capsule 收敛。
+当前进度：Phase 1 Agent Core MVP 功能闭环和合并主线前最终验收已完成。DeepSeek provider、基础工具执行、Context Builder、Run Log、Turn Loop、CLI、RPC、审批、取消、真实 DeepSeek streaming/tool-call 验收、本地 fixture smoke、进程级 CLI smoke、小型真实仓库 CLI 联网验收、合并前第一轮测试增强、测试基础设施收敛、live 测试配置收敛、RPC/CLI/protocol 验收补齐和离线最终验收均已完成；VS Code RPC server 启动监管与 JSON-RPC request client 已作为 Phase 4 前置项提前完成，不作为 Agent Core MVP 的必需验收条件。下一步进入 Phase 2 的 1M Context Capsule 收敛。
 
 ### Phase 0：项目章程
 
@@ -569,10 +570,12 @@ extension.ts
 - [x] Phase 1 合并前第一轮测试增强：完成 `pnpm run check` 基线验证、patch 失败恢复、reasoning 边界、CancellationToken 并发和 CLI event stream 顺序测试。
 - [x] 合并前测试基础设施收敛：提取共享 `agent-core::test_helpers::TestWorkspace`，统一当前分散在 agent-core、agent-rpc、cli、demo/live 测试中的临时工作区 helper。
 - [x] 合并前 live 测试配置收敛：统一 live API key 测试 helper，测试侧按 `DEEPSEEK_CODER_API_KEY`、`DEEPSEEK_API_KEY`、`.secrets/deepseek-api-key` 的顺序读取。
-- [ ] 合并前 RPC/CLI/protocol 验收补齐：补 RPC request loop 并发与断连测试、CLI `rpc` 模式进程级测试和协议错误码交叉校验。
-- [ ] 合并前最终验收：重新运行 `pnpm run check`、`cargo test --workspace -- --list`、展示 demo、必要的 DeepSeek live suite 和敏感信息扫描。
+- [x] 合并前 RPC/CLI/protocol 验收补齐：补 RPC request loop pending approval 并发拒绝与 EOF shutdown 取消测试、CLI `rpc` 模式进程级 stdio smoke，以及 Rust/TypeScript/协议文档错误码交叉校验。
+- [x] 合并前最终验收：已运行 `pnpm run check`、`cargo test --workspace -- --list`、离线展示 demo、`git diff --check` 和敏感信息扫描；本轮 RPC/CLI/protocol 离线变更未新增必须阻塞合并的 DeepSeek live suite。
 
 说明：VS Code RPC server 启动监管与 JSON-RPC request client 已提前完成，归入 Phase 4 前置项；Agent Core MVP 验收不依赖完整 VS Code UI。
+
+细任务维护规则：高层阶段条目完成时，同步检查并更新 `docs/phase-tasks.md` 中对应的详细任务状态；详细设计文档新增后续任务时，也先在该索引里确定阶段。
 
 验收标准：
 
@@ -597,6 +600,7 @@ extension.ts
 
 ### Phase 3：TUI
 
+- [ ] RPC 全双工 reader/writer 与事件发送队列：作为 TUI/VS Code 共享前置，支持 `agent.sendTurn` 早返回、后台持续事件推送和长 provider request 的断连取消。
 - [ ] RPC 入口和事件流消费。
 - [ ] Chat/Plan/Diff/Tools/Context/Settings 页面。
 - [ ] hunk 级审批。
