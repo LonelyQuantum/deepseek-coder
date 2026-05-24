@@ -53,6 +53,14 @@ impl<P, A> AgentTurnLoop<P, A> {
     }
 
     pub fn with_config(mut self, config: AgentTurnLoopConfig) -> Self {
+        self.reasoning = match config.reasoning_mode {
+            ReasoningContentMode::ThinkingEnabled => {
+                ReasoningContentStateMachine::thinking_enabled()
+            }
+            ReasoningContentMode::ThinkingDisabled => {
+                ReasoningContentStateMachine::thinking_disabled()
+            }
+        };
         self.config = config;
         self
     }
@@ -704,6 +712,7 @@ where
 pub struct AgentTurnLoopConfig {
     pub max_input_tokens: u64,
     pub max_model_turns: usize,
+    pub reasoning_mode: ReasoningContentMode,
 }
 
 impl Default for AgentTurnLoopConfig {
@@ -711,6 +720,7 @@ impl Default for AgentTurnLoopConfig {
         Self {
             max_input_tokens: 1_000_000,
             max_model_turns: 8,
+            reasoning_mode: ReasoningContentMode::ThinkingEnabled,
         }
     }
 }
