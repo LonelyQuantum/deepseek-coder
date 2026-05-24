@@ -9,6 +9,54 @@ export const agentRejectMethod = "agent.reject" as const;
 export const agentCancelMethod = "agent.cancel" as const;
 export const agentListRunsMethod = "agent.listRuns" as const;
 
+export interface ProtocolErrorDefinition {
+  readonly code: number;
+  readonly name: string;
+}
+
+export const jsonRpcErrorCodes = {
+  parseError: -32700,
+  invalidRequest: -32600,
+  methodNotFound: -32601,
+  invalidParams: -32602,
+  internalError: -32603,
+} as const;
+
+export const rpcErrorCodes = {
+  unsupportedProtocol: -32001,
+  workspaceUntrusted: -32002,
+  runNotFound: -32003,
+  runAlreadyActive: -32004,
+  invalidToolArguments: -32010,
+  approvalNotFound: -32011,
+  approvalDenied: -32012,
+  contextBudgetExceeded: -32020,
+  providerError: -32030,
+  toolExecutionFailed: -32040,
+  runCanceled: -32050,
+  internalInvariant: -32060,
+} as const;
+
+export const protocolErrorDefinitions = [
+  { code: jsonRpcErrorCodes.parseError, name: "Parse error" },
+  { code: jsonRpcErrorCodes.invalidRequest, name: "Invalid Request" },
+  { code: jsonRpcErrorCodes.methodNotFound, name: "Method not found" },
+  { code: jsonRpcErrorCodes.invalidParams, name: "Invalid params" },
+  { code: jsonRpcErrorCodes.internalError, name: "Internal error" },
+  { code: rpcErrorCodes.unsupportedProtocol, name: "E_UNSUPPORTED_PROTOCOL" },
+  { code: rpcErrorCodes.workspaceUntrusted, name: "E_WORKSPACE_UNTRUSTED" },
+  { code: rpcErrorCodes.runNotFound, name: "E_RUN_NOT_FOUND" },
+  { code: rpcErrorCodes.runAlreadyActive, name: "E_RUN_ALREADY_ACTIVE" },
+  { code: rpcErrorCodes.invalidToolArguments, name: "E_INVALID_TOOL_ARGUMENTS" },
+  { code: rpcErrorCodes.approvalNotFound, name: "E_APPROVAL_NOT_FOUND" },
+  { code: rpcErrorCodes.approvalDenied, name: "E_APPROVAL_DENIED" },
+  { code: rpcErrorCodes.contextBudgetExceeded, name: "E_CONTEXT_BUDGET_EXCEEDED" },
+  { code: rpcErrorCodes.providerError, name: "E_PROVIDER_ERROR" },
+  { code: rpcErrorCodes.toolExecutionFailed, name: "E_TOOL_EXECUTION_FAILED" },
+  { code: rpcErrorCodes.runCanceled, name: "E_RUN_CANCELED" },
+  { code: rpcErrorCodes.internalInvariant, name: "E_INTERNAL_INVARIANT" },
+] as const satisfies readonly ProtocolErrorDefinition[];
+
 export const riskLevels = ["read", "write", "exec", "network", "destructive"] as const;
 export type RiskLevel = (typeof riskLevels)[number];
 export type ApprovalRisk = RiskLevel;

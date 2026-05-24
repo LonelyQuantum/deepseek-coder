@@ -2064,10 +2064,13 @@ mod tests {
         APPROVE_METHOD, AgentInitializeParams, AgentInitializeResult, AgentRpcHandlerError,
         AgentRpcHandlerOutput, AgentRpcRequestHandler, AgentTurnLoopRpcHandler, ApproveParams,
         ApproveResult, CANCEL_METHOD, CancelParams, CancelResult, EVENT_METHOD, INITIALIZE_METHOD,
-        JSON_RPC_INVALID_PARAMS, JSON_RPC_INVALID_REQUEST, JSON_RPC_METHOD_NOT_FOUND,
-        JSON_RPC_PARSE_ERROR, LIST_RUNS_METHOD, ListRunsParams, ListRunsResult, PROTOCOL_VERSION,
-        REJECT_METHOD, RESUME_METHOD, RPC_APPROVAL_NOT_FOUND, RPC_INTERNAL_INVARIANT,
-        RPC_UNSUPPORTED_PROTOCOL, RejectParams, RejectResult, ResumeParams, ResumeResult,
+        JSON_RPC_INTERNAL_ERROR, JSON_RPC_INVALID_PARAMS, JSON_RPC_INVALID_REQUEST,
+        JSON_RPC_METHOD_NOT_FOUND, JSON_RPC_PARSE_ERROR, LIST_RUNS_METHOD, ListRunsParams,
+        ListRunsResult, PROTOCOL_VERSION, REJECT_METHOD, RESUME_METHOD, RPC_APPROVAL_DENIED,
+        RPC_APPROVAL_NOT_FOUND, RPC_CONTEXT_BUDGET_EXCEEDED, RPC_INTERNAL_INVARIANT,
+        RPC_INVALID_TOOL_ARGUMENTS, RPC_PROVIDER_ERROR, RPC_RUN_ALREADY_ACTIVE, RPC_RUN_CANCELED,
+        RPC_RUN_NOT_FOUND, RPC_TOOL_EXECUTION_FAILED, RPC_UNSUPPORTED_PROTOCOL,
+        RPC_WORKSPACE_UNTRUSTED, RejectParams, RejectResult, ResumeParams, ResumeResult,
         RpcApprovalPersistence, RpcApprovalQueue, RpcApprovalState, RpcRunState, RpcRunSummary,
         RpcRunSummaryStatus, RpcWorkspace, SEND_TURN_METHOD, SendTurnParams, SendTurnResult,
         StdioEventBridge, format_unix_millis, run_log_event_to_notification,
@@ -2084,6 +2087,38 @@ mod tests {
         assert_eq!(RESUME_METHOD.qualified_name(), "agent.resume");
         assert_eq!(LIST_RUNS_METHOD.qualified_name(), "agent.listRuns");
         assert_eq!(EVENT_METHOD.qualified_name(), "agent.event");
+    }
+
+    #[test]
+    fn error_codes_match_protocol_docs() {
+        let docs = include_str!("../../../docs/json-rpc-protocol.md");
+        let expected = [
+            (JSON_RPC_PARSE_ERROR, "Parse error"),
+            (JSON_RPC_INVALID_REQUEST, "Invalid Request"),
+            (JSON_RPC_METHOD_NOT_FOUND, "Method not found"),
+            (JSON_RPC_INVALID_PARAMS, "Invalid params"),
+            (JSON_RPC_INTERNAL_ERROR, "Internal error"),
+            (RPC_UNSUPPORTED_PROTOCOL, "`E_UNSUPPORTED_PROTOCOL`"),
+            (RPC_WORKSPACE_UNTRUSTED, "`E_WORKSPACE_UNTRUSTED`"),
+            (RPC_RUN_NOT_FOUND, "`E_RUN_NOT_FOUND`"),
+            (RPC_RUN_ALREADY_ACTIVE, "`E_RUN_ALREADY_ACTIVE`"),
+            (RPC_INVALID_TOOL_ARGUMENTS, "`E_INVALID_TOOL_ARGUMENTS`"),
+            (RPC_APPROVAL_NOT_FOUND, "`E_APPROVAL_NOT_FOUND`"),
+            (RPC_APPROVAL_DENIED, "`E_APPROVAL_DENIED`"),
+            (RPC_CONTEXT_BUDGET_EXCEEDED, "`E_CONTEXT_BUDGET_EXCEEDED`"),
+            (RPC_PROVIDER_ERROR, "`E_PROVIDER_ERROR`"),
+            (RPC_TOOL_EXECUTION_FAILED, "`E_TOOL_EXECUTION_FAILED`"),
+            (RPC_RUN_CANCELED, "`E_RUN_CANCELED`"),
+            (RPC_INTERNAL_INVARIANT, "`E_INTERNAL_INVARIANT`"),
+        ];
+
+        for (code, name) in expected {
+            let row_prefix = format!("| {code} | {name} |");
+            assert!(
+                docs.contains(&row_prefix),
+                "protocol docs should contain error row starting with `{row_prefix}`"
+            );
+        }
     }
 
     #[test]

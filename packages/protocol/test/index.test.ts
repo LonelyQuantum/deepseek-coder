@@ -28,6 +28,7 @@ import {
   jsonRpcVersion,
   findToolDefinition,
   isApprovalRequired,
+  protocolErrorDefinitions,
   protocolVersion,
   riskDefaultApproval,
   riskLevels,
@@ -55,6 +56,10 @@ const toolRegistryFixture = JSON.parse(
     "utf8",
   ),
 ) as ToolRegistryFixture;
+const jsonRpcProtocolDocument = readFileSync(
+  new URL("../../../../docs/json-rpc-protocol.md", import.meta.url),
+  "utf8",
+);
 
 test("risk defaults stay aligned with approval requirement helper", () => {
   assert.deepEqual(riskDefaultApproval, {
@@ -95,6 +100,28 @@ test("JSON-RPC method constants match protocol document", () => {
   assert.equal(agentCancelMethod, "agent.cancel");
   assert.equal(agentListRunsMethod, "agent.listRuns");
   assert.equal(agentEventMethod, "agent.event");
+});
+
+test("protocol error code registry matches protocol document", () => {
+  const codes = new Set<number>();
+  const names = new Set<string>();
+
+  for (const definition of protocolErrorDefinitions) {
+    const displayName = definition.name.startsWith("E_")
+      ? `\`${definition.name}\``
+      : definition.name;
+    const rowPrefix = `| ${definition.code} | ${displayName} |`;
+
+    assert.equal(codes.has(definition.code), false, `duplicate error code ${definition.code}`);
+    assert.equal(names.has(definition.name), false, `duplicate error name ${definition.name}`);
+    assert.equal(
+      jsonRpcProtocolDocument.includes(rowPrefix),
+      true,
+      `missing protocol document row starting with ${rowPrefix}`,
+    );
+    codes.add(definition.code);
+    names.add(definition.name);
+  }
 });
 
 test("approval request and decision params use stable protocol fields", () => {
