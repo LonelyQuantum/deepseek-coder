@@ -538,7 +538,7 @@ extension.ts
 
 ## 开发计划
 
-当前进度：Phase 1 Agent Core MVP 功能闭环已完成，正在做合并主线前收敛。DeepSeek provider、基础工具执行、Context Builder、Run Log、Turn Loop、CLI、RPC、审批、取消、真实 DeepSeek streaming/tool-call 验收、本地 fixture smoke、进程级 CLI smoke、小型真实仓库 CLI 联网验收和合并前第一轮测试增强均已完成；VS Code RPC server 启动监管与 JSON-RPC request client 已作为 Phase 4 前置项提前完成，不作为 Agent Core MVP 的必需验收条件。下一步完成 Phase 1 合并前测试基础设施和协议验收，再进入 Phase 2 的 1M Context Capsule 收敛。
+当前进度：Phase 1 Agent Core MVP 功能闭环已完成，正在做合并主线前收敛。DeepSeek provider、基础工具执行、Context Builder、Run Log、Turn Loop、CLI、RPC、审批、取消、真实 DeepSeek streaming/tool-call 验收、本地 fixture smoke、进程级 CLI smoke、小型真实仓库 CLI 联网验收、合并前第一轮测试增强、测试基础设施收敛和 live 测试配置收敛均已完成；VS Code RPC server 启动监管与 JSON-RPC request client 已作为 Phase 4 前置项提前完成，不作为 Agent Core MVP 的必需验收条件。下一步补齐 Phase 1 合并前 RPC/CLI/protocol 验收，再进入 Phase 2 的 1M Context Capsule 收敛。
 
 ### Phase 0：项目章程
 
@@ -567,8 +567,8 @@ extension.ts
 - [x] Agent RPC Server：实现 stdio 事件桥接、双向 request loop、真实 Turn Loop handler、实时事件输出、pending approval 队列、审批超时和取消语义。
 - [x] 审批前端基础：实现 CLI prompt、RPC approve/reject/cancel 分发、TypeScript 协议类型、TUI prompt 状态机和 VS Code modal approval adapter。
 - [x] Phase 1 合并前第一轮测试增强：完成 `pnpm run check` 基线验证、patch 失败恢复、reasoning 边界、CancellationToken 并发和 CLI event stream 顺序测试。
-- [ ] 合并前测试基础设施收敛：提取共享 `TestWorkspace`，统一当前分散在 agent-core、agent-rpc、cli、demo/live 测试中的临时工作区 helper。
-- [ ] 合并前 live 测试配置收敛：统一 live API key 测试 helper，明确项目专用环境变量、通用环境变量和 `.secrets/deepseek-api-key` 的优先级。
+- [x] 合并前测试基础设施收敛：提取共享 `agent-core::test_helpers::TestWorkspace`，统一当前分散在 agent-core、agent-rpc、cli、demo/live 测试中的临时工作区 helper。
+- [x] 合并前 live 测试配置收敛：统一 live API key 测试 helper，测试侧按 `DEEPSEEK_CODER_API_KEY`、`DEEPSEEK_API_KEY`、`.secrets/deepseek-api-key` 的顺序读取。
 - [ ] 合并前 RPC/CLI/protocol 验收补齐：补 RPC request loop 并发与断连测试、CLI `rpc` 模式进程级测试和协议错误码交叉校验。
 - [ ] 合并前最终验收：重新运行 `pnpm run check`、`cargo test --workspace -- --list`、展示 demo、必要的 DeepSeek live suite 和敏感信息扫描。
 

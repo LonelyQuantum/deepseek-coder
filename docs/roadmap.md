@@ -59,11 +59,11 @@
 - `reasoning_content` 状态机边界：已覆盖空消息、多个 tool-call assistant message 和 replay 计数。
 - `CancellationToken` 并发语义：已覆盖 clone 共享状态、首次取消原因保持和并发取消。
 - CLI event stream 顺序：进程级 smoke test 已验证 event `seq` 连续递增和关键事件子序列。
+- 共享 `TestWorkspace`：`agent-core::test_helpers::TestWorkspace` 已统一 agent-core、agent-rpc、cli、demo/live 测试的临时工作区创建、保留、git 初始化和读写 helper。
+- live API key 测试 helper：真实联网测试已统一通过 `DEEPSEEK_CODER_API_KEY -> DEEPSEEK_API_KEY -> .secrets/deepseek-api-key` 读取本地密钥；运行时 provider 配置保持不变。
 
 合并主线前剩余工作：
 
-- 提取共享 `TestWorkspace`，统一当前分散在 agent-core、agent-rpc、cli、demo/live 测试中的临时工作区实现。
-- 统一 live API key 测试 helper，明确项目专用环境变量、通用环境变量和 `.secrets/deepseek-api-key` 的优先级。
 - 补 RPC request loop 并发与断连测试，覆盖 active run、pending approval、cancel/disconnect 和事件 replay。
 - 补 CLI `rpc` 模式进程级测试，从真实二进制启动 stdio RPC 并验证 initialize、sendTurn、事件输出和错误响应。
 - 补协议错误码交叉校验，确保 Rust、TypeScript 与协议文档保持一致。

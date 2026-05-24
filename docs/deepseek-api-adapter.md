@@ -119,7 +119,7 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-v4-pro
 ```
 
-运行时 adapter 仍然从 `DEEPSEEK_API_KEY` 读取密钥。真实联网测试额外支持从 `.secrets/deepseek-api-key` 读取本地密钥文件；这个文件只放 API Key，不放 base URL 或模型名。`DEEPSEEK_BASE_URL` 和 `DEEPSEEK_MODEL` 有项目默认值，也可以在外部测试配置或当前 shell 环境变量中选择。
+运行时 adapter 仍然从 `DEEPSEEK_API_KEY` 读取密钥。真实联网测试额外支持测试专用的 `DEEPSEEK_CODER_API_KEY` 和 `.secrets/deepseek-api-key` 本地密钥文件；这个文件只放 API Key，不放 base URL 或模型名。测试侧读取优先级为 `DEEPSEEK_CODER_API_KEY`、`DEEPSEEK_API_KEY`、`.secrets/deepseek-api-key`。`DEEPSEEK_BASE_URL` 和 `DEEPSEEK_MODEL` 有项目默认值，也可以在外部测试配置或当前 shell 环境变量中选择。
 
 ## 错误处理
 
@@ -174,7 +174,7 @@ crates/agent-core/tests/deepseek_api_live.rs
 
 - 测试被显式以 ignored test 方式运行。
 - `DEEPSEEK_CODER_LIVE_TESTS=1`。
-- `DEEPSEEK_API_KEY` 存在，或 `.secrets/deepseek-api-key` 存在且内容为真实 DeepSeek API Key。
+- `DEEPSEEK_CODER_API_KEY`、`DEEPSEEK_API_KEY` 或 `.secrets/deepseek-api-key` 存在，且内容为真实 DeepSeek API Key。
 - 当前网络可以访问 DeepSeek API。
 
 当前 ignored live tests 包括：

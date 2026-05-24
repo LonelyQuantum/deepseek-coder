@@ -43,7 +43,7 @@ cargo test -p deepseek-coder-cli --test agent_interaction_demo fixture_agent_int
 
 ## Live DeepSeek Agent 交互转录
 
-该 demo 会调用真实 DeepSeek API。API key 来自当前环境变量 `DEEPSEEK_API_KEY`，或被 git 忽略的 `.secrets/deepseek-api-key`。它会在临时 Rust 小仓库中读取 `README.md` 和 `src/lib.rs`，让模型调用 `apply_patch` 修改代码，再由 harness 运行 `cargo test --quiet`。
+该 demo 会调用真实 DeepSeek API。API key 来自当前环境变量 `DEEPSEEK_CODER_API_KEY`、`DEEPSEEK_API_KEY`，或被 git 忽略的 `.secrets/deepseek-api-key`。它会在临时 Rust 小仓库中读取 `README.md` 和 `src/lib.rs`，让模型调用 `apply_patch` 修改代码，再由 harness 运行 `cargo test --quiet`。
 
 推荐命令：
 

@@ -182,7 +182,7 @@ $env:DEEPSEEK_CODER_LIVE_TESTS = "1"
 cargo test -p deepseek-coder-cli --test deepseek_cli_live live_deepseek_cli_streaming_smoke_test -- --ignored --exact --nocapture
 ```
 
-该测试会从编译出的 `deepseek-coder` 二进制启动真实 `deepseek` provider，使用 streaming completion，并断言 JSON event 中存在 `stream: true` 的 `assistant.delta` 和最终 `run.completed`。模型默认使用项目默认的 `deepseek-v4-pro`；如果要临时改为其他模型，可以在当前 shell 设置 `DEEPSEEK_MODEL`。API Key 仍只来自当前环境变量或被忽略的 `.secrets/deepseek-api-key`。
+该测试会从编译出的 `deepseek-coder` 二进制启动真实 `deepseek` provider，使用 streaming completion，并断言 JSON event 中存在 `stream: true` 的 `assistant.delta` 和最终 `run.completed`。模型默认使用项目默认的 `deepseek-v4-pro`；如果要临时改为其他模型，可以在当前 shell 设置 `DEEPSEEK_MODEL`。测试侧 API Key 来自 `DEEPSEEK_CODER_API_KEY`、`DEEPSEEK_API_KEY` 或被忽略的 `.secrets/deepseek-api-key`；启动 CLI 子进程时仍会注入运行时 provider 使用的 `DEEPSEEK_API_KEY`。
 
 当前已在 Windows 本机通过该 live smoke test。普通文本 streaming 由 CLI 二进制测试覆盖；真实 tool call delta 形态由 `agent-core` 的 `live_streaming_tool_call_accumulator_smoke_test` 覆盖。
 

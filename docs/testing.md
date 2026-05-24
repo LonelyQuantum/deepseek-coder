@@ -8,7 +8,7 @@
 - 真实 API、模型输出、长上下文、压力测试和展示型 demo 必须显式开启，不能被普通 `cargo test --workspace` 或 `pnpm run check` 自动触发。
 - 修复缺陷时应补最小回归测试；如果缺陷来自真实服务或模型行为，应优先把可复现部分抽成离线 fixture。
 - 测试不能依赖本机绝对路径、当前 shell 的工作目录、`.secrets/` 或开发者私有配置。
-- 多人新增测试时应复用已有 fixture、临时工作区、JSON-RPC event parser 和 run log helper，避免并行维护多套测试替身。
+- 多人新增测试时应复用已有 fixture、`agent-core::test_helpers::TestWorkspace`、JSON-RPC event parser 和 run log helper，避免并行维护多套测试替身。
 
 ## 测试类型
 
@@ -56,6 +56,7 @@
 - live 测试必须同时满足 `#[ignore]` 和环境变量开关，避免误触发 token 消耗。
 - demo 测试必须默认 `#[ignore]`，输出服务于阅读，不承担唯一正确性证明。
 - 新 fixture 应优先放在可复用 helper 中；只有某个测试独有的数据才放在测试本地。
+- 真实联网测试读取 API key 时应复用 `agent-core::test_helpers::live_api_key`；测试侧优先级为 `DEEPSEEK_CODER_API_KEY`、`DEEPSEEK_API_KEY`、`.secrets/deepseek-api-key`。
 
 ## 合并主线前测试清单
 
@@ -125,6 +126,7 @@ rg -n "sk-[A-Za-z0-9_-]+|C:\\User[s]\\|/Users/[^/]+/|/home/[^/]+/|DEEPSEEK_(CODE
 
 - Rust 单元测试放在对应模块的 `#[cfg(test)]` 中。
 - Rust 集成测试放在对应 crate 的 `tests/` 目录。
+- 共享 Rust 测试 helper 放在 `crates/agent-core/src/test_helpers/`，跨 crate 测试通过 `deepseek_coder_agent_core::test_helpers` 复用。
 - CLI 展示测试放在 `crates/cli/tests/agent_interaction_demo.rs`。
 - TypeScript 单元或协议测试放在对应 package 的 `src/**/*.test.ts` 或现有测试目录。
 - 跨语言协议 fixture 放在 `docs/protocol/`，并由 Rust 与 TypeScript 共同校验。
