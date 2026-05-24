@@ -261,7 +261,7 @@ impl WorkspaceToolExecutor {
         }
 
         let reverse_patch = parsed.reverse_patch();
-        let mut modified_files = Vec::new();
+        let mut staged_files = Vec::new();
         for file_patch in parsed.files {
             let relative_path = file_patch.target_path()?;
             let path = self.resolve_workspace_path(&relative_path)?;
@@ -275,24 +275,39 @@ impl WorkspaceToolExecutor {
             };
 
             let applied = apply_file_patch(&original, &file_patch)?;
-            if file_patch.new_path.is_none() {
-                if path.exists() {
-                    fs::remove_file(&path).map_err(|source| ToolExecutionError::Io {
+            let operation = if file_patch.new_path.is_none() {
+                StagedPatchOperation::Delete
+            } else {
+                StagedPatchOperation::Write(applied)
+            };
+            staged_files.push((relative_path, path, operation));
+        }
+
+        check_canceled(cancellation_token, "apply_patch")?;
+
+        let mut modified_files = Vec::new();
+        for (relative_path, path, operation) in staged_files {
+            match operation {
+                StagedPatchOperation::Delete => {
+                    if path.exists() {
+                        fs::remove_file(&path).map_err(|source| ToolExecutionError::Io {
+                            path: path.clone(),
+                            source,
+                        })?;
+                    }
+                }
+                StagedPatchOperation::Write(applied) => {
+                    if let Some(parent) = path.parent() {
+                        fs::create_dir_all(parent).map_err(|source| ToolExecutionError::Io {
+                            path: parent.to_path_buf(),
+                            source,
+                        })?;
+                    }
+                    fs::write(&path, applied).map_err(|source| ToolExecutionError::Io {
                         path: path.clone(),
                         source,
                     })?;
                 }
-            } else {
-                if let Some(parent) = path.parent() {
-                    fs::create_dir_all(parent).map_err(|source| ToolExecutionError::Io {
-                        path: parent.to_path_buf(),
-                        source,
-                    })?;
-                }
-                fs::write(&path, applied).map_err(|source| ToolExecutionError::Io {
-                    path: path.clone(),
-                    source,
-                })?;
             }
 
             modified_files.push(relative_path);
@@ -1001,6 +1016,11 @@ enum PatchLine {
     Context(String),
     Remove(String),
     Add(String),
+}
+
+enum StagedPatchOperation {
+    Write(String),
+    Delete,
 }
 
 fn parse_unified_diff(diff: &str) -> Result<ParsedPatch, ToolExecutionError> {

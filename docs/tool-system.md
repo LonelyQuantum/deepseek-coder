@@ -298,7 +298,7 @@ fixture 中的 `tools` 被当作无序集合校验；测试会按工具名规整
 
 - `read_file`：只读取 workspace 内 UTF-8 文本文件，支持 1-based 行范围。
 - `search`：通过 `rg --json --fixed-strings` 搜索，默认排除 `.git/`、`.secrets/`、`.secret/`、`.env*`、`node_modules/` 和 `target/`。
-- `apply_patch`：应用受限 unified diff，要求 patch 实际文件集合与 `expectedFiles` 完全一致，并返回 reverse patch。
+- `apply_patch`：应用受限 unified diff，要求 patch 实际文件集合与 `expectedFiles` 完全一致；执行时会先在内存中完成全部文件的 hunk 校验和 staging，再统一写盘，因此解析或 hunk mismatch 不会留下部分文件已修改的状态；成功后返回 reverse patch。
 - `shell`：在 workspace 内执行非交互式命令，支持超时，返回 exit code、stdout、stderr 和耗时。
 - `git_status`：读取 `git status --short --branch` 或普通 `git status`。
 - `git_diff`：读取 unstaged 或 staged diff，支持限定 workspace-relative 路径。
@@ -345,6 +345,7 @@ fixture 中的 `tools` 被当作无序集合校验；测试会按工具名规整
 - 当前实现只支持受限 unified diff；后续需要支持更完整的 git patch 语法，包括 rename、copy、mode change 和更严格的 no-newline 语义。
 - 增加 patch 预览、hunk 级审批、冲突诊断和失败时的精确 hunk mismatch 信息。
 - 用修改前快照生成 reverse patch，并在 run log 中保存 patch id、审批 id 和可审计回滚信息。
+- 如果需要抵抗磁盘写入中途失败，应进一步引入临时文件、原子替换或备份恢复机制；当前 staging 主要保证解析和 hunk 校验失败不会产生半应用 patch。
 - 明确二进制文件和生成文件策略，避免文本 patch 意外改写不可审计内容。
 
 ### `shell`
