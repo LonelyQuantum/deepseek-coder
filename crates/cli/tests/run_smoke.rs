@@ -53,14 +53,36 @@ fn fixture_readme_json_smoke_from_binary() {
             .iter()
             .all(|value| value["method"] == "agent.event")
     );
-    for event_type in ["run.started", "tool.completed", "run.completed"] {
-        assert!(
-            notifications
-                .iter()
-                .any(|value| value["params"]["type"] == event_type),
-            "missing event type {event_type}"
+
+    for (index, notification) in notifications.iter().enumerate() {
+        assert_eq!(
+            notification["params"]["seq"].as_u64(),
+            Some((index + 1) as u64)
         );
     }
+    let event_types = notifications
+        .iter()
+        .map(|value| {
+            value["params"]["type"]
+                .as_str()
+                .expect("event type should be a string")
+        })
+        .collect::<Vec<_>>();
+    assert_event_subsequence(
+        &event_types,
+        &[
+            "run.started",
+            "turn.started",
+            "context.built",
+            "provider.requested",
+            "tool.requested",
+            "tool.started",
+            "tool.completed",
+            "provider.requested",
+            "assistant.delta",
+            "run.completed",
+        ],
+    );
 
     let store = RunLogStore::new(workspace.path()).expect("run log store should open");
     let events = store
@@ -101,6 +123,21 @@ fn run_json_usage_error_from_binary_is_json_rpc_error() {
         "E_INVALID_PARAMS"
     );
     assert_eq!(lines[0]["error"]["data"]["kind"], "usage");
+}
+
+fn assert_event_subsequence(actual: &[&str], expected: &[&str]) {
+    let mut search_from = 0;
+    for expected_type in expected {
+        let offset = actual[search_from..]
+            .iter()
+            .position(|actual_type| actual_type == expected_type)
+            .unwrap_or_else(|| {
+                panic!(
+                    "missing event `{expected_type}` after position {search_from}; actual events: {actual:?}"
+                )
+            });
+        search_from += offset + 1;
+    }
 }
 
 struct TestWorkspace {

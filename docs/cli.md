@@ -142,7 +142,7 @@ deepseek-coder run --provider fixture --fixture patch --auto-approve --verify "i
 deepseek-coder run --provider fixture --fixture readme --json "Read README"
 ```
 
-仓库测试中已经包含进程级 fixture smoke test，会从编译出的 `deepseek-coder` 二进制启动，验证 `--json` 输出和 run log 都包含 `run.started`、`tool.completed` 和 `run.completed`。
+仓库测试中已经包含进程级 fixture smoke test，会从编译出的 `deepseek-coder` 二进制启动，验证 `--json` 输出和 run log 都包含关键事件，且 JSON event 的 `seq` 连续递增并保持 `run.started -> turn.started -> context.built -> provider.requested -> tool.requested -> tool.started -> tool.completed -> provider.requested -> assistant.delta -> run.completed` 的核心顺序。
 
 真实 DeepSeek provider：
 
