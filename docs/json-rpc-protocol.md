@@ -142,7 +142,7 @@ Request：
       "version": "0.1.0",
       "frontend": "vscode"
     },
-    "workspaceRoot": "C:/Users/Shenglin/Developer/deepseek-coder",
+    "workspaceRoot": "C:/workspace/deepseek-coder",
     "workspaceTrusted": true
   }
 }
@@ -171,8 +171,10 @@ Result：
 规则：
 
 - `agent.initialize` 必须是第一条 request。
+- `agent.initialize` 必须带 `id`。作为 notification 发送时，server 不返回 response，也不会改变初始化状态。
 - 如果 `workspaceTrusted` 为 false，则禁用 write、exec、network 和 destructive 工具。
 - 协议不匹配时返回 `E_UNSUPPORTED_PROTOCOL`。
+- 当前 Rust request loop 已实现初始化顺序检查、协议版本检查和 response/error 写回；真实 workspace trust 工具降级策略会随审批 handler 接入。
 
 ### `agent.sendTurn`
 
@@ -213,6 +215,10 @@ interface SendTurnResult {
 
 Result 返回后，进度通过 `agent.event` notification 持续到达。
 
+当前 Rust request loop 已能解析 `agent.sendTurn` 并分发给 `AgentRpcRequestHandler`。`crates/agent-rpc::AgentTurnLoopRpcHandler` 已能创建 run、选择注入的 provider factory、启动后台 Turn Loop worker，并把 Run Log 事件返回给 request loop 输出。当前实现会收集事件直到 run 结束或遇到 `tool.approvalRequired`：遇到审批时，response 后会输出审批请求事件，worker 在 pending approval 队列中等待 `agent.approve` / `agent.reject` / `agent.cancel`，并在超时时写入取消事件。如果 request loop 读到 EOF，会调用 handler shutdown；对于已经暂停在 pending approval 的 active run，shutdown 会把审批解析为 `decision: "canceled"` 并写入 `run.canceled`。完全全双工的“先发送 accepted response，再独立事件 writer 持续推送”仍是后续异步执行队列目标。
+
+当前 handler 尚未消费 `attachments`；如果请求携带 attachment，会返回 `Invalid params`。选中文件、诊断和显式上下文条目会在 Context Builder 输入协议稳定后接入。
+
 ### `agent.approve`
 
 批准一个 pending approval request。
@@ -222,6 +228,12 @@ interface ApproveParams {
   approvalId: string;
   persist?: "never" | "session" | "workspace";
 }
+
+interface ApproveResult {
+  approvalId: string;
+  state: "approved";
+  persist: "never" | "session" | "workspace";
+}
 ```
 
 规则：
@@ -229,6 +241,7 @@ interface ApproveParams {
 - `persist` 默认是 `never`。
 - 只有明确标记为 persistable 的审批类型才能使用 `workspace` 持久化。
 - 批准已过期或未知审批时返回 `E_APPROVAL_NOT_FOUND`。
+- 当前 Rust request loop 已能解析 `agent.approve` 并分发给 `AgentRpcRequestHandler`；`AgentTurnLoopRpcHandler` 已能批准当前 active run 的 pending approval，并继续输出 `tool.approvalResolved`、后续工具事件和 run 结束事件。未知、已使用或已过期的 approval 会返回 `E_APPROVAL_NOT_FOUND`。
 
 ### `agent.reject`
 
@@ -239,6 +252,12 @@ interface RejectParams {
   approvalId: string;
   reason?: string;
 }
+
+interface RejectResult {
+  approvalId: string;
+  state: "rejected";
+  reason?: string;
+}
 ```
 
 规则：
@@ -246,6 +265,7 @@ interface RejectParams {
 - Agent Core 将拒绝记录到 run log。
 - Agent Core 不得用等价操作绕过拒绝。
 - 拒绝后，Agent Core 要么请求新路径，要么继续只读工作，要么停止 run。
+- 当前 Rust request loop 已能解析 `agent.reject` 并分发给 `AgentRpcRequestHandler`；`AgentTurnLoopRpcHandler` 已能拒绝当前 active run 的 pending approval，并继续输出 `tool.approvalResolved` 和 `run.failed`。未知、已使用或已过期的 approval 会返回 `E_APPROVAL_NOT_FOUND`。
 
 ### `agent.cancel`
 
@@ -256,9 +276,21 @@ interface CancelParams {
   runId: string;
   reason?: string;
 }
+
+interface CancelResult {
+  runId: string;
+  state: "canceled";
+  reason?: string;
+}
 ```
 
-取消完成后，server 发送 `run.canceled`。
+规则：
+
+- 当前 Rust request loop 已能解析 `agent.cancel` 并分发给 `AgentRpcRequestHandler`。
+- Phase 1 实现支持取消 active run。取消会设置该 run 的协作式 `CancellationToken`；如果当前正在等待审批，会把对应 pending approval 解析为 `decision: "canceled"`，随后写入 `run.canceled`。
+- provider wrapper 和命令类工具必须在可中断边界检查 token。DeepSeek streaming wrapper 会在 stream 事件之间检查 token；shell/search/git 等子进程工具会在轮询子进程状态时检查 token，并在取消时 kill child。
+- 当前内存队列默认审批超时为 300 秒；超时会把 approval 解析为 `decision: "expired"`，随后写入 `run.canceled`。测试和嵌入方可以通过 handler 配置缩短该时间。
+- 当前取消是协作式，不是强制杀线程；stdio EOF 已能通过 shutdown 取消已经暂停在 pending approval 的 active run。长时间 provider request 期间的即时 client 断连感知、完全全双工 writer 和更强进程树清理属于后续异步 run 执行队列。
 
 ### `agent.resume`
 
@@ -285,20 +317,44 @@ interface ResumeResult {
 
 - 如果提供 `replayFromSeq`，server 从该 seq 重新发送事件。
 - 如果本地 run log 不存在，返回 `E_RUN_NOT_FOUND`。
+- 当前 Rust request loop 已能解析 `agent.resume` 并分发给 handler；`AgentTurnLoopRpcHandler` 已能从 Run Log 按 `replayFromSeq` 重放事件。
 
 ### `agent.listRuns`
 
 列出当前 workspace 已知的本地 run。
 
 ```ts
+interface ListRunsParams {
+  limit?: number;
+}
+
 interface RunSummary {
   runId: string;
   title: string;
   status: "running" | "completed" | "failed" | "canceled";
   startedAt: string;
+  updatedAt: string;
   completedAt?: string;
+  lastSeq: number;
+  eventCount: number;
+  mode?: "plan" | "edit" | "review" | "ask";
+  summary?: string;
+  changedFiles?: string[];
+  verificationStatus?: "passed" | "failed" | "skipped";
+}
+
+interface ListRunsResult {
+  runs: RunSummary[];
 }
 ```
+
+规则：
+
+- `agent.listRuns` 读取每个 run 目录内的 `summary.json`，不扫描完整 `events.jsonl`。
+- 缺少 `summary.json` 的旧 run 目录不会出现在列表中；后续若需要兼容旧日志，可增加显式迁移命令。
+- 返回顺序按 `updatedAt` 从新到旧排序；时间相同时按 `runId` 升序稳定排序。
+- `limit` 省略时返回全部已知 run；传入时只返回前 N 条。
+- 当前 Rust request loop 已能解析 `agent.listRuns` 并分发给 handler；`AgentTurnLoopRpcHandler` 已能从 Run Log summary metadata 返回列表。
 
 ## 事件封装
 
@@ -358,7 +414,20 @@ interface RunFailed {
 
 ```ts
 interface RunCanceled {
+  code?: string;
+  message?: string;
+  approvalId?: string;
+  toolCallId?: string;
   reason?: string;
+}
+```
+
+### `turn.started`
+
+```ts
+interface TurnStarted {
+  turnId: string;
+  userTask: string;
 }
 ```
 
@@ -369,10 +438,12 @@ interface RunCanceled {
 ```ts
 interface AssistantDelta {
   text: string;
+  iteration?: number;
+  stream?: boolean;
 }
 ```
 
-Provider-private reasoning 不通过该事件发送。如果 provider 要求后续请求携带 reasoning state，由 Agent Core 内部处理；除非显式开启 debug logging，否则只记录安全摘要。
+`stream: true` 表示该事件来自 provider streaming delta；省略或为 false 时，通常表示非 streaming provider 在 `Completed` 后补写的一次完整可见文本片段，或 resume 时按原 payload 回放的历史事件。Provider-private reasoning 不通过该事件发送。如果 provider 要求后续请求携带 reasoning state，由 Agent Core 内部处理；除非显式开启 debug logging，否则只记录安全摘要。
 
 ### `plan.updated`
 
@@ -388,14 +459,70 @@ interface PlanUpdated {
 interface ContextBuilt {
   inputTokens: number;
   maxInputTokens: number;
+  estimator: {
+    name: string;
+    exact: boolean;
+    description: string;
+  };
   cacheHitTokens?: number;
   cacheMissTokens?: number;
   includedSources: Array<{
-    kind: "file" | "command" | "manifest" | "summary";
+    kind:
+      | "system_policy"
+      | "project_rules"
+      | "user_task"
+      | "workspace_manifest"
+      | "git_status"
+      | "git_diff"
+      | "file"
+      | "tool_result"
+      | "plan"
+      | "acceptance_criteria"
+      | "previous_run_summary"
+      | "diagnostic"
+      | "other";
+    required: boolean;
     path?: string;
+    commandId?: string;
+    title?: string;
     tokens: number;
     reason: string;
   }>;
+  omittedSources: Array<{
+    kind:
+      | "system_policy"
+      | "project_rules"
+      | "user_task"
+      | "workspace_manifest"
+      | "git_status"
+      | "git_diff"
+      | "file"
+      | "tool_result"
+      | "plan"
+      | "acceptance_criteria"
+      | "previous_run_summary"
+      | "diagnostic"
+      | "other";
+    required: boolean;
+    path?: string;
+    commandId?: string;
+    title?: string;
+    estimatedTokens: number;
+    inclusionReason: string;
+    omissionReason: "token_budget_exceeded";
+  }>;
+}
+```
+
+### `provider.requested`
+
+```ts
+interface ProviderRequested {
+  iteration: number;
+  messageCount: number;
+  reasoningState:
+    | { state: "no_replay_required" }
+    | { state: "replay_required"; assistantMessages: number };
 }
 ```
 
@@ -416,6 +543,7 @@ interface ToolRequested {
 interface ToolApprovalRequired {
   approvalId: string;
   toolCallId: string;
+  toolName: ToolName;
   risk: RiskLevel;
   title: string;
   detail: string;
@@ -425,6 +553,20 @@ interface ToolApprovalRequired {
   persistable: boolean;
 }
 ```
+
+### `tool.approvalResolved`
+
+```ts
+interface ToolApprovalResolved {
+  approvalId: string;
+  toolCallId: string;
+  toolName: ToolName;
+  decision: "approved" | "rejected" | "canceled" | "expired";
+  reason?: string;
+}
+```
+
+该事件记录用户、策略或 RPC 队列对审批请求的决定。`decision: "approved"` 后续应进入 `tool.started`；`decision: "rejected"` 后当前工具调用不得执行，run 可以失败、继续只读工作或让模型请求不同操作；`decision: "canceled"` 和 `decision: "expired"` 表示 active run 被用户取消或审批超时，后续必须写入 `run.canceled`，对应工具不得执行。CLI 当前会把 prompt 的批准/拒绝写入该事件；RPC handler 的 pending approval 队列会在 `agent.approve` / `agent.reject` / `agent.cancel` 或超时后写入同等事件。
 
 ### `tool.started`
 
@@ -446,7 +588,8 @@ interface ToolCompleted {
   exitCode?: number;
   stdout?: string;
   stderr?: string;
-  durationMs: number;
+  durationMs?: number;
+  result?: unknown;
 }
 ```
 
@@ -496,6 +639,8 @@ interface VerificationCompleted {
 }
 ```
 
+`stdout` / `stderr` 必须在持久化和事件发送前应用与 `tool.completed.result` 相同的脱敏规则；前端不能假设验证命令输出是原始 shell 输出。
+
 ## 审批状态机
 
 ```text
@@ -518,7 +663,17 @@ pending
 
 ## 错误模型
 
-JSON-RPC 标准错误保留标准语义。项目特定错误使用 `-32000` 到 `-32099` 范围。
+JSON-RPC 标准错误保留标准语义。项目特定错误使用 `-32000` 到 `-32099` 范围。CLI `run --json` 也复用同一套错误码：它不是一个真正的 JSON-RPC request，但失败时会在 stdout 输出一行 `id: "cli.run"` 的 JSON-RPC error response，方便脚本和前端统一解析。
+
+当前 request loop 已使用的 JSON-RPC 标准错误：
+
+| Code | Name | 含义 |
+| --- | --- | --- |
+| -32700 | Parse error | 单行消息不是合法 JSON。 |
+| -32600 | Invalid Request | 消息不是 JSON-RPC object、版本错误或初始化顺序错误。 |
+| -32601 | Method not found | method 尚未被当前 request loop 支持。 |
+| -32602 | Invalid params | params 无法反序列化为对应方法参数。 |
+| -32603 | Internal error | server 或 CLI 在无法归类到项目错误码时出现内部错误。 |
 
 | Code | Name | 含义 |
 | --- | --- | --- |
@@ -545,6 +700,8 @@ JSON-RPC 标准错误保留标准语义。项目特定错误使用 `-32000` 到 
     "code": -32020,
     "message": "Required context exceeds token budget",
     "data": {
+      "symbolicCode": "E_CONTEXT_BUDGET_EXCEEDED",
+      "kind": "turn",
       "runId": "run_01",
       "requiredTokens": 1200000,
       "maxInputTokens": 1000000
@@ -601,7 +758,7 @@ Server 请求命令审批：
       "risk": "exec",
       "title": "Run tests",
       "detail": "Execute cargo test --workspace",
-      "cwd": "C:/Users/Shenglin/Developer/deepseek-coder",
+      "cwd": "C:/workspace/deepseek-coder",
       "command": "cargo test --workspace",
       "persistable": false
     }
@@ -638,8 +795,20 @@ Server 必须能够通过以下信息重建 run：
 
 Run log 持久化前必须脱敏密钥。
 
+当前 `crates/agent-core/src/run_log.rs` 已实现内部 JSONL 存储层。内部事件使用 `timeUnixMs`，`crates/agent-rpc` 已实现基础 stdio 事件桥接，会在转换成 JSON-RPC notification 时生成协议 envelope 中的 `time` 字符串。
+
 ## 实现说明
 
-- `packages/protocol` 定义与本文档匹配的 TypeScript 类型。
-- `crates/agent-rpc` 负责 Rust 协议结构和 JSON-RPC framing。
-- 后续应增加兼容性测试，验证 Rust 和 TypeScript 的协议定义一致。
+- `packages/protocol` 定义与本文档匹配的 TypeScript 类型、method 常量和错误码注册表。
+- `crates/agent-rpc` 负责 Rust 协议结构和 JSON-RPC framing；当前已实现 Run Log 事件到 `agent.event` notification 的桥接，并让 `StdioEventBridge` 直接实现 `TurnEventSink`。
+- `docs/protocol/tool-registry.v1.json` 当前用于校验 Rust 与 TypeScript 的基础工具注册表一致，包含工具风险、默认审批和当前实现状态。
+- 当前 Rust 和 TypeScript 测试都会校验协议错误码表，避免实现常量与文档漂移。后续应继续增加事件 payload 和 RPC method 的兼容性测试，验证 Rust 和 TypeScript 的协议定义一致。
+
+## 后续增强
+
+- 为 `tool.completed`、`patch.proposed` 等事件补齐与 Rust 结果类型一致的详细 payload schema。
+- 将现有工具注册表和错误码注册表 fixture 扩展到事件 payload 和 RPC method，确保 `docs/json-rpc-protocol.md`、`packages/protocol` 和 `crates/agent-rpc` 不分叉。
+- 建立 `assistant.delta` 高频事件的批量发送、节流或合并策略，并用 benchmark 验证 stdio JSON-RPC 在 VS Code 扩展中的流畅度。
+- 明确事件重放规则：run resume 时哪些事件原样回放，哪些事件需要标记为历史事件。
+- 增加输出截断和脱敏字段约定，使前端能区分“没有输出”和“输出被安全策略截断”。
+- 在协议层表达 workspace trust、审批持久化能力和禁用工具原因，避免 UI 自行推断。

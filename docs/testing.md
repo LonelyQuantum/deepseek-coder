@@ -1,0 +1,138 @@
+# 测试协作规范
+
+本项目的测试代码默认进仓库，但不代表所有测试都进入默认 CI。协作时先区分测试目的，再决定放置位置、运行命令和 CI 层级。
+
+## 基本原则
+
+- 默认 CI 只运行确定性、低成本、无密钥、无真实网络依赖的测试。
+- 真实 API、模型输出、长上下文、压力测试和展示型 demo 必须显式开启，不能被普通 `cargo test --workspace` 或 `pnpm run check` 自动触发。
+- 修复缺陷时应补最小回归测试；如果缺陷来自真实服务或模型行为，应优先把可复现部分抽成离线 fixture。
+- 测试不能依赖本机绝对路径、当前 shell 的工作目录、`.secrets/` 或开发者私有配置。
+- 多人新增测试时应复用已有 fixture、`agent-core::test_helpers::TestWorkspace`、JSON-RPC event parser 和 run log helper，避免并行维护多套测试替身。
+
+## 测试类型
+
+### 单元测试
+
+用于验证纯逻辑、解析器、状态机、schema、错误码和安全边界。单元测试应靠近被测模块，默认进入 CI。
+
+### 确定性集成测试
+
+用于验证 crate 之间、CLI 二进制、RPC loop、run log、tool execution 等模块协作。应使用 fixture provider、临时目录和固定输入输出，默认进入 CI。
+
+### 回归测试
+
+用于锁住已经修复的问题。回归测试应尽量小，并说明触发条件；只要不依赖网络和密钥，就默认进入 CI。
+
+### 真实联网测试
+
+用于验证 DeepSeek API、真实 streaming、真实 tool call delta 或真实模型工具调用。测试代码可以进仓库，但必须使用 `#[ignore]`，并通过 `DEEPSEEK_CODER_LIVE_TESTS=1` 这类环境开关显式启用。
+
+### 结果展示测试
+
+用于把 Agent 运行过程打印给开发者看，例如工具调用、审批、补丁、验证和 run log 汇总。展示测试可以在展示层把连续 `assistant.delta` 拼成易读文本，但不能改变 provider、turn loop、RPC event 或 run log 的真实 streaming 语义。展示测试默认 `#[ignore]`，不进入普通 CI。
+
+### 压力和长上下文测试
+
+用于 1M context、大仓库搜索、长 run log、并发写入或性能边界。默认不进普通 CI，可作为 ignored test、manual workflow、nightly job 或本地专项验收。
+
+## CI 分层
+
+| 层级 | 触发方式 | 允许内容 | 禁止内容 |
+| --- | --- | --- | --- |
+| 默认 CI | `push`、`pull_request` | fmt、clippy、离线 Rust/TypeScript 测试、确定性 fixture | API key、真实网络、长耗时、人工观察 |
+| 本地开发检查 | `pnpm run check` | 与默认 CI 尽量一致 | 私有路径、隐式依赖 `.secrets/` |
+| 本地展示 | `cargo demo`、`cargo demo-live` | 人类可读 transcript、临时工作区输出 | 作为普通 CI 必跑项 |
+| 真实验收 | ignored live test 或 manual workflow | DeepSeek API、真实 streaming、真实模型工具调用 | 无开关自动运行 |
+| 压力/长上下文 | ignored test、manual/nightly | 大上下文、大仓库、长时间任务 | PR 默认阻塞 |
+
+默认 CI 当前通过 `pnpm run check` 执行。`search` 工具测试会执行 `rg`，因此本机和 CI 都需要安装 ripgrep。
+
+## 新增测试的协作要求
+
+- PR 或提交说明中标明测试类型：unit、integration、regression、live、demo 或 stress。
+- 文档或测试注释中给出运行命令；命令较长时优先添加 Cargo alias 或 npm script。
+- 默认 CI 测试必须稳定、可重复，并且不读取 `.secrets/`。
+- live 测试必须同时满足 `#[ignore]` 和环境变量开关，避免误触发 token 消耗。
+- demo 测试必须默认 `#[ignore]`，输出服务于阅读，不承担唯一正确性证明。
+- 新 fixture 应优先放在可复用 helper 中；只有某个测试独有的数据才放在测试本地。
+- 真实联网测试读取 API key 时应复用 `agent-core::test_helpers::live_api_key`；测试侧优先级为 `DEEPSEEK_CODER_API_KEY`、`DEEPSEEK_API_KEY`、`.secrets/deepseek-api-key`。
+
+## 合并主线前测试清单
+
+合并 Phase 1 这类阶段性分支前，建议按风险从低到高执行以下清单。默认 CI 必须通过；联网和展示项不阻塞所有 PR，但在阶段合并前应至少由维护者手动跑一轮并记录结果。
+
+### 必跑：默认 CI 等价检查
+
+```powershell
+pnpm run check
+```
+
+覆盖范围：
+
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo test --workspace`
+- `pnpm -r typecheck`
+- `pnpm -r test`
+
+Phase 1 合并前新增的离线验收已经纳入上述默认检查：RPC request loop 会覆盖 pending approval 并发拒绝与 EOF shutdown 取消，CLI `rpc` 会从真实二进制启动 stdio smoke，Rust/TypeScript 会共同校验协议错误码表与 `docs/json-rpc-protocol.md` 一致。
+
+### 必跑：测试清单盘点
+
+```powershell
+cargo test --workspace -- --list
+```
+
+该命令不执行测试，只列出 Rust 测试和 ignored 测试。阶段合并前用于确认 live/demo/stress 测试仍然按预期标记为 `#[ignore]`。
+
+### 建议：离线展示验收
+
+```powershell
+cargo demo
+```
+
+该命令不联网，用于人工检查 Agent event transcript、审批、补丁、验证和 run summary 的展示效果。
+
+### 建议：真实 DeepSeek 联网验收
+
+联网验收需要 API key 和 `DEEPSEEK_CODER_LIVE_TESTS=1`。阶段合并前建议至少跑以下几类：
+
+```powershell
+$env:DEEPSEEK_CODER_LIVE_TESTS = "1"
+cargo test -p deepseek-coder-agent-core --test deepseek_api_live -- --ignored --nocapture
+cargo test -p deepseek-coder-cli --test deepseek_cli_live -- --ignored --nocapture
+cargo demo-live
+```
+
+如果上游服务返回 5xx、524 或限流，应记录为外部服务不稳定，不直接等同于代码回归；同一 commit 可在服务恢复后重跑。
+
+### 可选：合并前人工检查
+
+- 检查 `docs/demos.md` 中的展示命令是否仍能覆盖最新功能。
+- 检查 `.github/workflows/ci.yml` 与 `package.json` 的 `check` 脚本是否一致。
+- 对本地工作区运行敏感信息扫描，确保没有 API key、本机路径或 `.secrets/` 内容进入可提交文件。
+- 查看最新 code review / discussion 文件，确认已接受的问题要么已修复，要么已进入 roadmap。
+
+建议的手动敏感信息检查：
+
+```powershell
+git diff --check
+git ls-files .env .secrets
+rg -n "sk-[A-Za-z0-9_-]+|C:\\User[s]\\|/Users/[^/]+/|/home/[^/]+/|DEEPSEEK_(CODER_)?API_KEY\\s*=" README.md docs crates packages vscode .github .cargo Cargo.toml Cargo.lock package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json .env.example .gitignore --glob "!target/**" --glob "!node_modules/**" --glob "!.git/**" --glob "!.secrets/**"
+```
+
+如果只命中类似 `<your-deepseek-api-key>` 的占位示例，应在记录中说明；如果命中真实密钥、本机绝对路径或 `.secrets/` 已被 Git 跟踪，必须先处理再合并。
+
+## 文件位置约定
+
+- Rust 单元测试放在对应模块的 `#[cfg(test)]` 中。
+- Rust 集成测试放在对应 crate 的 `tests/` 目录。
+- 共享 Rust 测试 helper 放在 `crates/agent-core/src/test_helpers/`，跨 crate 测试通过 `deepseek_coder_agent_core::test_helpers` 复用。
+- CLI 展示测试放在 `crates/cli/tests/agent_interaction_demo.rs`。
+- TypeScript 单元或协议测试放在对应 package 的 `src/**/*.test.ts` 或现有测试目录。
+- 跨语言协议 fixture 放在 `docs/protocol/`，并由 Rust 与 TypeScript 共同校验。
+
+## 展示型 Demo
+
+展示型 demo 的完整清单、运行命令和预期输出见 `demos.md`。`cargo demo` 与 `cargo demo-live` 来自 `.cargo/config.toml`；新增或调整展示命令时，应同时更新 Cargo alias 和 `demos.md`。

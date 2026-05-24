@@ -26,6 +26,15 @@
 
 - 显式审批模型。
 - 结构化工具 schema。
-- 带脱敏策略的本地 run log。
+- 带基础脱敏策略的本地 run log。
+- 工具结果进入 run log 或 prompt 前可通过统一入口转为已脱敏 JSON。
 - 写入前检查 workspace 路径。
 - CI 检查格式、lint、测试和类型。
+
+## 后续增强
+
+- 扩展统一脱敏层，覆盖更多 API Key 形态、环境变量、shell 输出、搜索结果、diff、run log、前端历史回放和 provider 错误正文。
+- 为敏感路径建立可配置拒绝规则，默认覆盖 `.env`、`.secrets/`、`.secret/`、`.git/`、`.agents/`、证书、token 文件和常见云服务凭据。
+- 增加命令风险分类器，在执行前识别网络访问、依赖安装、发布、远程 git 操作、删除和 reset 等高风险行为。
+- 按平台实现并测试 sandbox 边界；Windows、Linux 和 macOS 的能力差异需要在文档和测试中分别说明。
+- 在发布前增加敏感信息扫描、依赖审计和产物校验，确保本地路径、API Key 和临时文件不会进入源码包或 VSIX。

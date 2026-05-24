@@ -1,0 +1,3 @@
+[alias]
+demo = "test -p deepseek-coder-cli --test agent_interaction_demo fixture_agent_interaction_transcript_demo -- --ignored --exact --nocapture"
+demo-live = "test -p deepseek-coder-cli --test agent_interaction_demo live_deepseek_agent_interaction_transcript_demo -- --ignored --exact --nocapture"

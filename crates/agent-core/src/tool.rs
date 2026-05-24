@@ -30,11 +30,27 @@ impl ToolName {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolImplementationStatus {
+    SchemaOnly,
+    ExecutorImplemented,
+}
+
+impl ToolImplementationStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::SchemaOnly => "schema_only",
+            Self::ExecutorImplemented => "executor_implemented",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ToolDefinition {
     pub name: ToolName,
     pub description: &'static str,
     pub risk: RiskLevel,
     pub approval: ApprovalRequirement,
+    pub implementation_status: ToolImplementationStatus,
     pub argument_schema: &'static str,
     pub result_schema: &'static str,
 }
@@ -45,6 +61,7 @@ impl ToolDefinition {
         description: &'static str,
         risk: RiskLevel,
         approval: ApprovalRequirement,
+        implementation_status: ToolImplementationStatus,
         argument_schema: &'static str,
         result_schema: &'static str,
     ) -> Self {
@@ -53,6 +70,7 @@ impl ToolDefinition {
             description,
             risk,
             approval,
+            implementation_status,
             argument_schema,
             result_schema,
         }
@@ -183,6 +201,7 @@ pub const BUILTIN_TOOLS: &[ToolDefinition] = &[
         "Generate the workspace manifest.",
         RiskLevel::Read,
         ApprovalRequirement::None,
+        ToolImplementationStatus::SchemaOnly,
         WORKSPACE_MANIFEST_ARGUMENT_SCHEMA,
         STATUS_RESULT_SCHEMA,
     ),
@@ -191,6 +210,7 @@ pub const BUILTIN_TOOLS: &[ToolDefinition] = &[
         "Read a UTF-8 text file from the workspace.",
         RiskLevel::Read,
         ApprovalRequirement::None,
+        ToolImplementationStatus::ExecutorImplemented,
         READ_FILE_ARGUMENT_SCHEMA,
         STATUS_RESULT_SCHEMA,
     ),
@@ -199,6 +219,7 @@ pub const BUILTIN_TOOLS: &[ToolDefinition] = &[
         "Search workspace text with ripgrep.",
         RiskLevel::Read,
         ApprovalRequirement::None,
+        ToolImplementationStatus::ExecutorImplemented,
         SEARCH_ARGUMENT_SCHEMA,
         STATUS_RESULT_SCHEMA,
     ),
@@ -207,6 +228,7 @@ pub const BUILTIN_TOOLS: &[ToolDefinition] = &[
         "Apply a unified diff patch.",
         RiskLevel::Write,
         ApprovalRequirement::Required,
+        ToolImplementationStatus::ExecutorImplemented,
         APPLY_PATCH_ARGUMENT_SCHEMA,
         STATUS_RESULT_SCHEMA,
     ),
@@ -215,6 +237,7 @@ pub const BUILTIN_TOOLS: &[ToolDefinition] = &[
         "Execute a non-interactive shell command.",
         RiskLevel::Exec,
         ApprovalRequirement::Required,
+        ToolImplementationStatus::ExecutorImplemented,
         SHELL_ARGUMENT_SCHEMA,
         STATUS_RESULT_SCHEMA,
     ),
@@ -223,6 +246,7 @@ pub const BUILTIN_TOOLS: &[ToolDefinition] = &[
         "Read git status.",
         RiskLevel::Read,
         ApprovalRequirement::None,
+        ToolImplementationStatus::ExecutorImplemented,
         GIT_STATUS_ARGUMENT_SCHEMA,
         STATUS_RESULT_SCHEMA,
     ),
@@ -231,6 +255,7 @@ pub const BUILTIN_TOOLS: &[ToolDefinition] = &[
         "Read git diff.",
         RiskLevel::Read,
         ApprovalRequirement::None,
+        ToolImplementationStatus::ExecutorImplemented,
         GIT_DIFF_ARGUMENT_SCHEMA,
         STATUS_RESULT_SCHEMA,
     ),
@@ -239,6 +264,7 @@ pub const BUILTIN_TOOLS: &[ToolDefinition] = &[
         "Read language-server diagnostics.",
         RiskLevel::Read,
         ApprovalRequirement::None,
+        ToolImplementationStatus::SchemaOnly,
         LSP_DIAGNOSTICS_ARGUMENT_SCHEMA,
         STATUS_RESULT_SCHEMA,
     ),
@@ -247,6 +273,7 @@ pub const BUILTIN_TOOLS: &[ToolDefinition] = &[
         "Update the active plan.",
         RiskLevel::Read,
         ApprovalRequirement::None,
+        ToolImplementationStatus::SchemaOnly,
         PLAN_UPDATE_ARGUMENT_SCHEMA,
         STATUS_RESULT_SCHEMA,
     ),
@@ -258,9 +285,12 @@ pub fn find_builtin_tool(name: &str) -> Option<&'static ToolDefinition> {
 
 #[cfg(test)]
 mod tests {
-    use crate::approval::{ApprovalRequirement, RiskLevel};
+    use std::collections::BTreeMap;
+
+    use serde::Deserialize;
 
     use super::{BUILTIN_TOOLS, ToolName, find_builtin_tool};
+    use crate::approval::{ALL_RISK_LEVELS, ApprovalRequirement, RiskLevel};
 
     #[test]
     fn all_builtin_tools_have_matching_default_approval() {
@@ -301,5 +331,81 @@ mod tests {
                 tool.name.as_str()
             );
         }
+    }
+
+    #[test]
+    fn builtin_tools_match_protocol_fixture() {
+        let fixture: ToolRegistryFixture = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/protocol/tool-registry.v1.json"
+        )))
+        .expect("tool registry fixture should parse");
+
+        assert_eq!(fixture.version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            fixture.risk_levels,
+            ALL_RISK_LEVELS
+                .iter()
+                .map(|risk| risk.as_str().to_owned())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            fixture.risk_default_approval,
+            ALL_RISK_LEVELS
+                .iter()
+                .map(|risk| {
+                    (
+                        risk.as_str().to_owned(),
+                        risk.default_approval().as_str().to_owned(),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>()
+        );
+        let expected_tools = BUILTIN_TOOLS
+            .iter()
+            .map(|tool| ToolFixture {
+                name: tool.name.as_str().to_owned(),
+                risk: tool.risk.as_str().to_owned(),
+                approval: tool.approval.as_str().to_owned(),
+                status: tool.implementation_status.as_str().to_owned(),
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            tool_fixture_map(fixture.tools),
+            tool_fixture_map(expected_tools)
+        );
+    }
+
+    fn tool_fixture_map(tools: Vec<ToolFixture>) -> BTreeMap<String, ToolFixture> {
+        let tool_count = tools.len();
+        let tool_map = tools
+            .into_iter()
+            .map(|tool| (tool.name.clone(), tool))
+            .collect::<BTreeMap<_, _>>();
+
+        assert_eq!(
+            tool_count,
+            tool_map.len(),
+            "tool fixture names must be unique"
+        );
+        tool_map
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ToolRegistryFixture {
+        version: String,
+        risk_levels: Vec<String>,
+        risk_default_approval: BTreeMap<String, String>,
+        tools: Vec<ToolFixture>,
+    }
+
+    #[derive(Debug, PartialEq, Eq, Deserialize)]
+    struct ToolFixture {
+        name: String,
+        risk: String,
+        approval: String,
+        status: String,
     }
 }

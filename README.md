@@ -6,7 +6,7 @@
 
 ## 为什么做
 
-DeepSeek V4 API 当前提供 `deepseek-v4-flash` 与 `deepseek-v4-pro`，支持 1M 上下文、最大 384K 输出、OpenAI/Anthropic 兼容接口、思考模式、Tool Calls、FIM 补全和上下文硬盘缓存。代码 Agent 可以把这些能力组合成一种更适合大仓库的软件维护方式：少做碎片化检索，多做可审计的整仓理解、计划、修改、验证和回放。
+DeepSeek V4 API 当前提供 `deepseek-v4-flash` 与 `deepseek-v4-pro`，支持 1M 上下文、最大 384K 输出、思考模式、Tool Calls、FIM 补全和上下文硬盘缓存。代码 Agent 可以把这些能力组合成一种更适合大仓库的软件维护方式：少做碎片化检索，多做可审计的整仓理解、计划、修改、验证和回放。
 
 DeepSeek-TUI 已经证明了一个方向：终端内的代码 Agent 可以读取代码、编辑文件、运行命令、调用 MCP，并通过沙箱与审批保护用户工作区。本项目会参考它的产品形态和工程边界，但把重点放在以下差异上：
 
@@ -22,7 +22,7 @@ DeepSeek-TUI 已经证明了一个方向：终端内的代码 Agent 可以读取
 - 长上下文不是无限信任：1M 上下文用于提供更多证据，不替代测试、类型检查、LSP 诊断和人工确认。
 - 显式失败优先：当上下文预算、权限、工具输出或模型响应不满足协议时，系统应停止并报告原因。
 - 本地优先：配置、日志、索引和缓存默认保存在用户机器；遥测默认关闭，不收集代码正文。
-- 兼容但不绑定：DeepSeek 是第一目标提供商，同时保留 OpenAI/Anthropic 兼容适配层，便于私有部署和未来模型切换。
+- 兼容但不绑定：DeepSeek 是第一目标提供商，provider API 保持足够表达性，便于未来适配私有部署、兼容协议和其他模型服务。
 - 前端一致：CLI/TUI 与 VS Code 展示同一份计划、同一份 diff、同一套审批与同一份验证状态。
 
 ## 许可证策略
@@ -54,9 +54,8 @@ User
                                       |   +-- Run Log
                                       |
                                       +-- Provider Adapters
-                                      |   +-- DeepSeek OpenAI API
-                                      |   +-- DeepSeek Anthropic API
-                                      |   +-- Local OpenAI-compatible API
+                                      |   +-- DeepSeek API
+                                      |   +-- Local compatible API
                                       |
                                       +-- Workspace Tools
                                           +-- file/read/search/edit
@@ -83,8 +82,15 @@ User
 文档默认使用中文编写。协议方法名、事件名、错误码、命令、许可证标识等需要稳定机器读取或生态通用的内容保留英文，并在必要时附中文说明。
 
 - `docs/architecture.md`：总体架构。
+- `docs/roadmap.md`：详细路线图和阶段优先级。
+- `docs/phase-tasks.md`：详细任务阶段、状态和来源索引。
 - `docs/agent-core.md`：Agent Core 回合与职责。
+- `docs/deepseek-api-adapter.md`：DeepSeek API adapter。
+- `docs/reasoning-content.md`：`reasoning_content` 状态机。
 - `docs/json-rpc-protocol.md`：内部 JSON-RPC 协议。
+- `docs/rpc-server.md`：Agent RPC Server stdio 事件桥接。
+- `docs/cli.md`：CLI `run` 最小闭环。
+- `docs/run-log.md`：本地运行日志。
 - `docs/context-capsule.md`：长上下文构建。
 - `docs/tool-system.md`：工具系统。
 - `docs/approval-model.md`：审批模型。
@@ -287,17 +293,19 @@ pnpm install
 
 ### 环境变量
 
-开发时可以复制 `.env.example` 到 `.env`，再填写 API Key。`.env` 已被 `.gitignore` 排除。
+开发时可以复制 `.env.example` 到 `.env`，用于选择 base URL、模型、本地状态目录和日志级别。`.env` 已被 `.gitignore` 排除。
 
 ```powershell
 Copy-Item .env.example .env
 notepad .env
 ```
 
+DeepSeek API Key 建议单独放在 `.secrets/deepseek-api-key`。`.secrets/` 已被 `.gitignore` 排除，这个文件只放 key 本身，不放 base URL 或模型名。
+
 也可以在当前 PowerShell 会话中临时设置：
 
 ```powershell
-$env:DEEPSEEK_API_KEY = "sk-..."
+$env:DEEPSEEK_API_KEY = "<your-deepseek-api-key>"
 $env:DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 $env:DEEPSEEK_MODEL = "deepseek-v4-pro"
 $env:DEEPSEEK_CODER_HOME = ".deepseek-coder"
@@ -307,7 +315,7 @@ $env:RUST_LOG = "deepseek_coder=info"
 需要用户级持久环境变量时使用：
 
 ```powershell
-[Environment]::SetEnvironmentVariable("DEEPSEEK_API_KEY", "sk-...", "User")
+[Environment]::SetEnvironmentVariable("DEEPSEEK_API_KEY", "<your-deepseek-api-key>", "User")
 ```
 
 API Key 不应提交到仓库。本项目默认忽略 `.env`、本地缓存、run log 和密钥文件。
@@ -473,6 +481,7 @@ MVP 命令：
 ```bash
 deepseek-coder
 deepseek-coder run "修复 failing tests"
+deepseek-coder rpc
 deepseek-coder plan "给这个仓库加 VS Code 插件"
 deepseek-coder doctor
 deepseek-coder resume <run-id>
@@ -505,7 +514,7 @@ VS Code 插件不是简单包一层终端，而是直接复用 Agent Core：
 
 ```text
 extension.ts
-  -> spawn deepseek-coder rpc --stdio
+  -> spawn deepseek-coder rpc
   -> initialize(workspace, config)
   -> sendUserTurn(...)
   <- stream events: delta, tool_call, approval_required, patch, diagnostics, done
@@ -530,38 +539,50 @@ extension.ts
 
 ## 开发计划
 
-当前进度：Phase 0 已完成。下一步进入 Phase 1：Agent Core MVP 的具体实现。
+当前进度：Phase 1 Agent Core MVP 功能闭环和合并主线前最终验收已完成。DeepSeek provider、基础工具执行、Context Builder、Run Log、Turn Loop、CLI、RPC、审批、取消、真实 DeepSeek streaming/tool-call 验收、本地 fixture smoke、进程级 CLI smoke、小型真实仓库 CLI 联网验收、合并前第一轮测试增强、测试基础设施收敛、live 测试配置收敛、RPC/CLI/protocol 验收补齐和离线最终验收均已完成；VS Code RPC server 启动监管与 JSON-RPC request client 已作为 Phase 4 前置项提前完成，不作为 Agent Core MVP 的必需验收条件。下一步进入 Phase 2 的 1M Context Capsule 收敛。
 
 ### Phase 0：项目章程
 
-- [x] 确定 `deepseek-coder` 名称和 AGPL-3.0-or-later 许可证。
-- [x] 编写 README 技术方案、架构、开发计划和注意事项。
+- [x] 确定 `deepseek-coder` 名称和 AGPL-3.0-or-later 许可证：项目名固定为仓库名，许可证从 MIT 调整为更符合自由软件网络服务场景的 AGPL-3.0-or-later。
+- [x] 编写 README 技术方案、架构、开发计划和注意事项：README 已作为项目入口，覆盖定位、架构、环境配置、阶段计划和安全注意事项。
 - [x] 建立 Rust workspace：`agent-core`、`agent-rpc`、`cli`、`tui`。
 - [x] 建立 TypeScript/pnpm workspace：`packages/protocol` 和 `vscode/extension`。
 - [x] 建立基础环境配置：`rust-toolchain.toml`、`rustfmt.toml`、`tsconfig.base.json`、`.editorconfig`、`.gitattributes`、`.env.example`。
 - [x] 更新 `.gitignore`，排除本地状态、依赖目录、构建产物和密钥文件。
-- [x] 生成并保留 `Cargo.lock` 与 `pnpm-lock.yaml`。
-- [x] 在 Windows 本机跑通 `pnpm run check`。
-- [x] 建立 CI 骨架。
-- [x] 建立 `CONTRIBUTING.md`、`CODE_OF_CONDUCT.md`、`SECURITY.md`。
-- [x] 建立 `docs/` 设计文档目录和 `docs/adr/` 架构决策记录。
-- [x] 设计正式 JSON-RPC 事件协议。
-- [x] 定义工具 schema、风险等级和审批模型。
+- [x] 生成并保留 `Cargo.lock` 与 `pnpm-lock.yaml`：Rust 与 TypeScript 依赖解析结果已锁定，便于本机和 CI 复现。
+- [x] 在 Windows 本机跑通 `pnpm run check`：确认 Rust、TypeScript 和 VS Code 插件骨架在 Windows 开发环境中可完整检查。
+- [x] 建立 CI 骨架：GitHub Actions 已覆盖 Rust 格式化、Clippy、测试和 TypeScript workspace 检查。
+- [x] 建立 `CONTRIBUTING.md`、`CODE_OF_CONDUCT.md`、`SECURITY.md`：补齐开源协作、社区行为和漏洞报告的基础治理文件。
+- [x] 建立 `docs/` 设计文档目录和 `docs/adr/` 架构决策记录：README 保留总览，详细模块设计和关键取舍进入 docs。
+- [x] 设计正式 JSON-RPC 事件协议：定义 `agent.initialize`、`agent.sendTurn`、`agent.event`、审批、取消和错误响应等核心消息。
+- [x] 定义工具 schema、风险等级和审批模型：建立工具注册表、默认审批要求和 read/write/exec/network/destructive 风险分类。
 
 ### Phase 1：Agent Core MVP
 
-- [ ] DeepSeek OpenAI API adapter。
-- [ ] 流式响应解析。
-- [ ] `reasoning_content` 状态机。
-- [ ] read/search/apply_patch/shell/git 工具。
-- [ ] run log。
-- [ ] 基础上下文构建与 token 统计。
+- [x] DeepSeek provider 与 streaming 基础：实现 API adapter、data-only SSE parser、TurnProvider async/streaming 边界、CLI streaming wrapper、tool-call delta accumulator，并通过真实 streaming 与 forced tool-call live test 验收。
+- [x] Reasoning 与 Context Builder：实现 `reasoning_content` replay 状态机、基础 Context Builder 和 token 统计，并覆盖 replay 边界、token budget 与 `context.built` payload 测试。
+- [x] Workspace 工具执行层：实现 read/search/apply_patch/shell/git，覆盖路径约束、敏感路径拒绝、命令超时、结构化结果、`apply_patch` staging 失败恢复和工具取消信号。
+- [x] Run Log 与 summary：实现 `events.jsonl`、`summary.json`、基础脱敏、写入串行化和 `agent.listRuns`。
+- [x] Agent Turn Loop：串联 Context Builder、provider、reasoning、工具执行、审批、验证和 run log，并通过本地 fixture 端到端 smoke test。
+- [x] CLI `run` / `rpc` 最小闭环：支持 fixture/deepseek provider、工作区参数、JSON event、审批、验证命令、JSON-RPC error 输出、进程级 CLI fixture smoke 和小型真实仓库 CLI 联网验收。
+- [x] Agent RPC Server：实现 stdio 事件桥接、双向 request loop、真实 Turn Loop handler、实时事件输出、pending approval 队列、审批超时和取消语义。
+- [x] 审批前端基础：实现 CLI prompt、RPC approve/reject/cancel 分发、TypeScript 协议类型、TUI prompt 状态机和 VS Code modal approval adapter。
+- [x] Phase 1 合并前第一轮测试增强：完成 `pnpm run check` 基线验证、patch 失败恢复、reasoning 边界、CancellationToken 并发和 CLI event stream 顺序测试。
+- [x] 合并前测试基础设施收敛：提取共享 `agent-core::test_helpers::TestWorkspace`，统一当前分散在 agent-core、agent-rpc、cli、demo/live 测试中的临时工作区 helper。
+- [x] 合并前 live 测试配置收敛：统一 live API key 测试 helper，测试侧按 `DEEPSEEK_CODER_API_KEY`、`DEEPSEEK_API_KEY`、`.secrets/deepseek-api-key` 的顺序读取。
+- [x] 合并前 RPC/CLI/protocol 验收补齐：补 RPC request loop pending approval 并发拒绝与 EOF shutdown 取消测试、CLI `rpc` 模式进程级 stdio smoke，以及 Rust/TypeScript/协议文档错误码交叉校验。
+- [x] 合并前最终验收：已运行 `pnpm run check`、`cargo test --workspace -- --list`、离线展示 demo、`git diff --check` 和敏感信息扫描；本轮 RPC/CLI/protocol 离线变更未新增必须阻塞合并的 DeepSeek live suite。
+
+说明：VS Code RPC server 启动监管与 JSON-RPC request client 已提前完成，归入 Phase 4 前置项；Agent Core MVP 验收不依赖完整 VS Code UI。
+
+细任务维护规则：高层阶段条目完成时，同步检查并更新 `docs/phase-tasks.md` 中对应的详细任务状态；详细设计文档新增后续任务时，也先在该索引里确定阶段。
 
 验收标准：
 
 - 能在一个小型 Rust/TypeScript 项目中读取代码、生成计划、修改文件、运行测试并报告结果。
 - 所有写入都经过 patch。
 - 所有命令都有 cwd、退出码和输出记录。
+- CLI 与 RPC 事件流能从同一份 run log 重建关键过程。
 
 ### Phase 2：1M Context Capsule
 
@@ -579,6 +600,8 @@ extension.ts
 
 ### Phase 3：TUI
 
+- [ ] RPC 全双工 reader/writer 与事件发送队列：作为 TUI/VS Code 共享前置，支持 `agent.sendTurn` 早返回、后台持续事件推送和长 provider request 的断连取消。
+- [ ] RPC 入口和事件流消费。
 - [ ] Chat/Plan/Diff/Tools/Context/Settings 页面。
 - [ ] hunk 级审批。
 - [ ] run resume。
@@ -587,8 +610,9 @@ extension.ts
 
 ### Phase 4：VS Code 插件
 
-- [x] TypeScript extension scaffold。
-- [ ] RPC server 管理。
+- [x] TypeScript extension scaffold：建立 VS Code 插件 TypeScript 工程、激活入口、基础命令和测试骨架。
+- [x] RPC server 管理：插件可启动 `deepseek-coder rpc`，发送 `agent.initialize`，转发 `agent.event`，并在退出或错误时更新状态和提示。
+- [x] JSON-RPC request client：统一 request id、pending response、error response 和进程退出时的 pending request 清理。
 - [ ] Sidebar Chat。
 - [ ] Native diff editor。
 - [ ] Problems 面板集成。
@@ -602,7 +626,7 @@ extension.ts
 
 ### Phase 5：自由软件发布
 
-- [x] 确定许可证：AGPL-3.0-or-later。
+- [x] 确定许可证：AGPL-3.0-or-later 已作为项目许可证策略写入 README，后续发布阶段补齐正式 `LICENSE` 文件和源码提供说明。
 - [ ] 发布 `LICENSE`、源码获取说明和网络服务源码提供说明。
 - [ ] 发布源码包、Cargo crate、npm wrapper、VSIX、GitHub Release 校验和。
 - [ ] 建立公开 roadmap 和 issue 模板。
@@ -670,9 +694,16 @@ respect_gitignore = true
 │   └── tui/
 ├── docs/
 │   ├── adr/
+│   ├── README.md
 │   ├── architecture.md
+│   ├── roadmap.md
 │   ├── agent-core.md
+│   ├── deepseek-api-adapter.md
+│   ├── reasoning-content.md
 │   ├── json-rpc-protocol.md
+│   ├── rpc-server.md
+│   ├── cli.md
+│   ├── run-log.md
 │   ├── context-capsule.md
 │   ├── tool-system.md
 │   ├── approval-model.md

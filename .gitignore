@@ -6,6 +6,7 @@
 .env
 .env.*
 !.env.example
+.secrets/
 .deepseek-coder/
 
 # Rust
@@ -16,6 +17,8 @@ node_modules/
 .pnpm-store/
 dist/
 out/
+dist-test/
+out-test/
 *.tsbuildinfo
 *.vsix
 

@@ -1,7 +1,16 @@
 #![forbid(unsafe_code)]
 
 pub mod approval;
+pub mod cancellation;
+pub mod context;
+pub mod provider;
+pub mod reasoning;
+pub mod run_log;
+#[doc(hidden)]
+pub mod test_helpers;
 pub mod tool;
+pub mod tool_execution;
+pub mod turn_loop;
 
 pub const PROJECT_NAME: &str = "deepseek-coder";
 pub const DEFAULT_STATE_DIR: &str = ".deepseek-coder";

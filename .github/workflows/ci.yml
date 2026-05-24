@@ -49,6 +49,12 @@ jobs:
           corepack prepare pnpm@10.0.0 --activate
           pnpm --version
 
+      - name: Install ripgrep
+        shell: pwsh
+        run: |
+          choco install ripgrep -y --no-progress
+          rg --version
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 

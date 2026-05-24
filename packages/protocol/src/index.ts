@@ -1,4 +1,61 @@
 export const protocolVersion = "0.1.0" as const;
+export const jsonRpcVersion = "2.0" as const;
+export const agentEventMethod = "agent.event" as const;
+export const agentInitializeMethod = "agent.initialize" as const;
+export const agentSendTurnMethod = "agent.sendTurn" as const;
+export const agentResumeMethod = "agent.resume" as const;
+export const agentApproveMethod = "agent.approve" as const;
+export const agentRejectMethod = "agent.reject" as const;
+export const agentCancelMethod = "agent.cancel" as const;
+export const agentListRunsMethod = "agent.listRuns" as const;
+
+export interface ProtocolErrorDefinition {
+  readonly code: number;
+  readonly name: string;
+}
+
+export const jsonRpcErrorCodes = {
+  parseError: -32700,
+  invalidRequest: -32600,
+  methodNotFound: -32601,
+  invalidParams: -32602,
+  internalError: -32603,
+} as const;
+
+export const rpcErrorCodes = {
+  unsupportedProtocol: -32001,
+  workspaceUntrusted: -32002,
+  runNotFound: -32003,
+  runAlreadyActive: -32004,
+  invalidToolArguments: -32010,
+  approvalNotFound: -32011,
+  approvalDenied: -32012,
+  contextBudgetExceeded: -32020,
+  providerError: -32030,
+  toolExecutionFailed: -32040,
+  runCanceled: -32050,
+  internalInvariant: -32060,
+} as const;
+
+export const protocolErrorDefinitions = [
+  { code: jsonRpcErrorCodes.parseError, name: "Parse error" },
+  { code: jsonRpcErrorCodes.invalidRequest, name: "Invalid Request" },
+  { code: jsonRpcErrorCodes.methodNotFound, name: "Method not found" },
+  { code: jsonRpcErrorCodes.invalidParams, name: "Invalid params" },
+  { code: jsonRpcErrorCodes.internalError, name: "Internal error" },
+  { code: rpcErrorCodes.unsupportedProtocol, name: "E_UNSUPPORTED_PROTOCOL" },
+  { code: rpcErrorCodes.workspaceUntrusted, name: "E_WORKSPACE_UNTRUSTED" },
+  { code: rpcErrorCodes.runNotFound, name: "E_RUN_NOT_FOUND" },
+  { code: rpcErrorCodes.runAlreadyActive, name: "E_RUN_ALREADY_ACTIVE" },
+  { code: rpcErrorCodes.invalidToolArguments, name: "E_INVALID_TOOL_ARGUMENTS" },
+  { code: rpcErrorCodes.approvalNotFound, name: "E_APPROVAL_NOT_FOUND" },
+  { code: rpcErrorCodes.approvalDenied, name: "E_APPROVAL_DENIED" },
+  { code: rpcErrorCodes.contextBudgetExceeded, name: "E_CONTEXT_BUDGET_EXCEEDED" },
+  { code: rpcErrorCodes.providerError, name: "E_PROVIDER_ERROR" },
+  { code: rpcErrorCodes.toolExecutionFailed, name: "E_TOOL_EXECUTION_FAILED" },
+  { code: rpcErrorCodes.runCanceled, name: "E_RUN_CANCELED" },
+  { code: rpcErrorCodes.internalInvariant, name: "E_INTERNAL_INVARIANT" },
+] as const satisfies readonly ProtocolErrorDefinition[];
 
 export const riskLevels = ["read", "write", "exec", "network", "destructive"] as const;
 export type RiskLevel = (typeof riskLevels)[number];
@@ -51,6 +108,9 @@ export function isApprovalRequired(risk: RiskLevel): boolean {
 
 export type JsonSchema = Readonly<Record<string, unknown>>;
 
+export const toolImplementationStatuses = ["schema_only", "executor_implemented"] as const;
+export type ToolImplementationStatus = (typeof toolImplementationStatuses)[number];
+
 export const toolNames = [
   "workspace_manifest",
   "read_file",
@@ -69,6 +129,7 @@ export interface ToolDefinition {
   readonly description: string;
   readonly risk: RiskLevel;
   readonly approval: ApprovalRequirement;
+  readonly implementationStatus: ToolImplementationStatus;
   readonly argumentSchema: JsonSchema;
   readonly resultSchema: JsonSchema;
 }
@@ -90,6 +151,7 @@ export const toolDefinitions = [
     description: "生成 workspace manifest。",
     risk: "read",
     approval: "none",
+    implementationStatus: "schema_only",
     argumentSchema: {
       type: "object",
       additionalProperties: false,
@@ -105,6 +167,7 @@ export const toolDefinitions = [
     description: "读取 workspace 内 UTF-8 文本文件。",
     risk: "read",
     approval: "none",
+    implementationStatus: "executor_implemented",
     argumentSchema: {
       type: "object",
       additionalProperties: false,
@@ -122,6 +185,7 @@ export const toolDefinitions = [
     description: "使用 ripgrep 搜索 workspace 文本。",
     risk: "read",
     approval: "none",
+    implementationStatus: "executor_implemented",
     argumentSchema: {
       type: "object",
       additionalProperties: false,
@@ -140,6 +204,7 @@ export const toolDefinitions = [
     description: "应用统一 diff patch。",
     risk: "write",
     approval: "required",
+    implementationStatus: "executor_implemented",
     argumentSchema: {
       type: "object",
       additionalProperties: false,
@@ -160,6 +225,7 @@ export const toolDefinitions = [
     description: "执行非交互式 shell 命令。",
     risk: "exec",
     approval: "required",
+    implementationStatus: "executor_implemented",
     argumentSchema: {
       type: "object",
       additionalProperties: false,
@@ -177,6 +243,7 @@ export const toolDefinitions = [
     description: "读取 git status。",
     risk: "read",
     approval: "none",
+    implementationStatus: "executor_implemented",
     argumentSchema: {
       type: "object",
       additionalProperties: false,
@@ -191,6 +258,7 @@ export const toolDefinitions = [
     description: "读取 git diff。",
     risk: "read",
     approval: "none",
+    implementationStatus: "executor_implemented",
     argumentSchema: {
       type: "object",
       additionalProperties: false,
@@ -206,6 +274,7 @@ export const toolDefinitions = [
     description: "读取语言服务器或编辑器 diagnostics。",
     risk: "read",
     approval: "none",
+    implementationStatus: "schema_only",
     argumentSchema: {
       type: "object",
       additionalProperties: false,
@@ -220,6 +289,7 @@ export const toolDefinitions = [
     description: "更新当前计划。",
     risk: "read",
     approval: "none",
+    implementationStatus: "schema_only",
     argumentSchema: {
       type: "object",
       additionalProperties: false,
@@ -252,22 +322,224 @@ export function findToolDefinition(name: string): ToolDefinition | undefined {
   return toolDefinitions.find((tool) => tool.name === name);
 }
 
+export type FrontendKind = "cli" | "tui" | "vscode";
+
+export interface ClientInfo {
+  readonly name: string;
+  readonly version: string;
+  readonly frontend: FrontendKind;
+}
+
 export interface AgentInitializeParams {
-  readonly workspacePath: string;
   readonly protocolVersion: typeof protocolVersion;
+  readonly client: ClientInfo;
+  readonly workspaceRoot: string;
+  readonly workspaceTrusted: boolean;
+}
+
+export interface ServerInfo {
+  readonly name: string;
+  readonly version: string;
+}
+
+export interface ServerCapabilities {
+  readonly protocolVersion: typeof protocolVersion;
+  readonly supportsRunResume: boolean;
+  readonly supportsPatchApproval: boolean;
+  readonly supportsPersistentApprovals: boolean;
+  readonly supportedRiskLevels: readonly RiskLevel[];
+}
+
+export interface AgentInitializeResult {
+  readonly protocolVersion: typeof protocolVersion;
+  readonly server: ServerInfo;
+  readonly capabilities: ServerCapabilities;
+  readonly stateDir: string;
+}
+
+export type RpcRunMode = "plan" | "edit" | "review" | "ask";
+
+export interface TextRange {
+  readonly startLine: number;
+  readonly startColumn: number;
+  readonly endLine: number;
+  readonly endColumn: number;
+}
+
+export interface TurnAttachment {
+  readonly kind: "file" | "selection" | "diagnostic";
+  readonly path?: string;
+  readonly range?: TextRange;
+  readonly text?: string;
+}
+
+export interface SendTurnParams {
+  readonly runId?: string;
+  readonly message: string;
+  readonly mode: RpcRunMode;
+  readonly attachments?: readonly TurnAttachment[];
+}
+
+export interface SendTurnResult {
+  readonly runId: string;
+  readonly turnId: string;
+  readonly accepted: true;
+}
+
+export interface ResumeParams {
+  readonly runId: string;
+  readonly replayFromSeq?: number;
+}
+
+export interface ResumeResult {
+  readonly runId: string;
+  readonly nextSeq: number;
+  readonly replayStarted: boolean;
+}
+
+export type RunSummaryStatus = "running" | "completed" | "failed" | "canceled";
+
+export interface ListRunsParams {
+  readonly limit?: number;
+}
+
+export interface RunSummary {
+  readonly runId: string;
+  readonly title: string;
+  readonly status: RunSummaryStatus;
+  readonly startedAt: string;
+  readonly updatedAt: string;
+  readonly completedAt?: string;
+  readonly lastSeq: number;
+  readonly eventCount: number;
+  readonly mode?: RpcRunMode;
+  readonly summary?: string;
+  readonly changedFiles?: readonly string[];
+  readonly verificationStatus?: "passed" | "failed" | "skipped";
+}
+
+export interface ListRunsResult {
+  readonly runs: readonly RunSummary[];
+}
+
+export interface ApproveParams {
+  readonly approvalId: string;
+  readonly persist?: ApprovalPersistence;
+}
+
+export interface ApproveResult {
+  readonly approvalId: string;
+  readonly state: "approved";
+  readonly persist: ApprovalPersistence;
+}
+
+export interface RejectParams {
+  readonly approvalId: string;
+  readonly reason?: string;
+}
+
+export interface RejectResult {
+  readonly approvalId: string;
+  readonly state: "rejected";
+  readonly reason?: string;
+}
+
+export interface CancelParams {
+  readonly runId: string;
+  readonly reason?: string;
+}
+
+export interface CancelResult {
+  readonly runId: string;
+  readonly state: "canceled";
+  readonly reason?: string;
 }
 
 export interface ApprovalRequest {
-  readonly id: string;
+  readonly approvalId: string;
   readonly risk: RiskLevel;
   readonly title: string;
   readonly detail: string;
-  readonly toolCallId?: string;
-  readonly toolName?: ToolName;
+  readonly toolCallId: string;
+  readonly toolName: ToolName;
   readonly command?: string;
   readonly paths?: readonly string[];
   readonly persistable: boolean;
 }
+
+export type JsonRpcId = string | number | null;
+
+export interface JsonRpcRequest<TParams = unknown> {
+  readonly jsonrpc: typeof jsonRpcVersion;
+  readonly id: JsonRpcId;
+  readonly method: string;
+  readonly params?: TParams;
+}
+
+export interface JsonRpcResponse<TResult = unknown> {
+  readonly jsonrpc: typeof jsonRpcVersion;
+  readonly id: JsonRpcId;
+  readonly result: TResult;
+}
+
+export interface JsonRpcErrorObject<TData = unknown> {
+  readonly code: number;
+  readonly message: string;
+  readonly data?: TData;
+}
+
+export interface JsonRpcErrorResponse<TData = unknown> {
+  readonly jsonrpc: typeof jsonRpcVersion;
+  readonly id: JsonRpcId;
+  readonly error: JsonRpcErrorObject<TData>;
+}
+
+export interface JsonRpcNotification<TParams = unknown> {
+  readonly jsonrpc: typeof jsonRpcVersion;
+  readonly method: string;
+  readonly params: TParams;
+}
+
+export interface AgentEventEnvelope<TPayload = unknown> {
+  readonly seq: number;
+  readonly time: string;
+  readonly type: string;
+  readonly runId: string;
+  readonly turnId?: string;
+  readonly payload: TPayload;
+}
+
+export interface AssistantDeltaPayload {
+  readonly text: string;
+  readonly iteration?: number;
+  readonly stream?: boolean;
+}
+
+export interface ToolApprovalRequiredPayload {
+  readonly approvalId: string;
+  readonly toolCallId: string;
+  readonly toolName: ToolName;
+  readonly risk: RiskLevel;
+  readonly title: string;
+  readonly detail: string;
+  readonly command?: string;
+  readonly paths?: readonly string[];
+  readonly persistable: boolean;
+}
+
+export interface ToolApprovalResolvedPayload {
+  readonly approvalId: string;
+  readonly toolCallId: string;
+  readonly toolName: ToolName;
+  readonly decision: "approved" | "rejected" | "canceled" | "expired";
+  readonly reason?: string;
+}
+
+export type AgentEventNotification<TPayload = unknown> = JsonRpcNotification<
+  AgentEventEnvelope<TPayload>
+> & {
+  readonly method: typeof agentEventMethod;
+};
 
 export type AgentEvent =
   | {

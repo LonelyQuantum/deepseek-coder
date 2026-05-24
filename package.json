@@ -11,7 +11,7 @@
   },
   "scripts": {
     "build": "cargo build --workspace && pnpm -r build",
-    "check": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && pnpm -r typecheck",
+    "check": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && pnpm -r typecheck && pnpm -r test",
     "format": "cargo fmt --all",
     "lint": "cargo clippy --workspace --all-targets -- -D warnings && pnpm -r lint",
     "test": "cargo test --workspace && pnpm -r test",

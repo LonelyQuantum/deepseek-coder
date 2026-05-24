@@ -1,6 +1,6 @@
 # 工具系统
 
-状态：`0.1.0` 设计已确定，基础类型实现中。
+状态：`0.1.0` 设计已确定，Phase 1 基础执行层已实现。
 
 工具系统通过显式 schema 和类型化结果向 Agent Core 暴露工作区操作。模型不得直接执行文件写入、shell 命令或网络访问；它只能请求工具，工具请求必须经过 schema 校验和审批策略。
 
@@ -35,6 +35,7 @@ interface ToolDefinition {
   description: string;
   risk: RiskLevel;
   approval: ApprovalRequirement;
+  implementationStatus: "schema_only" | "executor_implemented";
   argumentSchema: JsonSchema;
   resultSchema: JsonSchema;
 }
@@ -48,10 +49,16 @@ pub struct ToolDefinition {
     pub description: &'static str,
     pub risk: RiskLevel,
     pub approval: ApprovalRequirement,
+    pub implementation_status: ToolImplementationStatus,
     pub argument_schema: &'static str,
     pub result_schema: &'static str,
 }
 ```
+
+`implementationStatus` / `implementation_status` 只描述当前仓库是否已有基础执行器实现：
+
+- `executor_implemented`：已接入 `WorkspaceToolExecutor`，可被基础 Agent Turn Loop 调用。
+- `schema_only`：协议名称、参数 schema、风险和审批策略已注册，但执行器尚未实现；如果模型在当前阶段请求这类工具，Turn Loop 必须返回显式 unsupported tool 错误。
 
 ## 通用结果字段
 
@@ -86,7 +93,8 @@ pub struct ToolDefinition {
 - `path`
 - `content`
 - `lineCount`
-- `sha256`
+
+文件内容摘要字段如 `sha256` 属于 manifest 和缓存增强项，当前 Phase 1 `read_file` 执行结果尚不返回该字段。
 
 ## 内置工具
 
@@ -127,7 +135,6 @@ pub struct ToolDefinition {
 - `path`
 - `content`
 - `lineCount`
-- `sha256`
 
 ### `search`
 
@@ -260,7 +267,102 @@ pub struct ToolDefinition {
 ## 实现位置
 
 - Rust 基础类型：`crates/agent-core/src/tool.rs`。
+- Rust 工具执行层：`crates/agent-core/src/tool_execution.rs`。
 - Rust 审批类型：`crates/agent-core/src/approval.rs`。
 - TypeScript 协议类型：`packages/protocol/src/index.ts`。
+- 共享协议 fixture：`docs/protocol/tool-registry.v1.json`。
 
-后续 `crates/agent-rpc` 应把 Rust 类型序列化为 `docs/json-rpc-protocol.md` 中定义的 JSON-RPC 事件。
+`crates/agent-rpc` 已实现 Run Log 事件到 `agent.event` notification 的基础桥接，并已分发 `agent.approve` / `agent.reject`。真实 RPC handler 已能把工具请求、审批请求、审批决定和工具结果暴露给 CLI/TUI/VS Code；TUI/VS Code 仍需要把已有 UI 原语接入该 pending 队列。
+
+## 协议一致性测试
+
+Phase 1 已加入 `docs/protocol/tool-registry.v1.json`，作为 Rust 和 TypeScript 共同校验的工具注册表 fixture。当前 CI 会在两侧分别验证：
+
+- 工具名称、静态风险、默认审批要求和实现状态一致。
+- 风险等级和默认审批映射一致。
+- fixture 版本与 package/crate 版本一致。
+
+fixture 中的 `tools` 被当作无序集合校验；测试会按工具名规整后比较，并拒绝重复工具名。这避免了文档调整排序时造成无意义失败，也能及时发现 Rust/TypeScript 任一侧缺失工具定义。
+
+这不是最终的 schema 生成方案，但能在短期内阻止 `crates/agent-core`、`packages/protocol` 和文档中的基础工具注册表分叉。
+
+## 工具结果脱敏
+
+`WorkspaceToolExecutor` 返回的结果对象保留原始工具输出，便于调用方做精确展示、错误诊断和后续验证。工具结果写入 run log、进入 prompt 或发送给前端历史回放前，应先调用 `redacted_tool_result_value` 转换为已脱敏 JSON。
+
+该函数复用 Run Log 的基础脱敏规则，当前覆盖敏感字段名和明显的 `sk-...` 形态密钥片段。它不是完整的安全边界；更丰富的环境变量、云服务 key、证书和大输出截断策略仍属于后续统一脱敏层。
+
+## Phase 1 实现范围
+
+`WorkspaceToolExecutor` 当前提供：
+
+- `read_file`：只读取 workspace 内 UTF-8 文本文件，支持 1-based 行范围。
+- `search`：通过 `rg --json --fixed-strings` 搜索，默认排除 `.git/`、`.secrets/`、`.secret/`、`.env*`、`node_modules/` 和 `target/`。
+- `apply_patch`：应用受限 unified diff，要求 patch 实际文件集合与 `expectedFiles` 完全一致；执行时会先在内存中完成全部文件的 hunk 校验和 staging，再统一写盘，因此解析或 hunk mismatch 不会留下部分文件已修改的状态；成功后返回 reverse patch。
+- `shell`：在 workspace 内执行非交互式命令，支持超时，返回 exit code、stdout、stderr 和耗时。
+- `git_status`：读取 `git status --short --branch` 或普通 `git status`。
+- `git_diff`：读取 unstaged 或 staged diff，支持限定 workspace-relative 路径。
+
+路径规则：
+
+- 工具参数使用 workspace-relative path。
+- 绝对路径、`..` 路径和解析到 workspace 外的路径都会失败。
+- `.git/`、`.secrets/`、`.secret/`、`.agents/`、`.codex/`、`.env` 和 `.env.*` 被视为敏感路径，读写工具默认拒绝访问。
+
+当前实现暂不包含 workspace manifest、LSP diagnostics 和 plan update 的执行逻辑；它们仍只有 schema 和静态风险定义。
+
+当前执行层已接入基础 Agent Turn Loop、审批策略、取消信号和 run log。写入与命令执行会触发审批请求，并记录 `tool.approvalResolved`；CLI 二进制可以通过 stdin/stderr 做真实 y/n 审批，测试可使用显式 auto-approve 策略验证已批准路径。Run Log 事件已能通过基础 RPC 桥接发送给前端；`AgentTurnLoopRpcHandler` 已能通过 `agent.sendTurn` 真实驱动 Core，并在 `tool.approvalRequired` 处等待 `agent.approve` / `agent.reject` / `agent.cancel` 或审批超时。`shell`、`search`、`git_status` 和 `git_diff` 会在子进程轮询循环中检查 `CancellationToken`，取消时 kill child 并让 Turn Loop 写入 `run.canceled`。TUI/VS Code 接入真实 RPC 队列的完整 UI、网络/破坏性风险升级和更强进程树清理仍需要后续实现。
+
+## 后续增强
+
+### 工具注册与协议一致性
+
+- 为 Rust 和 TypeScript 的每个工具补齐具体 `resultSchema`，替换当前通用 `statusResultSchema`。
+- 将当前 `docs/protocol/tool-registry.v1.json` 扩展为更完整的 schema fixture 或代码生成入口，避免协议文档、Rust 类型和 `packages/protocol` 分叉。
+- 如果 fixture 或代码生成入口继续扩展，再引入 workspace 级路径元数据或 build script，避免多个 crate 复制相对路径。
+- 在 RPC pending 审批队列上继续补充全双工实时发送、client 断连取消、多 active run 关联和重放语义。
+
+### 路径与敏感信息
+
+- 将当前静态敏感路径拒绝规则扩展为可配置规则，合并 `.gitignore`、用户 ignore 配置、常见密钥文件名和平台密钥目录。
+- 扩展 `redacted_tool_result_value` 背后的统一脱敏层，覆盖更多密钥形态、环境变量、stdout、stderr、diff、搜索结果和读取文件内容，并记录截断原因。
+- 对大文件、二进制文件和非 UTF-8 文件给出结构化错误或专门的 metadata 结果，而不是把它们交给文本工具处理。
+
+### `read_file`
+
+- 增加 `sha256`、字节长度、编码信息和内容截断元数据。
+- 支持按 token 预算或语法边界读取片段，避免长文件被随意切断。
+- 增加文件快照 id，方便 run log 复现“读取时看到的内容”。
+
+### `search`
+
+- 增加 regex 模式、glob include/exclude、上下文行、文件类型过滤和排序策略。
+- 支持流式解析 `rg --json`，达到 `maxResults` 后提前停止进程，减少大仓库扫描开销。
+- 改进 `truncated` 判定，使其只基于真实 match 数量，而不是命令输出行数。
+
+### `apply_patch`
+
+- 当前实现只支持受限 unified diff；后续需要支持更完整的 git patch 语法，包括 rename、copy、mode change 和更严格的 no-newline 语义。
+- 增加 patch 预览、hunk 级审批、冲突诊断和失败时的精确 hunk mismatch 信息。
+- 用修改前快照生成 reverse patch，并在 run log 中保存 patch id、审批 id 和可审计回滚信息。
+- 如果需要抵抗磁盘写入中途失败，应进一步引入临时文件、原子替换或备份恢复机制；当前 staging 主要保证解析和 hunk 校验失败不会产生半应用 patch。
+- 明确二进制文件和生成文件策略，避免文本 patch 意外改写不可审计内容。
+
+### `shell`
+
+- 在执行前加入命令风险分类：网络、破坏性、依赖安装、发布、远程 git 操作等必须升级审批。
+- 限制输出大小并记录截断原因，避免 stdout/stderr 把密钥或超大日志直接带入 run log。
+- 记录环境变量差异，但默认隐藏或脱敏敏感变量。
+- 后续按平台分别实现更强的 sandbox 策略；Windows、Linux 和 macOS 不能假设具备相同隔离能力。
+
+### `git_status` / `git_diff`
+
+- 增加 staged/unstaged/untracked 的结构化摘要，便于 UI 展示和上下文构建。
+- 解析 rename、delete、binary diff、submodule 和 worktree 状态。
+- 增加 pathspec 校验与 diff 大小限制，避免把超大 diff 直接塞入模型上下文。
+
+### 尚未实现的内置工具
+
+- `workspace_manifest`：应生成长上下文的稳定骨架，包含 ignore 规则、语言、大小、hash、token 估算和风险标记。
+- `lsp_diagnostics`：应能从 VS Code 或独立语言服务器读取 Problems/diagnostics，并保留来源、范围和严重级别。
+- `plan_update`：应由 Agent Core 写入 run log，并通过 JSON-RPC 事件同步给 CLI/TUI/VS Code。

@@ -31,3 +31,11 @@
 - 当 crate 准备好公开使用后发布到 Cargo
 - 用于安装 wrapper 的 npm package
 - VS Code Marketplace 或 Open VSX
+
+## 后续增强
+
+- 添加 `LICENSE` 文件，并在发布包中包含 AGPL-3.0-or-later 许可证文本和源码获取说明。
+- 设计可复现构建流程，记录 Rust、Node.js、pnpm、VSIX 打包工具和平台目标版本。
+- 增加发布前检查：格式、lint、测试、敏感信息扫描、依赖审计、产物校验和变更日志生成。
+- 为 CLI/TUI 二进制、npm wrapper 和 VSIX 生成校验和，并在 GitHub Release 中发布。
+- 明确网络服务部署场景下的源码提供方式，避免 AGPL 合规说明留到发布后补救。
