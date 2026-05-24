@@ -258,12 +258,6 @@ fn json_lines(output: &str) -> Result<Vec<Value>, Box<dyn Error>> {
         .collect()
 }
 
-#[cfg(windows)]
-fn cargo_test_command() -> String {
-    "cargo test --quiet".to_owned()
-}
-
-#[cfg(not(windows))]
 fn cargo_test_command() -> String {
     "cargo test --quiet".to_owned()
 }

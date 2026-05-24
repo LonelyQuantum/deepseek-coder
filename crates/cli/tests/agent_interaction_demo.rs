@@ -58,6 +58,10 @@ fn fixture_agent_interaction_transcript_demo() -> Result<(), Box<dyn Error>> {
     assert_event(&demo_output.notifications, "tool.completed");
     assert_event(&demo_output.notifications, "verification.completed");
     assert_event(&demo_output.notifications, "run.completed");
+    assert_final_text_contains(
+        &demo_output.notifications,
+        "Fixture provider applied CLI_SMOKE.txt",
+    );
     assert_eq!(workspace.read("CLI_SMOKE.txt"), "new\n");
 
     Ok(())
@@ -163,6 +167,7 @@ mod tests {
     assert_event(&demo_output.notifications, "tool.completed");
     assert_event(&demo_output.notifications, "verification.completed");
     assert_event(&demo_output.notifications, "run.completed");
+    assert_final_text_contains(&demo_output.notifications, "OK_AGENT_DEMO");
     assert!(
         workspace
             .read("src/lib.rs")
@@ -247,6 +252,35 @@ fn assert_event(notifications: &[Value], event_type: &str) {
             .any(|value| value["params"]["type"] == event_type),
         "missing event type {event_type}"
     );
+}
+
+fn assert_final_text_contains(notifications: &[Value], expected: &str) {
+    let assistant_text = visible_assistant_text(notifications);
+    let summary = run_completed_summary(notifications).unwrap_or_default();
+
+    assert!(
+        assistant_text.contains(expected),
+        "final assistant text should contain {expected:?}, got {assistant_text:?}"
+    );
+    assert!(
+        summary.contains(expected),
+        "run.completed summary should contain {expected:?}, got {summary:?}"
+    );
+}
+
+fn visible_assistant_text(notifications: &[Value]) -> String {
+    notifications
+        .iter()
+        .filter(|notification| event_type(notification) == Some("assistant.delta"))
+        .filter_map(|notification| notification["params"]["payload"]["text"].as_str())
+        .collect::<String>()
+}
+
+fn run_completed_summary(notifications: &[Value]) -> Option<&str> {
+    notifications
+        .iter()
+        .filter(|notification| event_type(notification) == Some("run.completed"))
+        .find_map(|notification| notification["params"]["payload"]["summary"].as_str())
 }
 
 fn print_agent_transcript(
