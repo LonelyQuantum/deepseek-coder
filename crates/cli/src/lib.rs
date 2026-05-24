@@ -17,6 +17,7 @@ use deepseek_coder_agent_core::{
         ChatToolCallAccumulator, DeepSeekApiAdapter, DeepSeekApiConfig, StreamEvent,
         ThinkingConfig,
     },
+    reasoning::ReasoningContentMode,
     run_log::{RunLog, RunLogError, RunLogStore},
     tool::{BUILTIN_TOOLS, ToolImplementationStatus},
     tool_execution::{
@@ -369,6 +370,7 @@ where
     let config = AgentTurnLoopConfig {
         max_input_tokens: command.max_input_tokens,
         max_model_turns: command.max_model_turns,
+        reasoning_mode: reasoning_mode_for_thinking(command.thinking),
     };
     let input =
         AgentTurnInput::new(command.turn_id.clone(), command.task.clone()).with_mode(command.mode);
@@ -455,6 +457,7 @@ where
     let config = AgentTurnLoopConfig {
         max_input_tokens: command.max_input_tokens,
         max_model_turns: command.max_model_turns,
+        reasoning_mode: reasoning_mode_for_thinking(command.thinking),
     };
     let handler = AgentTurnLoopRpcHandler::new(CliRpcProviderFactory {
         provider: command.provider,
@@ -923,6 +926,13 @@ fn create_provider(command: &RunCommand) -> Result<CliTurnProvider, CliError> {
         command.max_output_tokens,
         command.thinking,
     )
+}
+
+fn reasoning_mode_for_thinking(thinking: ThinkingKind) -> ReasoningContentMode {
+    match thinking {
+        ThinkingKind::Enabled => ReasoningContentMode::ThinkingEnabled,
+        ThinkingKind::Disabled => ReasoningContentMode::ThinkingDisabled,
+    }
 }
 
 fn create_cli_provider(
