@@ -506,6 +506,10 @@ pub trait AgentRpcRequestHandler {
         &mut self,
         params: ListRunsParams,
     ) -> Result<AgentRpcHandlerOutput<ListRunsResult>, AgentRpcHandlerError>;
+
+    fn shutdown(&mut self) -> Result<Vec<RunLogEvent>, AgentRpcHandlerError> {
+        Ok(Vec::new())
+    }
 }
 
 pub trait RpcTurnProviderFactory {
@@ -786,6 +790,21 @@ where
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(AgentRpcHandlerOutput::new(ListRunsResult { runs }))
+    }
+
+    fn shutdown(&mut self) -> Result<Vec<RunLogEvent>, AgentRpcHandlerError> {
+        let mut events = self.drain_ready_active_run_events()?;
+        let Some(active_run) = self.active_run.as_ref() else {
+            return Ok(events);
+        };
+
+        let run_id = active_run.run_id.clone();
+        let reason = "RPC client disconnected".to_owned();
+        active_run.cancellation_token.cancel(reason.clone());
+        self.approval_queue
+            .cancel_run_pending_approvals(&run_id, reason)?;
+        events.extend(self.collect_active_run_events_until_pause()?);
+        Ok(events)
     }
 }
 
@@ -1619,6 +1638,17 @@ where
         }
     }
 
+    pub fn shutdown<W>(&mut self, writer: &mut W) -> Result<(), AgentRpcError>
+    where
+        W: Write,
+    {
+        let events = self
+            .handler
+            .shutdown()
+            .map_err(|source| AgentRpcError::HandlerShutdown(source.message))?;
+        emit_run_log_events(writer, &events)
+    }
+
     fn handle_initialize<W>(
         &mut self,
         id: Value,
@@ -1838,6 +1868,7 @@ where
     for line in reader.lines() {
         server.handle_line(&line?, writer)?;
     }
+    server.shutdown(writer)?;
     Ok(server.into_inner())
 }
 
@@ -1967,6 +1998,8 @@ pub enum AgentRpcError {
     Serialization(#[from] serde_json::Error),
     #[error("JSON-RPC stdio write failed: {0}")]
     Io(#[from] io::Error),
+    #[error("JSON-RPC handler shutdown failed: {0}")]
+    HandlerShutdown(String),
     #[error("event timestamp exceeds supported range: {time_unix_ms}")]
     TimestampOutOfRange { time_unix_ms: u64 },
 }
