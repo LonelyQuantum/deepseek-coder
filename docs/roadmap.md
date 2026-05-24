@@ -45,9 +45,10 @@
 - 真实 RPC Turn Loop handler：`AgentTurnLoopRpcHandler` 已通过 provider factory 复用 Core Turn Loop，`agent.sendTurn` 会创建 run log、驱动 provider 和工具执行，并把结果事件交给 request loop；CLI `rpc` 子命令已提供 stdio 入口。
 - RPC 真实审批等待队列：`AgentTurnLoopRpcHandler` 会在 `tool.approvalRequired` 处登记 pending approval，后台 Turn Loop worker 等待 `agent.approve` / `agent.reject`，批准后继续执行工具，拒绝后记录 `tool.approvalResolved` 和 `run.failed`。
 - RPC 审批超时/取消：pending approval 已记录过期时间；`agent.cancel` 会取消等待审批的 active run，超时会自动解析为 expired，两者都会记录 `tool.approvalResolved` 和 `run.canceled`。
+- Run Log 写入串行化：Agent Core 已提供 `RunLogWriter` trait 和 `SerializedRunLog`；CLI 继续使用单 writer `RunLog`，RPC active run 使用共享锁串行化 append/load，避免同一 run 被多个前端请求并发读写时出现序列错乱。
+
 下一步：
 
-- Run Log 写入串行化：Turn Loop / RPC 层必须保证同一 run 的事件由单 writer 或同步队列按顺序写入。
 - Run summary metadata：为 `agent.listRuns` 设计并实现 `summary.json` 或等价索引，避免每次列出 run 都扫描完整 JSONL。
 - RPC 全双工事件 writer 队列：当前 pending approval 已真实等待，但事件仍在 request 返回时 flush；后续让 `agent.sendTurn` 更早返回 accepted 并持续推送事件。
 - RPC provider/tool 取消信号：当前 `agent.cancel` 已覆盖 pending approval，后续需要取消进行中的 provider request、工具进程和 client 断连场景。

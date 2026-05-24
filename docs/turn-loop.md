@@ -1,6 +1,6 @@
 # Agent Turn Loop
 
-状态：Phase 1 基础编排、TurnProvider async / streaming 边界、真实 DeepSeek 文本 streaming 联网验收、streaming tool call 增量拼装验证、基础 RPC 事件桥接、双向 request loop、真实 RPC Turn Loop handler、`TurnEventSink` 实时事件输出、CLI 交互式审批、RPC pending approval 等待队列、审批超时和取消语义已实现；TUI/VS Code 已有审批交互原语，尚未接入真实 RPC 队列。
+状态：Phase 1 基础编排、TurnProvider async / streaming 边界、真实 DeepSeek 文本 streaming 联网验收、streaming tool call 增量拼装验证、基础 RPC 事件桥接、双向 request loop、真实 RPC Turn Loop handler、`TurnEventSink` 实时事件输出、CLI 交互式审批、RPC pending approval 等待队列、审批超时、取消语义和 Run Log 写入串行化已实现；TUI/VS Code 已有审批交互原语，尚未接入真实 RPC 队列。
 
 Agent Turn Loop 是 Agent Core 的回合编排层。它负责把已经实现的 Context Builder、`reasoning_content` 状态机、provider 边界、工具执行、审批和 Run Log 串成同一条可复现事件流。
 
@@ -19,6 +19,7 @@ crates/agent-core/src/turn_loop.rs
 - `RejectAllApprovalPolicy`：默认拒绝所有需要审批的工具，避免写入和命令被静默执行。
 - `AutoApprovePolicy`：测试用策略，用于验证已批准工具的执行路径。
 - `AgentTurnInput` / `AgentTurnOutcome`：最小 turn 输入与结果。
+- `RunLogWriter`：Turn Loop 的 run log 写入边界，支持直接写 `RunLog`，也支持 RPC 使用 `SerializedRunLog` 串行化跨线程 append/load。
 - `TurnEventSink` / `NoopTurnEventSink`：Run Log 事件追加成功后的实时输出出口。默认 `run_turn` 使用 no-op sink；CLI/RPC 可以调用 `run_turn_with_event_sink` 接入 JSON-RPC notification writer。
 
 ## 当前回合流程
@@ -85,6 +86,8 @@ DeepSeek streaming tool call delta 在 CLI provider wrapper 内通过 `ChatToolC
 
 RPC handler 当前提供单 active run 的真实审批等待：当 `tool.approvalRequired` 写入 run log 后，RPC 层会把该请求登记为 pending approval，后台 Turn Loop worker 在 `ApprovalPolicy::decide` 中等待。前端发送 `agent.approve` 会继续进入 `tool.started` 和工具执行；发送 `agent.reject` 会写入拒绝事件并使当前 run 失败；发送 `agent.cancel` 会写入 `tool.approvalResolved(decision="canceled")` 和 `run.canceled`；超过默认 300 秒没有决定会写入 `tool.approvalResolved(decision="expired")` 和 `run.canceled`。这个实现解决了真实审批等待、取消和超时，但还没有全双工事件 writer，也不能强制取消已经进入中的 provider 请求或工具进程。
 
+RPC active run 的 Run Log 使用 `SerializedRunLog`：后台 Turn Loop worker 追加事件，`agent.resume` 读取 active run 时也通过同一个同步句柄。这样可以先保证本地 `events.jsonl` 的 `seq` 和 replay 边界稳定；后续全双工事件 writer 仍需要单独实现。
+
 ## 当前测试覆盖
 
 基础 Turn Loop 测试使用 fake provider 覆盖：
@@ -94,6 +97,7 @@ RPC handler 当前提供单 active run 的真实审批等待：当 `tool.approva
 - provider 请求 `apply_patch`，测试审批策略批准后修改文件、记录 `changedFiles`，并完成 run。
 - provider 发送多个 streaming content delta，Turn Loop 写入多条 `assistant.delta`，并避免在 `Completed` 时重复写入完整文本。
 - Turn Loop 每次成功追加 Run Log 事件后，会把同一条事件交给 `TurnEventSink`，sink 看到的事件序列与本地 `events.jsonl` 一致。
+- `SerializedRunLog` 并发 append 测试验证多个 clone 同时写同一 run 时仍生成连续 `seq`。
 - DeepSeek wrapper 能把 streaming tool call delta 拼成完整工具调用，并在缺少必要 metadata 时失败。
 
 这些测试验证的是模块集成骨架，不需要真实 DeepSeek API Key，也不会联网。真实 tool call delta 形态由 `live_streaming_tool_call_accumulator_smoke_test` 作为手动 opt-in live test 验收。

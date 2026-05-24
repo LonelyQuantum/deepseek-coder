@@ -1,6 +1,6 @@
 # 运行日志（Run Log）
 
-状态：Phase 1 基础存储层已实现，并已接入基础 Agent Turn Loop、CLI `run` 和 RPC Turn Loop handler。
+状态：Phase 1 基础存储层和写入串行化已实现，并已接入基础 Agent Turn Loop、CLI `run` 和 RPC Turn Loop handler。
 
 Run Log 是 Agent Core 的本地审计记录。它记录一次 run 中发生的事件，使 CLI、TUI、VS Code 和后续调试工具能够读取同一份事实来源。Run Log 不等同于模型上下文；进入上下文前仍需要 Context Capsule 做筛选、摘要、脱敏和 token 预算。
 
@@ -33,15 +33,19 @@ crates/agent-core/src/run_log.rs
 核心类型：
 
 - `RunLogStore`：绑定 workspace root 和 state dir，负责创建、打开和读取 run。
-- `RunLog`：追加事件并维护下一条 `seq`。
+- `RunLog`：单 writer 追加句柄，维护下一条 `seq`。
+- `RunLogWriter`：Turn Loop 使用的写入 trait，让单 writer 和同步 writer 共享同一套回合编排。
+- `SerializedRunLog`：`Mutex<RunLog>` 包装，用于跨线程或前端 request 边界串行化同一 run 的 append/load。
 - `RunLogEvent`：JSONL 中的一条事件。
 - `RunLogError`：路径、序列、JSON、I/O 和标识符错误。
 
 ## 写入并发边界
 
-当前 `RunLog` 是单 writer 追加句柄，`append` 需要 `&mut self`，内部不提供跨任务同步。Phase 1 的 Agent Turn Loop 接入时，同一个 run 的事件写入必须由调用方串行化，例如通过单独的 writer task、队列或外层 `Mutex` 保证顺序。
+`RunLog` 仍是最小单 writer 句柄，适合 CLI `run` 这种同步流程。它通过 `&mut self` 保证同一代码路径不能同时追加两条事件。
 
-这样做可以保持当前存储层简单、可测试，并把并发策略留给真正拥有任务生命周期的 Turn Loop / RPC 层决定。后续如果允许多个前端请求同时写同一个 run，需要先明确事件顺序和取消语义，再选择同步实现。
+`SerializedRunLog` 用于 RPC 等跨线程场景。它把同一个 `RunLog` 放入 `Mutex`，所有 clone 共享同一个 `next_seq` 和文件句柄状态；每次 append 都先拿锁，写入完成并推进 `seq` 后释放。`load` 也走同一把锁，避免 active run 正在写入时，`agent.resume` 从磁盘读到半条事件或不一致的序列。
+
+当前策略不是全双工事件发送队列：它只保证 run log 本身的 append/load 串行化。RPC stdout 的持续事件推送仍由 request loop flush；后续全双工 server 需要再引入独立事件 writer 队列，保证同一 run 的通知发送也按 `seq` 串行。
 
 ## 事件格式
 
@@ -89,13 +93,13 @@ crates/agent-core/src/run_log.rs
 - 拒绝不安全的 run id 和 state dir。
 - 读取时发现序列缺口会失败。
 - 写入前脱敏敏感字段和明显密钥片段。
+- `SerializedRunLog` 多线程 clone 并发追加时，仍生成连续 `seq`，并可被重新打开为正确的下一条序号。
 
 ## 后续增强
 
 - 扩展 Agent Turn Loop 接入，自动记录 provider streaming 摘要、patch proposal、验证命令、取消和恢复事件。
 - 增加 run summary / metadata 文件，支持 `agent.listRuns` 快速读取标题、状态、开始时间、结束时间和事件计数，避免每次列出 run 都扫描完整 JSONL。
 - 增加事件 payload 的强类型 schema，并与 `docs/json-rpc-protocol.md` 和 `packages/protocol` 做兼容性测试。
-- 在 Agent Turn Loop / RPC 层实现同一 run 的写入串行化策略，并补充并发写入顺序测试。
 - 增加日志轮转或分片策略，防止长时间运行和高频 streaming 事件让单个 `events.jsonl` 过大。
 - 增加输出截断信息，区分“字段不存在”“输出为空”和“输出因安全或大小限制被截断”。
 - 增加 run export 审计包，导出前再次做敏感信息扫描。

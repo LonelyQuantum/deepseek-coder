@@ -72,7 +72,7 @@ Phase 1 已实现 `WorkspaceToolExecutor`，作为 read/search/apply_patch/shell
 
 Phase 1 已实现基础 Run Log 存储层，详见 `docs/run-log.md`。它提供 workspace 内 `.deepseek-coder/runs/<runId>/events.jsonl` 追加写入、按序读取、序列校验和基础脱敏。
 
-当前 Run Log 已接入基础 Agent Turn Loop，会记录 user turn、context、provider 请求摘要、工具请求、审批请求、审批决定、工具结果和 run 完成/失败事件。CLI `run` 已在回合成功后写入 `verification.started` / `verification.completed` 事件，并对验证输出做脱敏；共享的 RPC verification request loop、run summary 和更完整 provider 摘要仍待实现。`RunLog` 是单 writer 句柄，不提供内部跨任务同步；RPC 层接入时仍应串行化同一个 run 的所有写入。
+当前 Run Log 已接入基础 Agent Turn Loop，会记录 user turn、context、provider 请求摘要、工具请求、审批请求、审批决定、工具结果和 run 完成/失败事件。CLI `run` 已在回合成功后写入 `verification.started` / `verification.completed` 事件，并对验证输出做脱敏；共享的 RPC verification request loop、run summary 和更完整 provider 摘要仍待实现。`RunLog` 是单 writer 句柄；Agent Core 另外提供 `RunLogWriter` trait 和 `SerializedRunLog`，RPC active run 使用同步包装串行化同一 run 的 append/load。
 
 ## Agent Turn Loop
 
