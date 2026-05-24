@@ -78,7 +78,7 @@ Phase 1 已实现基础 Run Log 存储层，详见 `docs/run-log.md`。它提供
 
 Phase 1 已实现基础 Agent Turn Loop，详见 `docs/turn-loop.md`。当前编排层可以用 fake provider 跑通 Context Builder、`ReasoningContentStateMachine`、工具请求、审批、工具执行、脱敏工具结果、Run Log 写入和继续 provider 请求。
 
-当前 Turn Loop 已改为 async / streaming provider 边界：`TurnProvider::complete_stream` 返回 `TurnProviderEvent` 流，Turn Loop 会把 content delta 写入 `assistant.delta`，并要求 provider 最终发送唯一的完整 `Completed` 响应。CLI 已通过 fixture provider 和 DeepSeek streaming wrapper 接入该边界；真实 DeepSeek 文本 streaming 和 tool call delta accumulator 已完成联网验收。`run_turn_with_event_sink` 会把每条成功持久化的 run event 交给实时 sink，CLI `--json` 和 `StdioEventBridge` 已使用该机制。Agent RPC request loop 已能分发 `agent.sendTurn` / `agent.approve` / `agent.reject` / `agent.cancel`，`AgentTurnLoopRpcHandler` 已能驱动真实 Core Turn Loop，并通过内存 pending approval 队列等待 RPC 审批；CLI 已有交互式审批。
+当前 Turn Loop 已改为 async / streaming provider 边界：`TurnProvider::complete_stream` 返回 `TurnProviderEvent` 流，Turn Loop 会把 content delta 写入 `assistant.delta`，并要求 provider 最终发送唯一的完整 `Completed` 响应。CLI 已通过 fixture provider 和 DeepSeek streaming wrapper 接入该边界；真实 DeepSeek 文本 streaming 和 tool call delta accumulator 已完成联网验收。`run_turn_with_event_sink` 会把每条成功持久化的 run event 交给实时 sink，CLI `--json` 和 `StdioEventBridge` 已使用该机制；CLI 失败路径也会输出 JSON-RPC error response。Agent RPC request loop 已能分发 `agent.sendTurn` / `agent.approve` / `agent.reject` / `agent.cancel`，`AgentTurnLoopRpcHandler` 已能驱动真实 Core Turn Loop，并通过内存 pending approval 队列等待 RPC 审批；CLI 已有交互式审批。
 
 ## Phase 1 收敛顺序
 
@@ -86,8 +86,7 @@ Phase 1 已实现基础 Agent Turn Loop，详见 `docs/turn-loop.md`。当前编
 
 1. 异步 RPC run 执行队列：让 `agent.sendTurn` 先返回 accepted，再后台持续输出事件。
 2. TUI/VS Code 接入真实 RPC pending approval 队列。
-3. CLI JSON-RPC 错误输出：让 `--json` 失败路径输出结构化错误，而不是只写人类可读 stderr。
-4. 真实仓库验收：通过 `deepseek-coder run "<task>"` 跑通小型仓库上的读取、修改、验证和报告。
+3. 真实仓库验收：通过 `deepseek-coder run "<task>"` 跑通小型仓库上的读取、修改、验证和报告。
 
 ## 后续增强
 

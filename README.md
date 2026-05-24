@@ -538,7 +538,7 @@ extension.ts
 
 ## 开发计划
 
-当前进度：Phase 1 进行中。DeepSeek API adapter、流式响应解析、`reasoning_content` 状态机、read/search/apply_patch/shell/git 基础工具执行层、基础 run log、基础 Context Builder 与 token 统计、Agent Turn Loop 基础编排、TurnProvider async / streaming 边界、CLI DeepSeek streaming wrapper、真实 DeepSeek provider streaming 联网验收、streaming tool call 增量拼装验证、Agent RPC Server stdio 事件桥接、Agent RPC Server 双向 request loop、真实 RPC Turn Loop handler、CLI `run` 最小闭环、CLI `rpc` stdio 入口、RPC/CLI 实时事件输出、CLI/RPC/TUI/VS Code 审批基础、RPC 真实审批等待队列、RPC 审批超时和取消语义、Run Log 写入串行化、Run summary metadata / `agent.listRuns`、RPC provider/tool 取消信号、本地 fixture smoke test 和进程级 CLI fixture smoke test 已完成；VS Code RPC server 启动监管与 JSON-RPC request client 已作为 Phase 4 前置项提前完成，不作为 Agent Core MVP 的必需验收条件。下一步优先收敛 CLI JSON-RPC 错误输出和更完整的真实仓库验收。
+当前进度：Phase 1 进行中。DeepSeek API adapter、流式响应解析、`reasoning_content` 状态机、read/search/apply_patch/shell/git 基础工具执行层、基础 run log、基础 Context Builder 与 token 统计、Agent Turn Loop 基础编排、TurnProvider async / streaming 边界、CLI DeepSeek streaming wrapper、真实 DeepSeek provider streaming 联网验收、streaming tool call 增量拼装验证、Agent RPC Server stdio 事件桥接、Agent RPC Server 双向 request loop、真实 RPC Turn Loop handler、CLI `run` 最小闭环、CLI `rpc` stdio 入口、RPC/CLI 实时事件输出、CLI/RPC/TUI/VS Code 审批基础、RPC 真实审批等待队列、RPC 审批超时和取消语义、Run Log 写入串行化、Run summary metadata / `agent.listRuns`、RPC provider/tool 取消信号、CLI JSON-RPC 错误输出、本地 fixture smoke test 和进程级 CLI fixture smoke test 已完成；VS Code RPC server 启动监管与 JSON-RPC request client 已作为 Phase 4 前置项提前完成，不作为 Agent Core MVP 的必需验收条件。下一步优先收敛更完整的真实仓库验收。
 
 ### Phase 0：项目章程
 
@@ -582,7 +582,7 @@ extension.ts
 - [x] Run Log 写入串行化：`RunLogWriter` 抽象支持单 writer 和 `SerializedRunLog`；RPC active run 使用共享锁保护同一 run 的 append/load 顺序。
 - [x] Run summary metadata / `agent.listRuns`：每个 run 维护 `summary.json`，RPC 可按更新时间列出 run，不扫描完整 JSONL。
 - [x] RPC provider/tool 取消信号：RPC active run 持有协作式 `CancellationToken`，`agent.cancel` 会同时唤醒 pending approval、通知 provider request，并让 shell/search/git 等子进程工具尽快停止。
-- [ ] CLI JSON-RPC 错误输出。
+- [x] CLI JSON-RPC 错误输出：`run --json` 失败路径会输出 JSON-RPC error response，并保持非零退出码。
 - [ ] 小型真实仓库 CLI 验收。
 
 说明：VS Code RPC server 启动监管与 JSON-RPC request client 已提前完成，归入 Phase 4 前置项；Agent Core MVP 验收不依赖完整 VS Code UI。

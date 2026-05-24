@@ -1,8 +1,8 @@
 # CLI
 
-状态：`0.1.0` Phase 1 `run` 最小闭环、`rpc` stdio 入口和 `--json` 实时事件输出已实现。
+状态：`0.1.0` Phase 1 `run` 最小闭环、`rpc` stdio 入口、`--json` 实时事件输出和 JSON-RPC 错误输出已实现。
 
-CLI 是最小可运行入口。它不重新实现 Agent Core，而是负责解析命令行参数、创建 run log、选择 provider、驱动 `AgentTurnLoop`，并把结果以人类可读摘要或 JSON-RPC event notification 输出。
+CLI 是最小可运行入口。它不重新实现 Agent Core，而是负责解析命令行参数、创建 run log、选择 provider、驱动 `AgentTurnLoop`，并把结果以人类可读摘要或 newline-delimited JSON-RPC 输出。
 
 ## 当前命令
 
@@ -20,7 +20,7 @@ deepseek-coder rpc [options]
 - `--run-id <id>` / `--turn-id <id>`：显式指定本地 run/turn id。
 - `--auto-approve` / `-y`：允许需要审批的工具执行。默认在 CLI 二进制中交互式询问；如果 stdin 已关闭或不可读，则拒绝该审批。
 - `--verify <command>`：回合成功后运行显式验证命令。因为它执行 shell command，必须同时传 `--auto-approve`。
-- `--json`：输出 newline-delimited `agent.event` JSON-RPC notifications。
+- `--json`：输出 newline-delimited JSON-RPC。成功执行中输出 `agent.event` notifications；失败时最后输出 JSON-RPC error response。
 - `--max-input-tokens <n>`、`--max-model-turns <n>`、`--max-output-tokens <n>`：预算与轮次限制。
 - `--thinking <enabled|disabled>`：控制 DeepSeek thinking mode，默认 `enabled`。
 
@@ -84,6 +84,19 @@ final: ...
 
 这让 CLI、TUI、VS Code 可以从同一份 run log 重建关键过程。输出顺序与本地 `events.jsonl` 的 `seq` 顺序一致；如果使用 streaming provider，`assistant.delta` 会在执行中持续出现。
 
+如果 `run --json` 失败，CLI 会在 stdout 写入一行 JSON-RPC error response，并保留非零退出码。该 error response 使用固定 `id: "cli.run"`，`error.code` 复用 `docs/json-rpc-protocol.md` 的错误码，`error.data` 至少包含：
+
+```json
+{
+  "symbolicCode": "E_APPROVAL_REJECTED",
+  "kind": "turn",
+  "runId": "run_...",
+  "turnId": "turn_1"
+}
+```
+
+对于命令行参数错误，如果 CLI 能在解析前识别到 `run --json`，也会输出同样格式的 JSON-RPC error response，但不会包含 `runId` / `turnId`。交互式审批提示仍写入 stderr，不会混入 stdout。
+
 ## 验证命令
 
 `--verify` 是显式用户命令，不由模型自动生成。CLI 会写入：
@@ -97,13 +110,12 @@ final: ...
 
 ## 交互式审批
 
-CLI 二进制默认会在 `apply_patch`、`shell` 等需要审批的工具执行前向 stderr 输出审批摘要，并从 stdin 读取 `y` / `n`。stdout 在 `--json` 模式下仍只保留 newline-delimited JSON-RPC 事件，便于前端或脚本解析；人类提示不会混入 stdout。
+CLI 二进制默认会在 `apply_patch`、`shell` 等需要审批的工具执行前向 stderr 输出审批摘要，并从 stdin 读取 `y` / `n`。stdout 在 `--json` 模式下仍只保留 newline-delimited JSON-RPC 事件或错误响应，便于前端或脚本解析；人类提示不会混入 stdout。
 
 批准后，Run Log 会出现 `tool.approvalResolved`，随后进入 `tool.started`。拒绝后，Run Log 会出现 `tool.approvalResolved` 和 `run.failed`，对应工具不会执行。
 
 ## 当前限制
 
-- `--json` 当前的失败路径仍输出人类可读错误；JSON-RPC error response 需要随 RPC request loop 一起设计。
 - CLI DeepSeek provider 已能聚合 streaming tool call delta；但复杂工具调用的端到端 CLI live test 还没有覆盖真实写入、审批和继续请求。
 - verification 只支持用户显式提供的单条 shell command。
 - `rpc` 子命令已接入 `agent-rpc` request loop 和真实 pending approval 队列；长 provider 请求仍会占用当前 request，后续需要全双工异步 run 队列。

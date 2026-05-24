@@ -663,7 +663,7 @@ pending
 
 ## 错误模型
 
-JSON-RPC 标准错误保留标准语义。项目特定错误使用 `-32000` 到 `-32099` 范围。
+JSON-RPC 标准错误保留标准语义。项目特定错误使用 `-32000` 到 `-32099` 范围。CLI `run --json` 也复用同一套错误码：它不是一个真正的 JSON-RPC request，但失败时会在 stdout 输出一行 `id: "cli.run"` 的 JSON-RPC error response，方便脚本和前端统一解析。
 
 当前 request loop 已使用的 JSON-RPC 标准错误：
 
@@ -699,6 +699,8 @@ JSON-RPC 标准错误保留标准语义。项目特定错误使用 `-32000` 到 
     "code": -32020,
     "message": "Required context exceeds token budget",
     "data": {
+      "symbolicCode": "E_CONTEXT_BUDGET_EXCEEDED",
+      "kind": "turn",
       "runId": "run_01",
       "requiredTokens": 1200000,
       "maxInputTokens": 1000000
