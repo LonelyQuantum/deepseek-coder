@@ -7,6 +7,7 @@ use thiserror::Error;
 
 use crate::{
     approval::{ApprovalRequirement, RiskLevel},
+    cancellation::{CancellationError, CancellationToken},
     context::{ContextBuildError, ContextBuilder, ContextBuilderConfig, ContextItem},
     provider::deepseek_api::{ChatMessage, ChatToolCall},
     reasoning::{
@@ -123,6 +124,7 @@ where
                 detail: "max_model_turns must be greater than zero".to_owned(),
             });
         }
+        input.cancellation_token.check()?;
 
         append_turn_event(
             run_log,
@@ -178,6 +180,7 @@ where
                     TurnProviderRequest {
                         iteration,
                         messages: prepared.messages,
+                        cancellation_token: input.cancellation_token.clone(),
                     },
                     &input.turn_id,
                     iteration,
@@ -245,14 +248,14 @@ where
             ));
 
             for (tool_index, tool_call) in tool_calls.iter().enumerate() {
-                let executed = self.execute_tool_call(
-                    tool_call,
-                    &input.turn_id,
+                let tool_context = ToolCallContext {
+                    turn_id: &input.turn_id,
                     iteration,
-                    tool_index + 1,
-                    run_log,
-                    event_sink,
-                )?;
+                    tool_index: tool_index + 1,
+                    cancellation_token: &input.cancellation_token,
+                };
+                let executed =
+                    self.execute_tool_call(tool_call, tool_context, run_log, event_sink)?;
                 changed_files.extend(executed.changed_files.iter().cloned());
                 messages.push(ChatMessage::tool_result(
                     tool_call.id.clone(),
@@ -283,12 +286,20 @@ where
     where
         L: RunLogWriter + ?Sized,
     {
-        let mut stream = self.provider.complete_stream(request).await?;
+        let cancellation_token = request.cancellation_token.clone();
+        cancellation_token.check()?;
+        let mut stream = self
+            .provider
+            .complete_stream(request)
+            .await
+            .map_err(|error| provider_error_or_canceled(error, &cancellation_token))?;
+        cancellation_token.check()?;
         let mut response = None;
         let mut emitted_content_delta = false;
 
         while let Some(event) = stream.next().await {
-            match event? {
+            cancellation_token.check()?;
+            match event.map_err(|error| provider_error_or_canceled(error, &cancellation_token))? {
                 TurnProviderEvent::AssistantDelta(delta) => {
                     if response.is_some() {
                         return Err(AgentTurnLoopError::ProviderEventAfterCompletion);
@@ -319,8 +330,10 @@ where
                     }
                 }
             }
+            cancellation_token.check()?;
         }
 
+        cancellation_token.check()?;
         let response = response.ok_or(AgentTurnLoopError::ProviderStreamEndedWithoutCompletion)?;
         Ok(CollectedProviderTurn {
             response,
@@ -345,12 +358,11 @@ where
     fn execute_tool_call(
         &mut self,
         tool_call: &ChatToolCall,
-        turn_id: &str,
-        iteration: usize,
-        tool_index: usize,
+        context: ToolCallContext<'_>,
         run_log: &mut (impl RunLogWriter + ?Sized),
         event_sink: &mut (impl TurnEventSink + ?Sized),
     ) -> Result<ExecutedToolCall, AgentTurnLoopError> {
+        context.cancellation_token.check()?;
         let tool_name = tool_call.function.name.as_str();
         let definition =
             find_builtin_tool(tool_name).ok_or_else(|| AgentTurnLoopError::UnknownTool {
@@ -363,7 +375,7 @@ where
             run_log,
             event_sink,
             "tool.requested",
-            Some(turn_id.to_owned()),
+            Some(context.turn_id.to_owned()),
             json!({
                 "toolCallId": tool_call.id.clone(),
                 "name": tool_name,
@@ -381,12 +393,12 @@ where
                 let args = parse_tool_arguments(tool_call)?;
                 self.execute_without_approval(
                     tool_call,
-                    turn_id,
+                    context,
                     args,
                     run_log,
                     event_sink,
-                    |tools, args| {
-                        let result = tools.read_file(args)?;
+                    |tools, args, cancellation_token| {
+                        let result = tools.read_file_with_cancellation(args, cancellation_token)?;
                         tool_record(result.status, result.summary.clone(), Vec::new(), &result)
                     },
                 )
@@ -395,12 +407,12 @@ where
                 let args = parse_tool_arguments(tool_call)?;
                 self.execute_without_approval(
                     tool_call,
-                    turn_id,
+                    context,
                     args,
                     run_log,
                     event_sink,
-                    |tools, args| {
-                        let result = tools.search(args)?;
+                    |tools, args, cancellation_token| {
+                        let result = tools.search_with_cancellation(args, cancellation_token)?;
                         tool_record(result.status, result.summary.clone(), Vec::new(), &result)
                     },
                 )
@@ -410,9 +422,9 @@ where
                 self.ensure_approval(
                     definition,
                     tool_call,
-                    turn_id,
-                    iteration,
-                    tool_index,
+                    context.turn_id,
+                    context.iteration,
+                    context.tool_index,
                     Some(args.expected_files.clone()),
                     None,
                     run_log,
@@ -420,12 +432,13 @@ where
                 )?;
                 self.execute_without_approval(
                     tool_call,
-                    turn_id,
+                    context,
                     args,
                     run_log,
                     event_sink,
-                    |tools, args| {
-                        let result = tools.apply_patch(args)?;
+                    |tools, args, cancellation_token| {
+                        let result =
+                            tools.apply_patch_with_cancellation(args, cancellation_token)?;
                         tool_record(
                             result.status,
                             result.summary.clone(),
@@ -440,9 +453,9 @@ where
                 self.ensure_approval(
                     definition,
                     tool_call,
-                    turn_id,
-                    iteration,
-                    tool_index,
+                    context.turn_id,
+                    context.iteration,
+                    context.tool_index,
                     args.cwd.clone().map(|cwd| vec![cwd]),
                     Some(args.command.clone()),
                     run_log,
@@ -450,12 +463,12 @@ where
                 )?;
                 self.execute_without_approval(
                     tool_call,
-                    turn_id,
+                    context,
                     args,
                     run_log,
                     event_sink,
-                    |tools, args| {
-                        let result = tools.shell(args)?;
+                    |tools, args, cancellation_token| {
+                        let result = tools.shell_with_cancellation(args, cancellation_token)?;
                         tool_record(result.status, result.summary.clone(), Vec::new(), &result)
                     },
                 )
@@ -464,12 +477,13 @@ where
                 let args = parse_tool_arguments(tool_call)?;
                 self.execute_without_approval(
                     tool_call,
-                    turn_id,
+                    context,
                     args,
                     run_log,
                     event_sink,
-                    |tools, args| {
-                        let result = tools.git_status(args)?;
+                    |tools, args, cancellation_token| {
+                        let result =
+                            tools.git_status_with_cancellation(args, cancellation_token)?;
                         tool_record(result.status, result.summary.clone(), Vec::new(), &result)
                     },
                 )
@@ -478,12 +492,12 @@ where
                 let args = parse_tool_arguments(tool_call)?;
                 self.execute_without_approval(
                     tool_call,
-                    turn_id,
+                    context,
                     args,
                     run_log,
                     event_sink,
-                    |tools, args| {
-                        let result = tools.git_diff(args)?;
+                    |tools, args, cancellation_token| {
+                        let result = tools.git_diff_with_cancellation(args, cancellation_token)?;
                         tool_record(result.status, result.summary.clone(), Vec::new(), &result)
                     },
                 )
@@ -502,7 +516,7 @@ where
     fn execute_without_approval<L, Args, F>(
         &self,
         tool_call: &ChatToolCall,
-        turn_id: &str,
+        context: ToolCallContext<'_>,
         args: Args,
         run_log: &mut L,
         event_sink: &mut (impl TurnEventSink + ?Sized),
@@ -510,25 +524,30 @@ where
     ) -> Result<ExecutedToolCall, AgentTurnLoopError>
     where
         L: RunLogWriter + ?Sized,
-        F: FnOnce(&WorkspaceToolExecutor, Args) -> Result<ExecutedToolCall, AgentTurnLoopError>,
+        F: FnOnce(
+            &WorkspaceToolExecutor,
+            Args,
+            &CancellationToken,
+        ) -> Result<ExecutedToolCall, AgentTurnLoopError>,
     {
+        context.cancellation_token.check()?;
         append_turn_event(
             run_log,
             event_sink,
             "tool.started",
-            Some(turn_id.to_owned()),
+            Some(context.turn_id.to_owned()),
             json!({
                 "toolCallId": tool_call.id.clone(),
                 "name": tool_call.function.name.clone(),
             }),
         )?;
 
-        let executed = execute(&self.tools, args)?;
+        let executed = execute(&self.tools, args, context.cancellation_token)?;
         append_turn_event(
             run_log,
             event_sink,
             "tool.completed",
-            Some(turn_id.to_owned()),
+            Some(context.turn_id.to_owned()),
             json!({
                 "toolCallId": tool_call.id.clone(),
                 "name": tool_call.function.name.clone(),
@@ -702,6 +721,7 @@ pub struct AgentTurnInput {
     pub user_task: String,
     pub mode: AgentRunMode,
     pub context_items: Vec<ContextItem>,
+    pub cancellation_token: CancellationToken,
 }
 
 impl AgentTurnInput {
@@ -711,6 +731,7 @@ impl AgentTurnInput {
             user_task: user_task.into(),
             mode: AgentRunMode::Edit,
             context_items: Vec::new(),
+            cancellation_token: CancellationToken::new(),
         }
     }
 
@@ -721,6 +742,11 @@ impl AgentTurnInput {
 
     pub fn with_context_item(mut self, item: ContextItem) -> Self {
         self.context_items.push(item);
+        self
+    }
+
+    pub fn with_cancellation_token(mut self, cancellation_token: CancellationToken) -> Self {
+        self.cancellation_token = cancellation_token;
         self
     }
 }
@@ -764,6 +790,7 @@ pub struct AgentToolResult {
 pub struct TurnProviderRequest {
     pub iteration: usize,
     pub messages: Vec<ChatMessage>,
+    pub cancellation_token: CancellationToken,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -965,7 +992,9 @@ pub enum AgentTurnLoopError {
     #[error("event sink failed: {0}")]
     EventSink(#[from] TurnEventSinkError),
     #[error("tool execution failed: {0}")]
-    ToolExecution(#[from] ToolExecutionError),
+    ToolExecution(ToolExecutionError),
+    #[error("run canceled: {reason}")]
+    Canceled { reason: String },
     #[error("tool call `{tool_call_id}` requested unknown tool `{name}`")]
     UnknownTool { tool_call_id: String, name: String },
     #[error("tool `{name}` is registered but not implemented in the Phase 1 executor")]
@@ -1017,6 +1046,7 @@ impl AgentTurnLoopError {
             Self::RunLog(_) => "E_RUN_LOG",
             Self::EventSink(_) => "E_EVENT_SINK",
             Self::ToolExecution(_) => "E_TOOL_EXECUTION",
+            Self::Canceled { .. } => "E_RUN_CANCELED",
             Self::UnknownTool { .. } => "E_UNKNOWN_TOOL",
             Self::UnsupportedTool { .. } => "E_UNSUPPORTED_TOOL",
             Self::InvalidToolArguments { .. } => "E_INVALID_TOOL_ARGUMENTS",
@@ -1027,6 +1057,23 @@ impl AgentTurnLoopError {
             Self::ApprovalExpired { .. } => "E_APPROVAL_EXPIRED",
             Self::ApprovalPolicy(_) => "E_APPROVAL_POLICY",
             Self::MaxModelTurnsExceeded { .. } => "E_MAX_MODEL_TURNS",
+        }
+    }
+}
+
+impl From<ToolExecutionError> for AgentTurnLoopError {
+    fn from(error: ToolExecutionError) -> Self {
+        match error {
+            ToolExecutionError::CommandCanceled { reason, .. } => Self::Canceled { reason },
+            error => Self::ToolExecution(error),
+        }
+    }
+}
+
+impl From<CancellationError> for AgentTurnLoopError {
+    fn from(error: CancellationError) -> Self {
+        Self::Canceled {
+            reason: error.reason().to_owned(),
         }
     }
 }
@@ -1046,6 +1093,14 @@ struct CollectedProviderTurn {
     // Only visible content deltas count here. Reasoning deltas stay provider-private, and this
     // flag prevents duplicating the final content as another assistant.delta after streaming.
     emitted_content_delta: bool,
+}
+
+#[derive(Clone, Copy)]
+struct ToolCallContext<'a> {
+    turn_id: &'a str,
+    iteration: usize,
+    tool_index: usize,
+    cancellation_token: &'a CancellationToken,
 }
 
 fn parse_tool_arguments_value(tool_call: &ChatToolCall) -> Result<Value, AgentTurnLoopError> {
@@ -1183,6 +1238,19 @@ fn approval_resolved_payload(
     Value::Object(payload)
 }
 
+fn provider_error_or_canceled(
+    error: TurnProviderError,
+    cancellation_token: &CancellationToken,
+) -> AgentTurnLoopError {
+    if cancellation_token.is_canceled() {
+        AgentTurnLoopError::Canceled {
+            reason: cancellation_token.cancellation_reason(),
+        }
+    } else {
+        AgentTurnLoopError::Provider(error)
+    }
+}
+
 fn terminal_error_event(error: &AgentTurnLoopError) -> (&'static str, Value) {
     match error {
         AgentTurnLoopError::ApprovalCanceled {
@@ -1201,6 +1269,14 @@ fn terminal_error_event(error: &AgentTurnLoopError) -> (&'static str, Value) {
                 "message": error.to_string(),
                 "approvalId": approval_id,
                 "toolCallId": tool_call_id,
+                "reason": reason,
+            }),
+        ),
+        AgentTurnLoopError::Canceled { reason } => (
+            "run.canceled",
+            json!({
+                "code": error.code(),
+                "message": error.to_string(),
                 "reason": reason,
             }),
         ),
@@ -1233,9 +1309,9 @@ mod tests {
 
     use super::{
         AgentRunMode, AgentTurnInput, AgentTurnLoop, AgentTurnLoopError, AutoApprovePolicy,
-        TurnEventSink, TurnEventSinkError, TurnProvider, TurnProviderDelta, TurnProviderError,
-        TurnProviderEvent, TurnProviderFuture, TurnProviderRequest, TurnProviderResponse,
-        TurnProviderStream, turn_provider_response_stream,
+        CancellationToken, TurnEventSink, TurnEventSinkError, TurnProvider, TurnProviderDelta,
+        TurnProviderError, TurnProviderEvent, TurnProviderFuture, TurnProviderRequest,
+        TurnProviderResponse, TurnProviderStream, turn_provider_response_stream,
     };
 
     static NEXT_WORKSPACE_ID: AtomicU64 = AtomicU64::new(1);
@@ -1496,6 +1572,113 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn turn_loop_cancels_provider_stream_when_token_is_signaled() {
+        let workspace = TestWorkspace::new();
+        let store = RunLogStore::new(workspace.path()).expect("run log store should open");
+        let mut run = store
+            .create_run("run_turn_provider_cancel")
+            .expect("run should be created");
+        let cancellation_token = CancellationToken::new();
+        let provider = EventScriptedProvider::new(vec![vec![
+            TurnProviderEvent::AssistantDelta(TurnProviderDelta::content("partial")),
+            TurnProviderEvent::Completed(TurnProviderResponse::final_text("complete")),
+        ]]);
+        let mut loop_runner =
+            AgentTurnLoop::new(workspace.path(), provider).expect("turn loop should initialize");
+        let mut sink = CancelOnEventSink::new(
+            cancellation_token.clone(),
+            "assistant.delta",
+            "provider canceled by test",
+        );
+
+        let error = loop_runner
+            .run_turn_with_event_sink(
+                AgentTurnInput::new("turn_1", "Cancel during provider stream")
+                    .with_cancellation_token(cancellation_token),
+                &mut run,
+                &mut sink,
+            )
+            .await
+            .expect_err("turn should be canceled");
+
+        assert!(matches!(error, AgentTurnLoopError::Canceled { .. }));
+        let events = store
+            .load_run("run_turn_provider_cancel")
+            .expect("events should load");
+        assert!(
+            events
+                .iter()
+                .any(|event| event.event_type == "assistant.delta")
+        );
+        assert!(events.iter().any(|event| {
+            event.event_type == "run.canceled"
+                && event.payload["code"] == "E_RUN_CANCELED"
+                && event.payload["reason"] == "provider canceled by test"
+        }));
+    }
+
+    #[tokio::test]
+    async fn turn_loop_cancels_shell_tool_when_token_is_signaled() {
+        let workspace = TestWorkspace::new();
+        let store = RunLogStore::new(workspace.path()).expect("run log store should open");
+        let mut run = store
+            .create_run("run_turn_tool_cancel")
+            .expect("run should be created");
+        let cancellation_token = CancellationToken::new();
+        #[cfg(windows)]
+        let command = "Start-Sleep -Seconds 5; Write-Output done";
+        #[cfg(not(windows))]
+        let command = "sleep 5; printf done";
+        let provider = ScriptedProvider::new(vec![TurnProviderResponse::tool_calls(
+            None,
+            Some("Run a long command.".to_owned()),
+            vec![ChatToolCall::function(
+                "call_shell",
+                "shell",
+                json!({
+                    "command": command,
+                    "cwd": null,
+                    "timeoutMs": 10_000
+                })
+                .to_string(),
+            )],
+        )]);
+        let mut loop_runner =
+            AgentTurnLoop::with_approval_policy(workspace.path(), provider, AutoApprovePolicy)
+                .expect("turn loop should initialize");
+        let mut sink = CancelOnEventSink::new(
+            cancellation_token.clone(),
+            "tool.started",
+            "tool canceled by test",
+        );
+
+        let error = loop_runner
+            .run_turn_with_event_sink(
+                AgentTurnInput::new("turn_1", "Cancel shell")
+                    .with_cancellation_token(cancellation_token),
+                &mut run,
+                &mut sink,
+            )
+            .await
+            .expect_err("turn should be canceled");
+
+        assert!(matches!(error, AgentTurnLoopError::Canceled { .. }));
+        let events = store
+            .load_run("run_turn_tool_cancel")
+            .expect("events should load");
+        assert!(
+            events
+                .iter()
+                .any(|event| event.event_type == "tool.started")
+        );
+        assert!(events.iter().any(|event| {
+            event.event_type == "run.canceled"
+                && event.payload["code"] == "E_RUN_CANCELED"
+                && event.payload["reason"] == "tool canceled by test"
+        }));
+    }
+
     struct ScriptedProvider {
         responses: VecDeque<TurnProviderResponse>,
         requests: Vec<TurnProviderRequest>,
@@ -1555,6 +1738,35 @@ mod tests {
     impl TurnEventSink for RecordingEventSink {
         fn on_event(&mut self, event: &RunLogEvent) -> Result<(), TurnEventSinkError> {
             self.events.push(event.clone());
+            Ok(())
+        }
+    }
+
+    struct CancelOnEventSink {
+        cancellation_token: CancellationToken,
+        event_type: &'static str,
+        reason: &'static str,
+    }
+
+    impl CancelOnEventSink {
+        fn new(
+            cancellation_token: CancellationToken,
+            event_type: &'static str,
+            reason: &'static str,
+        ) -> Self {
+            Self {
+                cancellation_token,
+                event_type,
+                reason,
+            }
+        }
+    }
+
+    impl TurnEventSink for CancelOnEventSink {
+        fn on_event(&mut self, event: &RunLogEvent) -> Result<(), TurnEventSinkError> {
+            if event.event_type == self.event_type {
+                self.cancellation_token.cancel(self.reason);
+            }
             Ok(())
         }
     }
