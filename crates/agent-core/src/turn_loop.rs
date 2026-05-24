@@ -1314,14 +1314,16 @@ mod tests {
     use crate::{
         context::ContextItem,
         provider::deepseek_api::ChatToolCall,
+        reasoning::ReasoningContentMode,
         run_log::{RunLogEvent, RunLogStore},
     };
 
     use super::{
-        AgentRunMode, AgentTurnInput, AgentTurnLoop, AgentTurnLoopError, AutoApprovePolicy,
-        CancellationToken, TurnEventSink, TurnEventSinkError, TurnProvider, TurnProviderDelta,
-        TurnProviderError, TurnProviderEvent, TurnProviderFuture, TurnProviderRequest,
-        TurnProviderResponse, TurnProviderStream, turn_provider_response_stream,
+        AgentRunMode, AgentTurnInput, AgentTurnLoop, AgentTurnLoopConfig, AgentTurnLoopError,
+        AutoApprovePolicy, CancellationToken, TurnEventSink, TurnEventSinkError, TurnProvider,
+        TurnProviderDelta, TurnProviderError, TurnProviderEvent, TurnProviderFuture,
+        TurnProviderRequest, TurnProviderResponse, TurnProviderStream,
+        turn_provider_response_stream,
     };
 
     static NEXT_WORKSPACE_ID: AtomicU64 = AtomicU64::new(1);
@@ -1509,6 +1511,55 @@ mod tests {
             .find(|event| event.event_type == "run.completed")
             .expect("run should complete");
         assert_eq!(completed.payload["changedFiles"], json!(["README.md"]));
+    }
+
+    #[tokio::test]
+    async fn turn_loop_allows_tool_calls_without_reasoning_when_thinking_is_disabled() {
+        let workspace = TestWorkspace::new();
+        workspace.write("README.md", "old\n");
+        let store = RunLogStore::new(workspace.path()).expect("run log store should open");
+        let mut run = store
+            .create_run("run_turn_patch_thinking_disabled")
+            .expect("run should be created");
+        let patch = concat!(
+            "--- a/README.md\n",
+            "+++ b/README.md\n",
+            "@@ -1 +1 @@\n",
+            "-old\n",
+            "+new\n"
+        );
+        let provider = ScriptedProvider::new(vec![
+            TurnProviderResponse::tool_calls(
+                None,
+                None,
+                vec![ChatToolCall::function(
+                    "call_1",
+                    "apply_patch",
+                    json!({
+                        "unifiedDiff": patch,
+                        "expectedFiles": ["README.md"],
+                    })
+                    .to_string(),
+                )],
+            ),
+            TurnProviderResponse::final_text("Updated README."),
+        ]);
+        let config = AgentTurnLoopConfig {
+            reasoning_mode: ReasoningContentMode::ThinkingDisabled,
+            ..AgentTurnLoopConfig::default()
+        };
+        let mut loop_runner =
+            AgentTurnLoop::with_approval_policy(workspace.path(), provider, AutoApprovePolicy)
+                .expect("turn loop should initialize")
+                .with_config(config);
+
+        let outcome = loop_runner
+            .run_turn(AgentTurnInput::new("turn_1", "Update README"), &mut run)
+            .await
+            .expect("thinking-disabled tool call should complete without reasoning_content");
+
+        assert_eq!(workspace.read("README.md"), "new\n");
+        assert_eq!(outcome.final_message, "Updated README.");
     }
 
     #[tokio::test]
