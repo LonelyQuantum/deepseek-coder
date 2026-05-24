@@ -30,7 +30,10 @@ use deepseek_coder_agent_core::{
         turn_provider_response_stream,
     },
 };
-use deepseek_coder_agent_rpc::{AgentRpcError, StdioEventBridge};
+use deepseek_coder_agent_rpc::{
+    AgentRpcError, AgentRpcHandlerError, AgentTurnLoopRpcHandler, RPC_INTERNAL_INVARIANT,
+    RpcTurnProviderFactory, SendTurnParams, StdioEventBridge, run_stdio_request_loop,
+};
 use futures_util::StreamExt;
 use serde_json::json;
 use thiserror::Error;
@@ -71,6 +74,7 @@ where
             Ok(())
         }
         CliCommand::Run(command) => run_command(command, stdin, stdout, stderr),
+        CliCommand::Rpc(command) => run_rpc_command(command, stdin, stdout),
     }
 }
 
@@ -78,6 +82,7 @@ where
 enum CliCommand {
     Help,
     Run(RunCommand),
+    Rpc(RpcCommand),
 }
 
 impl CliCommand {
@@ -90,11 +95,78 @@ impl CliCommand {
         match command.as_str() {
             "-h" | "--help" | "help" => Ok(Self::Help),
             "run" => Ok(Self::Run(RunCommand::parse(args.cloned().collect())?)),
+            "rpc" => Ok(Self::Rpc(RpcCommand::parse(args.cloned().collect())?)),
             other => Err(CliError::Usage(format!(
                 "unknown command `{other}`\n\n{}",
                 help_text()
             ))),
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RpcCommand {
+    provider: ProviderKind,
+    fixture: FixtureKind,
+    max_input_tokens: u64,
+    max_model_turns: usize,
+    max_output_tokens: u32,
+    thinking: ThinkingKind,
+}
+
+impl RpcCommand {
+    fn parse(args: Vec<String>) -> Result<Self, CliError> {
+        let mut provider = ProviderKind::DeepSeek;
+        let mut fixture = FixtureKind::Readme;
+        let mut max_input_tokens = AgentTurnLoopConfig::default().max_input_tokens;
+        let mut max_model_turns = AgentTurnLoopConfig::default().max_model_turns;
+        let mut max_output_tokens = DEFAULT_MAX_OUTPUT_TOKENS;
+        let mut thinking = ThinkingKind::Enabled;
+        let mut index = 0;
+
+        while index < args.len() {
+            let arg = &args[index];
+            match arg.as_str() {
+                "-h" | "--help" => {
+                    return Err(CliError::Usage(rpc_help_text()));
+                }
+                "--provider" => {
+                    provider = parse_provider(&next_value(&args, &mut index, "--provider")?)?;
+                }
+                "--fixture" => {
+                    fixture = parse_fixture(&next_value(&args, &mut index, "--fixture")?)?;
+                }
+                "--max-input-tokens" => {
+                    max_input_tokens =
+                        parse_u64(&next_value(&args, &mut index, "--max-input-tokens")?)?;
+                }
+                "--max-model-turns" => {
+                    max_model_turns =
+                        parse_usize(&next_value(&args, &mut index, "--max-model-turns")?)?;
+                }
+                "--max-output-tokens" => {
+                    max_output_tokens =
+                        parse_u32(&next_value(&args, &mut index, "--max-output-tokens")?)?;
+                }
+                "--thinking" => {
+                    thinking = parse_thinking(&next_value(&args, &mut index, "--thinking")?)?;
+                }
+                value => {
+                    return Err(CliError::Usage(format!("unknown rpc option `{value}`")));
+                }
+            }
+
+            index += 1;
+        }
+
+        Ok(Self {
+            provider,
+            fixture,
+            max_input_tokens,
+            max_model_turns,
+            max_output_tokens,
+            thinking,
+        })
     }
 }
 
@@ -329,6 +401,27 @@ where
         return Err(CliError::EmptyFinalMessage);
     }
 
+    Ok(())
+}
+
+fn run_rpc_command<R, W>(command: RpcCommand, stdin: &mut R, stdout: &mut W) -> Result<(), CliError>
+where
+    R: BufRead,
+    W: Write,
+{
+    let config = AgentTurnLoopConfig {
+        max_input_tokens: command.max_input_tokens,
+        max_model_turns: command.max_model_turns,
+    };
+    let handler = AgentTurnLoopRpcHandler::new(CliRpcProviderFactory {
+        provider: command.provider,
+        fixture: command.fixture,
+        max_output_tokens: command.max_output_tokens,
+        thinking: command.thinking,
+    })
+    .with_config(config);
+
+    run_stdio_request_loop(stdin, stdout, handler)?;
     Ok(())
 }
 
@@ -599,13 +692,50 @@ where
 }
 
 fn create_provider(command: &RunCommand) -> Result<CliTurnProvider, CliError> {
-    match command.provider {
+    create_cli_provider(
+        command.provider,
+        command.fixture,
+        command.max_output_tokens,
+        command.thinking,
+    )
+}
+
+fn create_cli_provider(
+    provider: ProviderKind,
+    fixture: FixtureKind,
+    max_output_tokens: u32,
+    thinking: ThinkingKind,
+) -> Result<CliTurnProvider, CliError> {
+    match provider {
         ProviderKind::DeepSeek => Ok(CliTurnProvider::DeepSeek(Box::new(
-            DeepSeekTurnProvider::new(command.max_output_tokens, command.thinking)?,
+            DeepSeekTurnProvider::new(max_output_tokens, thinking)?,
         ))),
-        ProviderKind::Fixture => Ok(CliTurnProvider::Fixture(FixtureProvider::new(
-            command.fixture,
-        ))),
+        ProviderKind::Fixture => Ok(CliTurnProvider::Fixture(FixtureProvider::new(fixture))),
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CliRpcProviderFactory {
+    provider: ProviderKind,
+    fixture: FixtureKind,
+    max_output_tokens: u32,
+    thinking: ThinkingKind,
+}
+
+impl RpcTurnProviderFactory for CliRpcProviderFactory {
+    type Provider = CliTurnProvider;
+
+    fn create_provider(
+        &mut self,
+        _params: &SendTurnParams,
+    ) -> Result<Self::Provider, AgentRpcHandlerError> {
+        create_cli_provider(
+            self.provider,
+            self.fixture,
+            self.max_output_tokens,
+            self.thinking,
+        )
+        .map_err(|error| AgentRpcHandlerError::new(RPC_INTERNAL_INVARIANT, error.to_string()))
     }
 }
 
@@ -946,8 +1076,9 @@ fn generate_id(prefix: &str) -> Result<String, CliError> {
 
 fn help_text() -> String {
     format!(
-        "{name}\n\nUsage:\n  deepseek-coder run [options] <task>\n\n{}",
+        "{name}\n\nUsage:\n  deepseek-coder run [options] <task>\n  deepseek-coder rpc [options]\n\n{}\n\n{}",
         run_help_text(),
+        rpc_help_text(),
         name = AGENT_METADATA.name
     )
 }
@@ -972,6 +1103,19 @@ fn run_help_text() -> String {
     .join("\n")
 }
 
+fn rpc_help_text() -> String {
+    [
+        "RPC options:",
+        "  --provider <deepseek|fixture>",
+        "  --fixture <final|readme|patch>",
+        "  --max-input-tokens <n>",
+        "  --max-model-turns <n>",
+        "  --max-output-tokens <n>",
+        "  --thinking <enabled|disabled>",
+    ]
+    .join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -984,8 +1128,9 @@ mod tests {
         run_log::{REDACTED_VALUE, RunLogStore},
         turn_loop::TurnProviderEvent,
     };
+    use deepseek_coder_agent_rpc::PROTOCOL_VERSION;
     use futures_util::{StreamExt, stream};
-    use serde_json::Value;
+    use serde_json::{Value, json};
 
     use super::{
         CliCommand, ProviderKind, RunCommand, deepseek_chat_stream_to_turn_provider_stream,
@@ -1026,7 +1171,35 @@ mod tests {
                 assert_eq!(run_id, "run_test");
                 assert_eq!(thinking, super::ThinkingKind::Disabled);
             }
-            CliCommand::Help => panic!("expected run command"),
+            CliCommand::Help | CliCommand::Rpc(_) => panic!("expected run command"),
+        }
+    }
+
+    #[test]
+    fn parses_rpc_command_options() {
+        let args = vec![
+            "deepseek-coder".to_owned(),
+            "rpc".to_owned(),
+            "--provider".to_owned(),
+            "fixture".to_owned(),
+            "--fixture".to_owned(),
+            "final".to_owned(),
+            "--thinking".to_owned(),
+            "disabled".to_owned(),
+            "--max-model-turns".to_owned(),
+            "2".to_owned(),
+        ];
+
+        let command = CliCommand::parse(&args).expect("command should parse");
+
+        match command {
+            CliCommand::Rpc(command) => {
+                assert_eq!(command.provider, ProviderKind::Fixture);
+                assert_eq!(command.fixture, super::FixtureKind::Final);
+                assert_eq!(command.thinking, super::ThinkingKind::Disabled);
+                assert_eq!(command.max_model_turns, 2);
+            }
+            _ => panic!("expected rpc command"),
         }
     }
 
@@ -1238,6 +1411,83 @@ mod tests {
                 && event.payload["reason"] == "rejected by user"
         }));
         assert!(events.iter().any(|event| event.event_type == "run.failed"));
+    }
+
+    #[test]
+    fn rpc_command_runs_fixture_turn_loop_handler() {
+        let workspace = TestWorkspace::new();
+        let input = [
+            json!({
+                "jsonrpc": "2.0",
+                "id": "init_1",
+                "method": "agent.initialize",
+                "params": {
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "client": {
+                        "name": "cli-test",
+                        "version": "0.1.0",
+                        "frontend": "cli"
+                    },
+                    "workspaceRoot": workspace.path_str(),
+                    "workspaceTrusted": true
+                }
+            })
+            .to_string(),
+            json!({
+                "jsonrpc": "2.0",
+                "id": "turn_1",
+                "method": "agent.sendTurn",
+                "params": {
+                    "runId": "run_cli_rpc",
+                    "message": "Say hello",
+                    "mode": "ask"
+                }
+            })
+            .to_string(),
+        ]
+        .join("\n");
+        let mut stdin = std::io::Cursor::new(input.into_bytes());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        run_cli_with_input(
+            [
+                "deepseek-coder",
+                "rpc",
+                "--provider",
+                "fixture",
+                "--fixture",
+                "final",
+            ],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("fixture rpc command should succeed");
+
+        assert!(stderr.is_empty());
+        let lines = String::from_utf8(stdout)
+            .expect("stdout should be UTF-8")
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("line should be JSON"))
+            .collect::<Vec<_>>();
+        assert_eq!(lines[0]["id"], "init_1");
+        assert_eq!(lines[1]["id"], "turn_1");
+        assert_eq!(lines[1]["result"]["accepted"], true);
+        assert!(lines.iter().any(|line| {
+            line["method"] == "agent.event"
+                && line["params"]["type"] == "run.completed"
+                && line["params"]["payload"]["summary"]
+                    == "Fixture provider completed without tool calls."
+        }));
+
+        let store = RunLogStore::new(workspace.path()).expect("run log store should open");
+        let events = store.load_run("run_cli_rpc").expect("events should load");
+        assert!(
+            events
+                .iter()
+                .any(|event| event.event_type == "run.completed")
+        );
     }
 
     #[test]
