@@ -800,6 +800,7 @@ fn turn_loop_error_json_rpc_code(error: &AgentTurnLoopError) -> i64 {
         }) => RPC_CONTEXT_BUDGET_EXCEEDED,
         AgentTurnLoopError::ContextBuild(
             ContextBuildError::InvalidMaxInputTokens
+            | ContextBuildError::InvalidStablePrefixBudgetRatio { .. }
             | ContextBuildError::EmptyReason
             | ContextBuildError::InvalidPath { .. }
             | ContextBuildError::InvalidCommandId { .. }
@@ -807,9 +808,9 @@ fn turn_loop_error_json_rpc_code(error: &AgentTurnLoopError) -> i64 {
             | ContextBuildError::DuplicateFilePath { .. }
             | ContextBuildError::DuplicateCommandId { .. },
         ) => JSON_RPC_INVALID_PARAMS,
-        AgentTurnLoopError::ContextBuild(ContextBuildError::TokenCountOverflow) => {
-            RPC_INTERNAL_INVARIANT
-        }
+        AgentTurnLoopError::ContextBuild(
+            ContextBuildError::TokenCountOverflow | ContextBuildError::TokenEstimation { .. },
+        ) => RPC_INTERNAL_INVARIANT,
         AgentTurnLoopError::Reasoning(_)
         | AgentTurnLoopError::Provider(_)
         | AgentTurnLoopError::ProviderStreamEndedWithoutCompletion
