@@ -4,10 +4,17 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use thiserror::Error;
 
-use crate::run_log::redact_text;
+pub use crate::token_estimator::TokenEstimatorReport;
+
+use crate::{
+    hashing::sha256_hex,
+    run_log::redact_text,
+    token_estimator::{TokenEstimator, TokenEstimatorConfig, TokenEstimatorError},
+};
 
 const DEFAULT_MAX_INPUT_TOKENS: u64 = 1_000_000;
-const UTF8_BYTE_ESTIMATOR: &str = "utf8_bytes";
+const DEFAULT_STABLE_PREFIX_BUDGET_RATIO_PPM: u32 = 300_000;
+const PPM_SCALE: u32 = 1_000_000;
 
 #[derive(Debug, Clone)]
 pub struct ContextBuilder {
@@ -49,6 +56,13 @@ impl ContextBuilder {
         if self.config.max_input_tokens == 0 {
             return Err(ContextBuildError::InvalidMaxInputTokens);
         }
+        if self.config.stable_prefix_budget_ratio_ppm == 0
+            || self.config.stable_prefix_budget_ratio_ppm > PPM_SCALE
+        {
+            return Err(ContextBuildError::InvalidStablePrefixBudgetRatio {
+                ratio_ppm: self.config.stable_prefix_budget_ratio_ppm,
+            });
+        }
 
         let mut indexed_items = self
             .items
@@ -79,21 +93,27 @@ impl ContextBuilder {
                 &mut seen_file_paths,
                 &mut seen_command_ids,
             )?;
-            let section_item = section_item_from_prepared(&prepared)?;
+            let section_item = section_item_from_prepared(&prepared, &self.config.token_estimator)?;
             let item_tokens = section_item.tokens;
             let mut candidate_items = included_items.clone();
             candidate_items.push(section_item.clone());
-            let candidate_sections = build_sections(candidate_items.clone())?;
+            let candidate_sections =
+                build_sections(candidate_items.clone(), &self.config.token_estimator)?;
             let candidate_rendered = render_context_sections(&candidate_sections);
-            let candidate_input_tokens = estimate_token_proxy(&candidate_rendered)?;
+            let candidate_input_tokens =
+                estimate_text(&self.config.token_estimator, &candidate_rendered)?;
 
             if candidate_input_tokens > self.config.max_input_tokens {
                 if prepared.source.required {
                     return Err(ContextBuildError::RequiredContextExceedsBudget {
                         max_input_tokens: self.config.max_input_tokens,
-                        used_tokens: estimate_token_proxy(&render_context_sections(
-                            &build_sections(included_items.clone())?,
-                        ))?,
+                        used_tokens: estimate_text(
+                            &self.config.token_estimator,
+                            &render_context_sections(&build_sections(
+                                included_items.clone(),
+                                &self.config.token_estimator,
+                            )?),
+                        )?,
                         required_tokens: candidate_input_tokens,
                         context_source: prepared.source,
                     });
@@ -108,6 +128,22 @@ impl ContextBuilder {
                 continue;
             }
 
+            let stable_prefix_budget_tokens = self.config.stable_prefix_budget_tokens();
+            let candidate_stable_prefix_tokens =
+                section_tokens(&candidate_sections, CachePlacement::StablePrefix);
+            if prepared.placement == CachePlacement::StablePrefix
+                && candidate_stable_prefix_tokens > stable_prefix_budget_tokens
+                && !prepared.source.required
+            {
+                omitted_sources.push(ContextOmittedSource {
+                    source: prepared.source,
+                    estimated_tokens: item_tokens,
+                    inclusion_reason: prepared.inclusion_reason,
+                    omission_reason: ContextOmissionReason::StablePrefixBudgetExceeded,
+                });
+                continue;
+            }
+
             included_items = candidate_items;
             included_sources.push(ContextIncludedSource {
                 source: prepared.source,
@@ -116,9 +152,9 @@ impl ContextBuilder {
             });
         }
 
-        let sections = build_sections(included_items)?;
+        let sections = build_sections(included_items, &self.config.token_estimator)?;
         let rendered = render_context_sections(&sections);
-        let input_tokens = estimate_token_proxy(&rendered)?;
+        let input_tokens = estimate_text(&self.config.token_estimator, &rendered)?;
 
         Ok(ContextCapsule {
             content: rendered.clone(),
@@ -128,7 +164,9 @@ impl ContextBuilder {
             token_report: ContextTokenReport {
                 input_tokens,
                 max_input_tokens: self.config.max_input_tokens,
-                estimator: TokenEstimatorReport::utf8_bytes(),
+                stable_prefix_budget_tokens: self.config.stable_prefix_budget_tokens(),
+                stable_prefix_budget_ratio_ppm: self.config.stable_prefix_budget_ratio_ppm,
+                estimator: self.config.token_estimator.report(),
                 included_sources,
                 omitted_sources,
             },
@@ -142,23 +180,44 @@ impl Default for ContextBuilder {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextBuilderConfig {
     pub max_input_tokens: u64,
+    pub stable_prefix_budget_ratio_ppm: u32,
+    pub token_estimator: TokenEstimatorConfig,
 }
 
 impl ContextBuilderConfig {
-    pub const fn new(max_input_tokens: u64) -> Self {
-        Self { max_input_tokens }
+    pub fn new(max_input_tokens: u64) -> Self {
+        Self {
+            max_input_tokens,
+            stable_prefix_budget_ratio_ppm: DEFAULT_STABLE_PREFIX_BUDGET_RATIO_PPM,
+            token_estimator: TokenEstimatorConfig::default(),
+        }
+    }
+
+    pub fn with_token_estimator(
+        mut self,
+        token_estimator: impl Into<TokenEstimatorConfig>,
+    ) -> Self {
+        self.token_estimator = token_estimator.into();
+        self
+    }
+
+    pub const fn with_stable_prefix_budget_ratio_ppm(mut self, ratio_ppm: u32) -> Self {
+        self.stable_prefix_budget_ratio_ppm = ratio_ppm;
+        self
+    }
+
+    pub fn stable_prefix_budget_tokens(&self) -> u64 {
+        ((u128::from(self.max_input_tokens) * u128::from(self.stable_prefix_budget_ratio_ppm))
+            / u128::from(PPM_SCALE)) as u64
     }
 }
 
 impl Default for ContextBuilderConfig {
     fn default() -> Self {
-        Self {
-            max_input_tokens: DEFAULT_MAX_INPUT_TOKENS,
-        }
+        Self::new(DEFAULT_MAX_INPUT_TOKENS)
     }
 }
 
@@ -179,7 +238,10 @@ impl ContextCapsule {
             "inputTokens": self.token_report.input_tokens,
             "maxInputTokens": self.token_report.max_input_tokens,
             "estimator": self.token_report.estimator,
+            "stablePrefixHash": self.stable_prefix_hash(),
             "stablePrefixTokens": self.section_tokens(CachePlacement::StablePrefix),
+            "stablePrefixBudgetTokens": self.token_report.stable_prefix_budget_tokens,
+            "stablePrefixBudgetRatioPpm": self.token_report.stable_prefix_budget_ratio_ppm,
             "dynamicPreludeTokens": self.section_tokens(CachePlacement::DynamicPrelude),
             "turnSuffixTokens": self.section_tokens(CachePlacement::TurnSuffix),
             "sections": self.sections.iter().map(|section| {
@@ -201,12 +263,22 @@ impl ContextCapsule {
         payload
     }
 
-    fn section_tokens(&self, placement: CachePlacement) -> u64 {
+    pub fn rendered_section(&self, placement: CachePlacement) -> Option<String> {
         self.sections
             .iter()
             .find(|section| section.placement == placement)
-            .map(|section| section.tokens)
-            .unwrap_or(0)
+            .map(render_context_section)
+    }
+
+    pub fn stable_prefix_hash(&self) -> String {
+        let stable_prefix = self
+            .rendered_section(CachePlacement::StablePrefix)
+            .unwrap_or_default();
+        format!("sha256:{}", sha256_hex(stable_prefix.as_bytes()))
+    }
+
+    fn section_tokens(&self, placement: CachePlacement) -> u64 {
+        section_tokens(&self.sections, placement)
     }
 }
 
@@ -277,29 +349,11 @@ impl CachePlacement {
 pub struct ContextTokenReport {
     pub input_tokens: u64,
     pub max_input_tokens: u64,
+    pub stable_prefix_budget_tokens: u64,
+    pub stable_prefix_budget_ratio_ppm: u32,
     pub estimator: TokenEstimatorReport,
     pub included_sources: Vec<ContextIncludedSource>,
     pub omitted_sources: Vec<ContextOmittedSource>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TokenEstimatorReport {
-    pub name: String,
-    pub exact: bool,
-    pub description: String,
-}
-
-impl TokenEstimatorReport {
-    fn utf8_bytes() -> Self {
-        Self {
-            name: UTF8_BYTE_ESTIMATOR.to_owned(),
-            exact: false,
-            description:
-                "UTF-8 byte count used as a deterministic proxy estimate; not a provider tokenizer."
-                    .to_owned(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -325,6 +379,7 @@ pub struct ContextOmittedSource {
 #[serde(rename_all = "snake_case")]
 pub enum ContextOmissionReason {
     TokenBudgetExceeded,
+    StablePrefixBudgetExceeded,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -539,6 +594,8 @@ impl CachePlacement {
 pub enum ContextBuildError {
     #[error("max input tokens must be greater than zero")]
     InvalidMaxInputTokens,
+    #[error("stable prefix budget ratio ppm must be in 1..=1000000, got {ratio_ppm}")]
+    InvalidStablePrefixBudgetRatio { ratio_ppm: u32 },
     #[error("context item reason must not be empty")]
     EmptyReason,
     #[error("context item path must be workspace-relative: {path}")]
@@ -562,6 +619,11 @@ pub enum ContextBuildError {
     },
     #[error("context token count overflowed")]
     TokenCountOverflow,
+    #[error("token estimation failed: {source}")]
+    TokenEstimation {
+        #[from]
+        source: TokenEstimatorError,
+    },
 }
 
 struct IndexedContextItem<'a> {
@@ -644,6 +706,7 @@ fn validate_unique_source(
 
 fn section_item_from_prepared(
     item: &PreparedContextItem,
+    token_estimator: &impl TokenEstimator,
 ) -> Result<ContextSectionItem, ContextBuildError> {
     let mut section_item = ContextSectionItem {
         placement: item.placement,
@@ -652,13 +715,14 @@ fn section_item_from_prepared(
         tokens: 0,
         reason: item.inclusion_reason.clone(),
     };
-    section_item.tokens = estimate_token_proxy(&render_context_item(&section_item))?;
+    section_item.tokens = estimate_text(token_estimator, &render_context_item(&section_item))?;
 
     Ok(section_item)
 }
 
 fn build_sections(
     items: Vec<ContextSectionItem>,
+    token_estimator: &impl TokenEstimator,
 ) -> Result<Vec<ContextSection>, ContextBuildError> {
     let mut sections: Vec<ContextSection> = Vec::new();
 
@@ -679,11 +743,19 @@ fn build_sections(
     }
 
     for section in &mut sections {
-        let tokens = estimate_token_proxy(&render_context_section(section))?;
+        let tokens = estimate_text(token_estimator, &render_context_section(section))?;
         section.tokens = tokens;
     }
 
     Ok(sections)
+}
+
+fn section_tokens(sections: &[ContextSection], placement: CachePlacement) -> u64 {
+    sections
+        .iter()
+        .find(|section| section.placement == placement)
+        .map(|section| section.tokens)
+        .unwrap_or(0)
 }
 
 fn render_context_sections(sections: &[ContextSection]) -> String {
@@ -790,8 +862,16 @@ fn kind_name(kind: ContextItemKind) -> &'static str {
     }
 }
 
-fn estimate_token_proxy(text: &str) -> Result<u64, ContextBuildError> {
-    u64::try_from(text.len()).map_err(|_| ContextBuildError::TokenCountOverflow)
+fn estimate_text(
+    token_estimator: &impl TokenEstimator,
+    text: &str,
+) -> Result<u64, ContextBuildError> {
+    token_estimator
+        .estimate(text)
+        .map_err(|source| match source {
+            TokenEstimatorError::TokenCountOverflow => ContextBuildError::TokenCountOverflow,
+            source => ContextBuildError::TokenEstimation { source },
+        })
 }
 
 fn normalize_workspace_relative_path(path: &str) -> Result<String, ContextBuildError> {
