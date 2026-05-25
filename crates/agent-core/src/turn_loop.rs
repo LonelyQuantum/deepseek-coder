@@ -1875,10 +1875,11 @@ mod tests {
 
     use super::{
         AgentRunMode, AgentTurnInput, AgentTurnLoop, AgentTurnLoopConfig, AgentTurnLoopError,
-        AutoApprovePolicy, CancellationToken, TurnEventSink, TurnEventSinkError, TurnProvider,
-        TurnProviderDelta, TurnProviderError, TurnProviderEvent, TurnProviderFuture,
+        AutoApprovePolicy, CancellationToken, TextRange, TurnAttachment, TurnEventSink,
+        TurnEventSinkError, TurnProvider, TurnProviderCompletion, TurnProviderDelta,
+        TurnProviderError, TurnProviderEvent, TurnProviderFinishReason, TurnProviderFuture,
         TurnProviderRequest, TurnProviderResponse, TurnProviderStream,
-        turn_provider_response_stream,
+        TurnProviderStreamingSummary, TurnProviderUsage, turn_provider_response_stream,
     };
 
     #[tokio::test]
@@ -1952,10 +1953,12 @@ mod tests {
                 "turn.started",
                 "context.built",
                 "provider.requested",
+                "provider.completed",
                 "tool.requested",
                 "tool.started",
                 "tool.completed",
                 "provider.requested",
+                "provider.completed",
                 "assistant.delta",
                 "run.completed",
             ]
@@ -1985,10 +1988,214 @@ mod tests {
                 .unwrap_or_default()
                 > 0
         );
-        assert_eq!(events[6].payload["name"], "read_file");
+        assert_eq!(events[4].payload["model"], "fixture");
+        assert_eq!(events[4].payload["finishReason"], "tool_calls");
+        assert_eq!(events[9].payload["finishReason"], "stop");
+        assert_eq!(events[7].payload["name"], "read_file");
         assert_eq!(
-            events[6].payload["result"]["content"],
+            events[7].payload["result"]["content"],
             "hello from README\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn turn_loop_includes_attachments_in_context() {
+        let workspace = TestWorkspace::new("turn-loop");
+        workspace.write("README.md", "attached README\nsecond line\n");
+        workspace.write("src/lib.rs", "pub fn demo() {}\n");
+        let store = RunLogStore::new(workspace.path()).expect("run log store should open");
+        let mut run = store
+            .create_run("run_turn_attachments")
+            .expect("run should be created");
+        let provider = ScriptedProvider::new(vec![TurnProviderResponse::final_text(
+            "attachments received.",
+        )]);
+        let mut loop_runner =
+            AgentTurnLoop::new(workspace.path(), provider).expect("turn loop should initialize");
+
+        let range = TextRange::new(1, 1, 1, 18);
+        let outcome = loop_runner
+            .run_turn(
+                AgentTurnInput::new("turn_1", "Use the attached context")
+                    .with_attachment(TurnAttachment::file("README.md"))
+                    .with_attachment(TurnAttachment::selection(
+                        "src/lib.rs",
+                        range,
+                        "pub fn demo() {}",
+                    ))
+                    .with_attachment(TurnAttachment::explicit_content(
+                        "acceptance: mention attachments",
+                    ))
+                    .with_attachment(TurnAttachment::diagnostic(
+                        "src/lib.rs",
+                        range,
+                        "warning: demo is unused",
+                    )),
+                &mut run,
+            )
+            .await
+            .expect("turn should complete with attachments");
+
+        assert_eq!(outcome.final_message, "attachments received.");
+        let prompt = loop_runner.provider.requests[0].messages[0]
+            .content
+            .as_deref()
+            .expect("provider prompt should include context");
+        assert!(prompt.contains("Attachment-Kind: file"));
+        assert!(prompt.contains("attached README"));
+        assert!(prompt.contains("Kind: selection"));
+        assert!(prompt.contains("Attachment-Kind: selection"));
+        assert!(prompt.contains("Kind: explicit_content"));
+        assert!(prompt.contains("acceptance: mention attachments"));
+        assert!(prompt.contains("Kind: diagnostic"));
+        assert!(prompt.contains("warning: demo is unused"));
+
+        let events = store
+            .load_run("run_turn_attachments")
+            .expect("events should load");
+        let context_built = events
+            .iter()
+            .find(|event| event.event_type == "context.built")
+            .expect("context.built should be emitted");
+        for kind in ["file", "selection", "explicit_content", "diagnostic"] {
+            assert!(
+                context_built.payload["includedSources"]
+                    .as_array()
+                    .expect("includedSources should be an array")
+                    .iter()
+                    .any(|source| source["kind"] == json!(kind)),
+                "context should include {kind} attachment source"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn turn_loop_rejects_duplicate_attachments_before_provider_call() {
+        let workspace = TestWorkspace::new("turn-loop");
+        let store = RunLogStore::new(workspace.path()).expect("run log store should open");
+        let mut run = store
+            .create_run("run_turn_duplicate_attachment")
+            .expect("run should be created");
+        let provider = ScriptedProvider::new(vec![TurnProviderResponse::final_text(
+            "should not be called",
+        )]);
+        let mut loop_runner =
+            AgentTurnLoop::new(workspace.path(), provider).expect("turn loop should initialize");
+
+        let error = loop_runner
+            .run_turn(
+                AgentTurnInput::new("turn_1", "Use duplicated attachments")
+                    .with_attachment(TurnAttachment::explicit_content("same"))
+                    .with_attachment(TurnAttachment::explicit_content("same")),
+                &mut run,
+            )
+            .await
+            .expect_err("duplicate attachment should fail");
+
+        assert!(matches!(
+            error,
+            AgentTurnLoopError::DuplicateAttachment { .. }
+        ));
+        assert!(loop_runner.provider.requests.is_empty());
+        let events = store
+            .load_run("run_turn_duplicate_attachment")
+            .expect("events should load");
+        assert!(events.iter().any(|event| {
+            event.event_type == "run.failed" && event.payload["code"] == "E_INVALID_ATTACHMENT"
+        }));
+    }
+
+    #[tokio::test]
+    async fn turn_loop_rejects_oversized_attachment_before_provider_call() {
+        let workspace = TestWorkspace::new("turn-loop");
+        let store = RunLogStore::new(workspace.path()).expect("run log store should open");
+        let mut run = store
+            .create_run("run_turn_oversized_attachment")
+            .expect("run should be created");
+        let provider = ScriptedProvider::new(vec![TurnProviderResponse::final_text(
+            "should not be called",
+        )]);
+        let config = AgentTurnLoopConfig {
+            max_attachment_bytes: 4,
+            ..AgentTurnLoopConfig::default()
+        };
+        let mut loop_runner = AgentTurnLoop::new(workspace.path(), provider)
+            .expect("turn loop should initialize")
+            .with_config(config);
+
+        let error = loop_runner
+            .run_turn(
+                AgentTurnInput::new("turn_1", "Use oversized attachment")
+                    .with_attachment(TurnAttachment::explicit_content("too large")),
+                &mut run,
+            )
+            .await
+            .expect_err("oversized attachment should fail");
+
+        assert!(matches!(
+            error,
+            AgentTurnLoopError::AttachmentTooLarge { .. }
+        ));
+        assert!(loop_runner.provider.requests.is_empty());
+    }
+
+    #[tokio::test]
+    async fn turn_loop_logs_provider_completed_usage_cache_and_stream_summary() {
+        let workspace = TestWorkspace::new("turn-loop");
+        let store = RunLogStore::new(workspace.path()).expect("run log store should open");
+        let mut run = store
+            .create_run("run_turn_provider_summary")
+            .expect("run should be created");
+        let completion =
+            TurnProviderCompletion::new("deepseek-v4-pro", TurnProviderFinishReason::Stop)
+                .with_usage(TurnProviderUsage {
+                    prompt_tokens: Some(100),
+                    completion_tokens: Some(20),
+                    total_tokens: Some(120),
+                    prompt_cache_hit_tokens: Some(64),
+                    prompt_cache_miss_tokens: Some(36),
+                    reasoning_tokens: Some(8),
+                })
+                .with_streaming(TurnProviderStreamingSummary {
+                    chunk_count: 3,
+                    tool_call_delta_count: 0,
+                });
+        let provider = ScriptedProvider::new(vec![
+            TurnProviderResponse::final_text("done").with_completion(completion),
+        ]);
+        let mut loop_runner =
+            AgentTurnLoop::new(workspace.path(), provider).expect("turn loop should initialize");
+
+        loop_runner
+            .run_turn(AgentTurnInput::new("turn_1", "Say done"), &mut run)
+            .await
+            .expect("turn should complete");
+
+        let events = store
+            .load_run("run_turn_provider_summary")
+            .expect("events should load");
+        let provider_completed = events
+            .iter()
+            .find(|event| event.event_type == "provider.completed")
+            .expect("provider.completed should be emitted");
+        assert_eq!(provider_completed.payload["iteration"], 1);
+        assert_eq!(provider_completed.payload["model"], "deepseek-v4-pro");
+        assert_eq!(provider_completed.payload["finishReason"], "stop");
+        assert!(provider_completed.payload["durationMs"].as_u64().is_some());
+        assert_eq!(provider_completed.payload["usage"]["promptTokens"], 100);
+        assert_eq!(
+            provider_completed.payload["usage"]["promptCacheHitTokens"],
+            64
+        );
+        assert_eq!(
+            provider_completed.payload["usage"]["promptCacheMissTokens"],
+            36
+        );
+        assert_eq!(provider_completed.payload["usage"]["reasoningTokens"], 8);
+        assert_eq!(provider_completed.payload["streaming"]["chunkCount"], 3);
+        assert_eq!(
+            provider_completed.payload["streaming"]["toolCallDeltaCount"],
+            0
         );
     }
 
