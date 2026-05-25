@@ -14,8 +14,8 @@ use deepseek_coder_agent_core::{
     context::ContextBuildError,
     provider::deepseek_api::{
         ChatCompletionStream, ChatFunctionDefinition, ChatTool, ChatToolCall,
-        ChatToolCallAccumulator, DeepSeekApiAdapter, DeepSeekApiConfig, StreamEvent,
-        ThinkingConfig,
+        ChatToolCallAccumulator, DeepSeekApiAdapter, DeepSeekApiConfig, FinishReason, StreamEvent,
+        ThinkingConfig, Usage,
     },
     reasoning::ReasoningContentMode,
     run_log::{RunLog, RunLogError, RunLogStore},
@@ -28,8 +28,9 @@ use deepseek_coder_agent_core::{
         AgentRunMode, AgentTurnInput, AgentTurnLoop, AgentTurnLoopConfig, AgentTurnLoopError,
         AgentTurnOutcome, ApprovalDecision, ApprovalPolicy, ApprovalPolicyError, AutoApprovePolicy,
         NoopTurnEventSink, TurnApprovalRequest, TurnEventSink, TurnEventSinkError, TurnProvider,
-        TurnProviderDelta, TurnProviderError, TurnProviderEvent, TurnProviderFuture,
-        TurnProviderRequest, TurnProviderResponse, TurnProviderStream,
+        TurnProviderCompletion, TurnProviderDelta, TurnProviderError, TurnProviderEvent,
+        TurnProviderFinishReason, TurnProviderFuture, TurnProviderRequest, TurnProviderResponse,
+        TurnProviderStream, TurnProviderStreamingSummary, TurnProviderUsage,
         turn_provider_response_stream,
     },
 };
@@ -371,6 +372,7 @@ where
         max_input_tokens: command.max_input_tokens,
         max_model_turns: command.max_model_turns,
         reasoning_mode: reasoning_mode_for_thinking(command.thinking),
+        ..AgentTurnLoopConfig::default()
     };
     let input =
         AgentTurnInput::new(command.turn_id.clone(), command.task.clone()).with_mode(command.mode);
@@ -458,6 +460,7 @@ where
         max_input_tokens: command.max_input_tokens,
         max_model_turns: command.max_model_turns,
         reasoning_mode: reasoning_mode_for_thinking(command.thinking),
+        ..AgentTurnLoopConfig::default()
     };
     let handler = AgentTurnLoopRpcHandler::new(CliRpcProviderFactory {
         provider: command.provider,
@@ -808,6 +811,10 @@ fn turn_loop_error_json_rpc_code(error: &AgentTurnLoopError) -> i64 {
             | ContextBuildError::DuplicateFilePath { .. }
             | ContextBuildError::DuplicateCommandId { .. },
         ) => JSON_RPC_INVALID_PARAMS,
+        AgentTurnLoopError::TooManyAttachments { .. }
+        | AgentTurnLoopError::DuplicateAttachment { .. }
+        | AgentTurnLoopError::InvalidAttachment { .. }
+        | AgentTurnLoopError::AttachmentTooLarge { .. } => JSON_RPC_INVALID_PARAMS,
         AgentTurnLoopError::ContextBuild(
             ContextBuildError::TokenCountOverflow | ContextBuildError::TokenEstimation { .. },
         ) => RPC_INTERNAL_INVARIANT,
@@ -1048,6 +1055,11 @@ fn deepseek_chat_stream_to_turn_provider_stream(
         let mut content = String::new();
         let mut reasoning_content = String::new();
         let mut tool_call_accumulator = ChatToolCallAccumulator::new();
+        let mut model = None;
+        let mut finish_reason = None;
+        let mut usage = None;
+        let mut chunk_count = 0_u64;
+        let mut tool_call_delta_count = 0_u64;
 
         while let Some(event) = stream.next().await {
             if cancellation_token.is_canceled() {
@@ -1055,7 +1067,15 @@ fn deepseek_chat_stream_to_turn_provider_stream(
             }
             match event.map_err(|error| TurnProviderError::new(error.to_string()))? {
                 StreamEvent::Chunk(chunk) => {
+                    chunk_count += 1;
+                    model = Some(chunk.model.clone());
+                    if let Some(chunk_usage) = chunk.usage {
+                        usage = Some(chunk_usage);
+                    }
                     for choice in chunk.choices {
+                        if let Some(choice_finish_reason) = choice.finish_reason {
+                            finish_reason = Some(choice_finish_reason);
+                        }
                         let delta = choice.delta;
                         let mut provider_delta = TurnProviderDelta::new(None, None);
 
@@ -1078,6 +1098,8 @@ fn deepseek_chat_stream_to_turn_provider_stream(
                         }
 
                         if let Some(delta_tool_calls) = delta.tool_calls {
+                            tool_call_delta_count += u64::try_from(delta_tool_calls.len())
+                                .map_err(|_| TurnProviderError::new("tool call delta count overflowed"))?;
                             for tool_call_delta in delta_tool_calls {
                                 tool_call_accumulator
                                     .append_delta(tool_call_delta)
@@ -1099,17 +1121,58 @@ fn deepseek_chat_stream_to_turn_provider_stream(
         let tool_calls = tool_call_accumulator
             .finish()
             .map_err(|error| TurnProviderError::new(error.to_string()))?;
+        let finish_reason = finish_reason
+            .map(turn_provider_finish_reason_from_deepseek)
+            .unwrap_or(if tool_calls.is_empty() {
+                TurnProviderFinishReason::Stop
+            } else {
+                TurnProviderFinishReason::ToolCalls
+            });
+        let mut completion = TurnProviderCompletion::new(
+            model.unwrap_or_else(|| "deepseek".to_owned()),
+            finish_reason,
+        )
+        .with_streaming(TurnProviderStreamingSummary {
+            chunk_count,
+            tool_call_delta_count,
+        });
+        if let Some(usage) = usage {
+            completion = completion.with_usage(turn_provider_usage_from_deepseek(usage));
+        }
 
         yield TurnProviderEvent::Completed(TurnProviderResponse::tool_calls(
             non_empty_string(content),
             non_empty_string(reasoning_content),
             tool_calls,
-        ));
+        ).with_completion(completion));
     })
 }
 
 fn non_empty_string(value: String) -> Option<String> {
     if value.is_empty() { None } else { Some(value) }
+}
+
+fn turn_provider_finish_reason_from_deepseek(reason: FinishReason) -> TurnProviderFinishReason {
+    match reason {
+        FinishReason::Stop => TurnProviderFinishReason::Stop,
+        FinishReason::Length => TurnProviderFinishReason::Length,
+        FinishReason::ToolCalls => TurnProviderFinishReason::ToolCalls,
+        FinishReason::ContentFilter => TurnProviderFinishReason::ContentFilter,
+        FinishReason::InsufficientSystemResource => TurnProviderFinishReason::Error,
+    }
+}
+
+fn turn_provider_usage_from_deepseek(usage: Usage) -> TurnProviderUsage {
+    TurnProviderUsage {
+        prompt_tokens: Some(usage.prompt_tokens),
+        completion_tokens: Some(usage.completion_tokens),
+        total_tokens: Some(usage.total_tokens),
+        prompt_cache_hit_tokens: usage.prompt_cache_hit_tokens,
+        prompt_cache_miss_tokens: usage.prompt_cache_miss_tokens,
+        reasoning_tokens: usage
+            .completion_tokens_details
+            .and_then(|details| details.reasoning_tokens),
+    }
 }
 
 fn executable_chat_tools() -> Result<Vec<ChatTool>, TurnProviderError> {
@@ -1386,7 +1449,8 @@ mod tests {
         cancellation::CancellationToken,
         provider::deepseek_api::{
             ChatCompletionChunk, ChatCompletionChunkChoice, ChatCompletionDelta,
-            ChatFunctionCallDelta, ChatToolCallDelta, ChatToolType, StreamEvent,
+            ChatFunctionCallDelta, ChatToolCallDelta, ChatToolType, CompletionTokensDetails,
+            FinishReason, StreamEvent, Usage,
         },
         run_log::{REDACTED_VALUE, RunLogStore},
         test_helpers::TestWorkspace,
@@ -1925,7 +1989,62 @@ mod tests {
             TurnProviderEvent::Completed(response)
                 if response.content.as_deref() == Some("hello")
                     && response.reasoning_content.as_deref() == Some("think")
+                    && response.completion.model == "deepseek-v4-pro"
+                    && response.completion.streaming.as_ref().is_some_and(|streaming| streaming.chunk_count == 2)
         ));
+    }
+
+    #[test]
+    fn deepseek_stream_wrapper_records_usage_cache_and_finish_reason() {
+        let stream = Box::pin(stream::iter([
+            Ok(StreamEvent::Chunk(chat_finished_chunk(
+                Some("done"),
+                FinishReason::Stop,
+            ))),
+            Ok(StreamEvent::Chunk(chat_usage_chunk())),
+            Ok(StreamEvent::Done),
+        ]));
+        let mut stream =
+            deepseek_chat_stream_to_turn_provider_stream(stream, CancellationToken::new());
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("test runtime should build");
+
+        let events = runtime.block_on(async {
+            let mut events = Vec::new();
+            while let Some(event) = stream.next().await {
+                events.push(event.expect("provider stream event should be ok"));
+            }
+            events
+        });
+
+        let TurnProviderEvent::Completed(response) = events
+            .last()
+            .expect("stream should finish with completed event")
+        else {
+            panic!("expected completed event");
+        };
+        assert_eq!(response.completion.model, "deepseek-v4-pro");
+        assert_eq!(
+            response.completion.finish_reason,
+            deepseek_coder_agent_core::turn_loop::TurnProviderFinishReason::Stop
+        );
+        let usage = response
+            .completion
+            .usage
+            .as_ref()
+            .expect("usage chunk should be recorded");
+        assert_eq!(usage.prompt_tokens, Some(10));
+        assert_eq!(usage.prompt_cache_hit_tokens, Some(7));
+        assert_eq!(usage.prompt_cache_miss_tokens, Some(3));
+        assert_eq!(usage.reasoning_tokens, Some(2));
+        let streaming = response
+            .completion
+            .streaming
+            .as_ref()
+            .expect("streaming summary should be recorded");
+        assert_eq!(streaming.chunk_count, 2);
+        assert_eq!(streaming.tool_call_delta_count, 0);
     }
 
     #[test]
@@ -2019,6 +2138,51 @@ mod tests {
                 finish_reason: None,
             }],
             usage: None,
+        }
+    }
+
+    fn chat_finished_chunk(
+        content: Option<&str>,
+        finish_reason: FinishReason,
+    ) -> ChatCompletionChunk {
+        ChatCompletionChunk {
+            id: "chunk_test".to_owned(),
+            object: "chat.completion.chunk".to_owned(),
+            created: 1,
+            model: "deepseek-v4-pro".to_owned(),
+            system_fingerprint: None,
+            choices: vec![ChatCompletionChunkChoice {
+                index: 0,
+                delta: ChatCompletionDelta {
+                    role: None,
+                    content: content.map(str::to_owned),
+                    reasoning_content: None,
+                    tool_calls: None,
+                },
+                finish_reason: Some(finish_reason),
+            }],
+            usage: None,
+        }
+    }
+
+    fn chat_usage_chunk() -> ChatCompletionChunk {
+        ChatCompletionChunk {
+            id: "chunk_test".to_owned(),
+            object: "chat.completion.chunk".to_owned(),
+            created: 1,
+            model: "deepseek-v4-pro".to_owned(),
+            system_fingerprint: None,
+            choices: Vec::new(),
+            usage: Some(Usage {
+                prompt_tokens: 10,
+                completion_tokens: 4,
+                total_tokens: 14,
+                prompt_cache_hit_tokens: Some(7),
+                prompt_cache_miss_tokens: Some(3),
+                completion_tokens_details: Some(CompletionTokensDetails {
+                    reasoning_tokens: Some(2),
+                }),
+            }),
         }
     }
 
