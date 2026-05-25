@@ -128,8 +128,8 @@ Phase 2 的 1M Context Capsule 按 4 个增量轮次推进：
 1. **Phase 2a：Context Capsule 数据模型与 Manifest v0**
    - [x] `read_file` 增加 `sha256` / `sizeBytes`。
    - [x] 定义 `ContextCapsule`、`ContextSection`、`CachePlacement` 和稳定 renderer。
-   - [ ] 实现 workspace manifest v0：结构化 JSON、canonical `manifestHash`、默认 `maxEntries=500`、硬安全排除、默认工程排除、`.gitignore` + `.deepseek-coderignore`。
-   - [ ] Context Builder 接入 manifest summary，并扩展 `context.built` payload。
+   - [x] 实现 workspace manifest v0：结构化 JSON、canonical `manifestHash`、默认 `maxEntries=500`、硬安全排除、默认工程排除、`.gitignore` + `.deepseek-coderignore`。
+   - [x] Context Builder 接入 manifest summary，并扩展 `context.built` payload。
 
 2. **Phase 2b：TokenEstimator 与稳定前缀**
    - 建立 `TokenEstimator` trait，保留 `utf8_bytes` 默认估算器。

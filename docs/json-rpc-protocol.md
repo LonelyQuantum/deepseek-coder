@@ -459,6 +459,9 @@ interface PlanUpdated {
 interface ContextBuilt {
   inputTokens: number;
   maxInputTokens: number;
+  stablePrefixTokens: number;
+  dynamicPreludeTokens: number;
+  turnSuffixTokens: number;
   estimator: {
     name: string;
     exact: boolean;
@@ -511,8 +514,25 @@ interface ContextBuilt {
     inclusionReason: string;
     omissionReason: "token_budget_exceeded";
   }>;
+  sections: Array<{
+    placement: "stable_prefix" | "dynamic_prelude" | "turn_suffix";
+    tokens: number;
+    itemCount: number;
+  }>;
+  manifest?: {
+    manifestHash: string;
+    maxEntries: number;
+    totalDiscoveredFiles: number;
+    includedFiles: number;
+    omitted: Array<{
+      reason: string;
+      count: number;
+    }>;
+  };
 }
 ```
+
+Phase 2a 扩展后，`context.built` 不携带完整 prompt 文本，只携带可审计的 token/source/section 报告。`manifest` 字段来自自动生成或调用方提供的 workspace manifest summary，用于让前端解释稳定前缀、截断原因和 manifest hash。
 
 ### `provider.requested`
 

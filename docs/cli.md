@@ -43,6 +43,7 @@ CLI DeepSeek provider 会把 streaming chunk 聚合成 Turn Loop 需要的完整
 
 当前 CLI provider 会把 executor 已实现的工具注册给模型：
 
+- `workspace_manifest`
 - `read_file`
 - `search`
 - `apply_patch`
@@ -50,7 +51,7 @@ CLI DeepSeek provider 会把 streaming chunk 聚合成 Turn Loop 需要的完整
 - `git_status`
 - `git_diff`
 
-`workspace_manifest`、`lsp_diagnostics`、`plan_update` 仍是 `schema_only`，不会暴露给 CLI 默认 provider。
+`lsp_diagnostics` 和 `plan_update` 仍是 `schema_only`，不会暴露给 CLI 默认 provider。
 
 ### `fixture`
 

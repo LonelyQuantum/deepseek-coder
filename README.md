@@ -474,7 +474,7 @@ DeepSeek API 默认支持上下文硬盘缓存。为了提高命中率：
 
 第一阶段内置工具：
 
-- `workspace_manifest`：生成工作区 manifest。
+- `workspace_manifest`：生成 workspace manifest v0，包含稳定排序文件摘要、`sha256:` manifest hash、git 状态摘要和截断原因。
 - `read_file`：读取 UTF-8 文本文件，保留行号，并返回完整文件的 `sha256` / `sizeBytes` 摘要。
 - `search`：优先使用 `rg`，记录命令、耗时和匹配数量。
 - `apply_patch`：唯一的文本写入入口，记录 patch 与反向 patch。
@@ -615,8 +615,8 @@ extension.ts
 
 - [x] Phase 2a-1：`read_file` 文件摘要元数据。已在 `read_file` 结果中加入完整文件的 `sha256` 和 `sizeBytes`，并同步 Rust/TypeScript 工具 result schema 与单元测试，为 manifest 文件摘要和工具结果一致性校验打底。
 - [x] Phase 2a-2：Context Capsule 数据模型与稳定 renderer。已定义 `ContextCapsule`、`ContextSection`、`ContextSectionItem`、`CachePlacement` 和 `context_capsule.v1` 稳定渲染流程；现有 provider 输入继续使用兼容字段 `content`，其值与 `rendered` 保持一致。
-- [ ] Phase 2a-3：Workspace Manifest v0。实现结构化 JSON、canonical `manifestHash`、默认 `maxEntries=500`、硬安全排除、默认工程排除、`.gitignore` + `.deepseek-coderignore`。
-- [ ] Phase 2a-4：Context Builder manifest 接入。把 manifest summary 接入 Context Builder，并扩展 `context.built` 事件。
+- [x] Phase 2a-3：Workspace Manifest v0。已实现结构化 JSON、canonical `manifestHash`、默认 `maxEntries=500`、硬安全排除、默认工程排除、`.gitignore` + `.deepseek-coderignore`，并把 `workspace_manifest` 工具切换为可执行。
+- [x] Phase 2a-4：Context Builder manifest 接入。已在 Turn Loop 中自动生成 manifest summary 并放入 `StablePrefix`，同时扩展 `context.built` 事件输出 section token、manifest hash 和截断原因。
 - [ ] Phase 2b：TokenEstimator 与稳定前缀。建立 `TokenEstimator` trait，保留 `utf8_bytes` 默认估算器，增加本地校准估算器，并按 `CachePlacement::{StablePrefix, DynamicPrelude, TurnSuffix}` 构建缓存友好 prompt。
 - [ ] Phase 2c：Attachments、provider summary 和 cache 实验。让 `agent.sendTurn.attachments` 接入 file/selection/diagnostic 等来源，新增 `provider.completed` 事件记录 usage/cache/stream 摘要，并提供 DeepSeek cache hit/miss ignored live 验收。
 - [ ] Phase 2d：大仓库验收、超预算解释、Run Log 体积控制和 JSON Schema 校验层。覆盖 200K、500K、900K 样例仓库，统一输出截断/脱敏边界，并在 typed deserialization 前执行 tool call JSON Schema 校验。

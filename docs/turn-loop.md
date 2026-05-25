@@ -28,6 +28,7 @@ crates/agent-core/src/turn_loop.rs
 
 ```text
 AgentTurnInput
+  -> workspace_manifest auto build when needed
   -> ContextBuilder
   -> run log: context.built
   -> ReasoningContentStateMachine
@@ -65,7 +66,7 @@ AgentTurnInput
 - `run.completed`
 - `run.failed`
 
-`provider.requested` 只记录消息数量、iteration 和 reasoning replay 状态，不记录完整模型输入。完整上下文由 `context.built` 的 token/source 报告和后续工具结果共同复现；更细的 provider request 摘要应在后续 schema 中设计。
+`provider.requested` 只记录消息数量、iteration 和 reasoning replay 状态，不记录完整模型输入。完整上下文由 `context.built` 的 token/source/section/manifest 报告和后续工具结果共同复现；更细的 provider request 摘要应在后续 schema 中设计。
 
 provider stream 中的 content delta 会立即写入 `assistant.delta`，payload 包含 `stream: true`。如果 provider 没有发送 content delta，Turn Loop 会在收到 `Completed` 后把完整 final content 作为一次 `assistant.delta` 写入。Provider-private `reasoning_content` delta 不写入 `assistant.delta`，只由 provider 聚合后放入 `Completed.reasoning_content`，供 `ReasoningContentStateMachine` 校验和下一轮 replay。
 

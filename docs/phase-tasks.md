@@ -53,8 +53,8 @@
 | --- | --- | --- | --- |
 | [x] | Phase 2a-1：`read_file` 增加 `sha256` / `sizeBytes` | `docs/tool-system.md`、`docs/context-capsule.md` | 已完成：`read_file` 返回完整文件的 `sha256` 和 `sizeBytes`，Rust/TypeScript result schema 与单元测试已同步。 |
 | [x] | Phase 2a-2：定义 `ContextCapsule` / `ContextSection` / `CachePlacement` 和稳定 renderer | `README.md`、`docs/context-capsule.md`、`docs/agent-core.md` | 已完成：三层布局与 kind priority 解耦，`context_capsule.v1` renderer 可稳定生成 provider 输入，`content` 兼容别名与 `rendered` 保持一致。 |
-| [ ] | Phase 2a-3：workspace manifest v0 自动构建 | `README.md`、`docs/context-capsule.md`、`docs/tool-system.md` | 结构化 JSON、canonical `manifestHash`、默认 `maxEntries=500`、硬安全排除、默认工程排除、`.gitignore` + `.deepseek-coderignore`。 |
-| [ ] | Phase 2a-4：Context Builder 接入 manifest summary 和扩展 `context.built` payload | `docs/context-capsule.md`、`docs/json-rpc-protocol.md` | 输出 stable/dynamic/suffix token、included/omitted source、manifest hash 和截断原因；补离线 fixture 测试。 |
+| [x] | Phase 2a-3：workspace manifest v0 自动构建 | `README.md`、`docs/context-capsule.md`、`docs/tool-system.md` | 已完成：结构化 JSON、canonical `manifestHash`、默认 `maxEntries=500`、硬安全排除、默认工程排除、`.gitignore` + `.deepseek-coderignore`，并提供可执行 `workspace_manifest` 工具。 |
+| [x] | Phase 2a-4：Context Builder 接入 manifest summary 和扩展 `context.built` payload | `docs/context-capsule.md`、`docs/json-rpc-protocol.md` | 已完成：Turn Loop 自动生成 manifest summary 进入 `StablePrefix`，`context.built` 输出 stable/dynamic/suffix token、sections、manifest hash 和 `max_entries_exceeded` 截断原因。 |
 | [ ] | Phase 2b-1：TokenEstimator trait 与 `CalibratedEstimator` | `docs/roadmap.md`、`docs/context-capsule.md`、`docs/deepseek-api-adapter.md` | 默认保持 `utf8_bytes`；校准数据只本地保存；无官方 tokenizer 或等价证明前 `exact=false`。 |
 | [ ] | Phase 2b-2：稳定前缀和缓存友好 prompt 布局 | `README.md`、`docs/context-capsule.md`、`docs/deepseek-api-adapter.md` | 使用 `CachePlacement` 构建 provider 输入；验证修改 `TurnSuffix` 不改变 `StablePrefix`。 |
 | [ ] | Phase 2c-1：Context Builder 接入 attachments 和 diagnostics | `docs/json-rpc-protocol.md`、`docs/context-capsule.md`、`docs/vscode-extension.md` | `agent.sendTurn.attachments` 从拒绝改为消费；先支持 file、selection/explicit content、diagnostic；验证路径、重复和大小限制。 |

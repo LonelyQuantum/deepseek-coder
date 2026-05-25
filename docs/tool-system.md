@@ -102,7 +102,7 @@ pub struct ToolDefinition {
 
 ### `workspace_manifest`
 
-生成工作区 manifest。
+生成 workspace manifest v0，作为长上下文的稳定文件骨架。
 
 风险：`read`。
 
@@ -110,13 +110,15 @@ pub struct ToolDefinition {
 
 参数：
 
-- `root`：workspace 根目录，省略时使用初始化时的 `workspaceRoot`。
-- `respectGitignore`：是否遵守 `.gitignore`。
+- `root`：workspace-relative 扫描根目录，省略时使用初始化时的 `workspaceRoot`。
+- `respectGitignore`：是否遵守 `.gitignore` 和 `.deepseek-coderignore`。
+- `maxEntries`：最多返回的 manifest 条目数量，省略时使用默认值 500。
 
 结果：
 
-- `entries`：文件条目列表。
-- `ignoredCount`：被忽略文件数量。
+- `manifestHash`：canonical manifest JSON 的 `sha256:<64 hex>` 摘要，不包含本机绝对路径。
+- `summaryMarkdown`：可直接放入 Context Capsule stable prefix 的简洁摘要。
+- `manifest`：结构化 manifest，包含 `manifestVersion`、`workspaceRoot`、`scanRoot`、entries、git 摘要、omitted 原因和 `maxEntries`。
 
 ### `read_file`
 
@@ -298,6 +300,7 @@ fixture 中的 `tools` 被当作无序集合校验；测试会按工具名规整
 
 `WorkspaceToolExecutor` 当前提供：
 
+- `workspace_manifest`：生成 workspace manifest v0，默认遵守 `.gitignore` 和 `.deepseek-coderignore`，硬排除 `.git/`、`.secrets/`、`.secret/`、`.agents/`、`.codex/` 和 `.deepseek-coder/`，并返回稳定排序条目、manifest hash、git 状态和截断原因。
 - `read_file`：只读取 workspace 内 UTF-8 文本文件，支持 1-based 行范围，并返回完整文件的 `sha256` 和 `sizeBytes`。
 - `search`：通过 `rg --json --fixed-strings` 搜索，默认排除 `.git/`、`.secrets/`、`.secret/`、`.env*`、`node_modules/` 和 `target/`。
 - `apply_patch`：应用受限 unified diff，要求 patch 实际文件集合与 `expectedFiles` 完全一致；执行时会先在内存中完成全部文件的 hunk 校验和 staging，再统一写盘，因此解析或 hunk mismatch 不会留下部分文件已修改的状态；成功后返回 reverse patch。
@@ -311,7 +314,7 @@ fixture 中的 `tools` 被当作无序集合校验；测试会按工具名规整
 - 绝对路径、`..` 路径和解析到 workspace 外的路径都会失败。
 - `.git/`、`.secrets/`、`.secret/`、`.agents/`、`.codex/`、`.env` 和 `.env.*` 被视为敏感路径，读写工具默认拒绝访问。
 
-当前实现暂不包含 workspace manifest、LSP diagnostics 和 plan update 的执行逻辑；它们仍只有 schema 和静态风险定义。
+当前实现暂不包含 LSP diagnostics 和 plan update 的执行逻辑；它们仍只有 schema 和静态风险定义。
 
 当前执行层已接入基础 Agent Turn Loop、审批策略、取消信号和 run log。写入与命令执行会触发审批请求，并记录 `tool.approvalResolved`；CLI 二进制可以通过 stdin/stderr 做真实 y/n 审批，测试可使用显式 auto-approve 策略验证已批准路径。Run Log 事件已能通过基础 RPC 桥接发送给前端；`AgentTurnLoopRpcHandler` 已能通过 `agent.sendTurn` 真实驱动 Core，并在 `tool.approvalRequired` 处等待 `agent.approve` / `agent.reject` / `agent.cancel` 或审批超时。`shell`、`search`、`git_status` 和 `git_diff` 会在子进程轮询循环中检查 `CancellationToken`，取消时 kill child 并让 Turn Loop 写入 `run.canceled`。TUI/VS Code 接入真实 RPC 队列的完整 UI、网络/破坏性风险升级和更强进程树清理仍需要后续实现。
 
@@ -372,6 +375,5 @@ fixture 中的 `tools` 被当作无序集合校验；测试会按工具名规整
 
 ### 尚未实现的内置工具
 
-- `workspace_manifest`：应生成长上下文的稳定骨架，包含 ignore 规则、语言、大小、hash、token 估算和风险标记。
 - `lsp_diagnostics`：应能从 VS Code 或独立语言服务器读取 Problems/diagnostics，并保留来源、范围和严重级别。
 - `plan_update`：应由 Agent Core 写入 run log，并通过 JSON-RPC 事件同步给 CLI/TUI/VS Code。
