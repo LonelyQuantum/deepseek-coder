@@ -510,6 +510,8 @@ pub enum ContextItemKind {
     GitStatus,
     GitDiff,
     File,
+    Selection,
+    ExplicitContent,
     ToolResult,
     Plan,
     AcceptanceCriteria,
@@ -528,12 +530,14 @@ impl ContextItemKind {
             Self::GitStatus => 4,
             Self::GitDiff => 5,
             Self::File => 6,
-            Self::ToolResult => 7,
-            Self::Plan => 8,
-            Self::AcceptanceCriteria => 9,
-            Self::PreviousRunSummary => 10,
-            Self::Diagnostic => 11,
-            Self::Other => 12,
+            Self::Selection => 7,
+            Self::ExplicitContent => 8,
+            Self::ToolResult => 9,
+            Self::Plan => 10,
+            Self::AcceptanceCriteria => 11,
+            Self::PreviousRunSummary => 12,
+            Self::Diagnostic => 13,
+            Self::Other => 14,
         }
     }
 
@@ -546,6 +550,8 @@ impl ContextItemKind {
             Self::GitStatus => "Git Status",
             Self::GitDiff => "Git Diff",
             Self::File => "File",
+            Self::Selection => "Selection",
+            Self::ExplicitContent => "Explicit Content",
             Self::ToolResult => "Tool Result",
             Self::Plan => "Plan",
             Self::AcceptanceCriteria => "Acceptance Criteria",
@@ -581,6 +587,8 @@ impl CachePlacement {
             }
             ContextItemKind::UserTask
             | ContextItemKind::File
+            | ContextItemKind::Selection
+            | ContextItemKind::ExplicitContent
             | ContextItemKind::ToolResult
             | ContextItemKind::Plan
             | ContextItemKind::AcceptanceCriteria
@@ -853,6 +861,8 @@ fn kind_name(kind: ContextItemKind) -> &'static str {
         ContextItemKind::GitStatus => "git_status",
         ContextItemKind::GitDiff => "git_diff",
         ContextItemKind::File => "file",
+        ContextItemKind::Selection => "selection",
+        ContextItemKind::ExplicitContent => "explicit_content",
         ContextItemKind::ToolResult => "tool_result",
         ContextItemKind::Plan => "plan",
         ContextItemKind::AcceptanceCriteria => "acceptance_criteria",
