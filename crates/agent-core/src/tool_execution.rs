@@ -9,6 +9,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{cancellation::CancellationToken, run_log::redact_value};
@@ -58,6 +59,8 @@ impl WorkspaceToolExecutor {
             path: path.clone(),
             source,
         })?;
+        let size_bytes = full_content.len() as u64;
+        let sha256 = sha256_hex(full_content.as_bytes());
         let line_count = count_lines(&full_content);
         let content = select_line_range(
             &full_content,
@@ -74,6 +77,8 @@ impl WorkspaceToolExecutor {
             path: args.path,
             content,
             line_count,
+            sha256,
+            size_bytes,
         })
     }
 
@@ -552,6 +557,8 @@ pub struct ReadFileResult {
     pub path: String,
     pub content: String,
     pub line_count: usize,
+    pub sha256: String,
+    pub size_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -895,6 +902,19 @@ fn count_lines(content: &str) -> usize {
     } else {
         content.lines().count()
     }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let digest = Sha256::digest(bytes);
+    let mut output = String::with_capacity(digest.len() * 2);
+
+    for byte in digest {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+
+    output
 }
 
 fn select_line_range(
@@ -1263,16 +1283,30 @@ mod tests {
     use super::{
         ApplyPatchArgs, GitDiffArgs, GitStatusArgs, ReadFileArgs, SearchArgs, ShellArgs,
         ShellResult, ToolExecutionError, ToolStatus, WorkspaceToolExecutor,
-        redacted_tool_result_value,
+        redacted_tool_result_value, sha256_hex,
     };
     use crate::cancellation::CancellationToken;
     use crate::run_log::REDACTED_VALUE;
     use crate::test_helpers::TestWorkspace;
 
     #[test]
+    fn sha256_hex_matches_known_vectors() {
+        assert_eq!(
+            sha256_hex(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
     fn read_file_reads_full_file_and_line_range() {
         let workspace = TestWorkspace::new("tool-execution");
-        workspace.write("src/main.rs", "fn main() {}\nprintln!(\"hi\");\n");
+        let full_content = "fn main() {}\nprintln!(\"hi\");\n";
+        let expected_sha256 = sha256_hex(full_content.as_bytes());
+        workspace.write("src/main.rs", full_content);
         let tools = WorkspaceToolExecutor::new(workspace.path()).expect("workspace should open");
 
         let full = tools
@@ -1283,7 +1317,13 @@ mod tests {
             })
             .expect("file should read");
         assert_eq!(full.line_count, 2);
-        assert_eq!(full.content, "fn main() {}\nprintln!(\"hi\");\n");
+        assert_eq!(full.content, full_content);
+        assert_eq!(full.size_bytes, full_content.len() as u64);
+        assert_eq!(full.sha256, expected_sha256);
+
+        let serialized = serde_json::to_value(&full).expect("read result should serialize");
+        assert_eq!(serialized["sizeBytes"], full_content.len() as u64);
+        assert_eq!(serialized["sha256"], expected_sha256);
 
         let line = tools
             .read_file(ReadFileArgs {
@@ -1293,6 +1333,8 @@ mod tests {
             })
             .expect("line range should read");
         assert_eq!(line.content, "println!(\"hi\");\n");
+        assert_eq!(line.size_bytes, full.size_bytes);
+        assert_eq!(line.sha256, full.sha256);
     }
 
     #[test]

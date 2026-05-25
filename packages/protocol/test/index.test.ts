@@ -284,3 +284,26 @@ test("tool schemas are explicit object schemas", () => {
     assert.equal(tool.resultSchema.type, "object", `${tool.name} result must be an object`);
   }
 });
+
+test("read_file result schema exposes file summary metadata", () => {
+  const readFile = findToolDefinition("read_file");
+
+  assert.ok(readFile);
+  assert.deepEqual(readFile.resultSchema.required, [
+    "status",
+    "summary",
+    "path",
+    "content",
+    "lineCount",
+    "sha256",
+    "sizeBytes",
+  ]);
+  assert.equal(
+    (readFile.resultSchema.properties as Record<string, { pattern?: string }>).sha256?.pattern,
+    "^[0-9a-f]{64}$",
+  );
+  assert.equal(
+    (readFile.resultSchema.properties as Record<string, { minimum?: number }>).sizeBytes?.minimum,
+    0,
+  );
+});

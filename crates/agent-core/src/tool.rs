@@ -108,6 +108,22 @@ const READ_FILE_ARGUMENT_SCHEMA: &str = r#"{
   }
 }"#;
 
+const READ_FILE_RESULT_SCHEMA: &str = r#"{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "summary", "path", "content", "lineCount", "sha256", "sizeBytes"],
+  "properties": {
+    "status": { "type": "string", "enum": ["ok", "failed"] },
+    "summary": { "type": "string" },
+    "errorCode": { "type": "string" },
+    "path": { "type": "string" },
+    "content": { "type": "string" },
+    "lineCount": { "type": "integer", "minimum": 0 },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "sizeBytes": { "type": "integer", "minimum": 0 }
+  }
+}"#;
+
 const SEARCH_ARGUMENT_SCHEMA: &str = r#"{
   "type": "object",
   "additionalProperties": false,
@@ -212,7 +228,7 @@ pub const BUILTIN_TOOLS: &[ToolDefinition] = &[
         ApprovalRequirement::None,
         ToolImplementationStatus::ExecutorImplemented,
         READ_FILE_ARGUMENT_SCHEMA,
-        STATUS_RESULT_SCHEMA,
+        READ_FILE_RESULT_SCHEMA,
     ),
     ToolDefinition::new(
         ToolName::Search,
@@ -331,6 +347,20 @@ mod tests {
                 tool.name.as_str()
             );
         }
+    }
+
+    #[test]
+    fn read_file_result_schema_exposes_file_summary_metadata() {
+        let read_file = find_builtin_tool(ToolName::ReadFile.as_str())
+            .expect("read_file tool must be registered");
+
+        assert!(read_file.result_schema.contains("\"sha256\""));
+        assert!(read_file.result_schema.contains("\"sizeBytes\""));
+        assert!(
+            read_file
+                .result_schema
+                .contains("\"pattern\": \"^[0-9a-f]{64}$\"")
+        );
     }
 
     #[test]

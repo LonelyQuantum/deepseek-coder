@@ -145,6 +145,22 @@ const statusResultSchema = {
   },
 } as const satisfies JsonSchema;
 
+const readFileResultSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["status", "summary", "path", "content", "lineCount", "sha256", "sizeBytes"],
+  properties: {
+    status: { type: "string", enum: ["ok", "failed"] },
+    summary: { type: "string" },
+    errorCode: { type: "string" },
+    path: { type: "string" },
+    content: { type: "string" },
+    lineCount: { type: "integer", minimum: 0 },
+    sha256: { type: "string", pattern: "^[0-9a-f]{64}$" },
+    sizeBytes: { type: "integer", minimum: 0 },
+  },
+} as const satisfies JsonSchema;
+
 export const toolDefinitions = [
   {
     name: "workspace_manifest",
@@ -178,7 +194,7 @@ export const toolDefinitions = [
         endLine: { type: "integer", minimum: 1 },
       },
     },
-    resultSchema: statusResultSchema,
+    resultSchema: readFileResultSchema,
   },
   {
     name: "search",
