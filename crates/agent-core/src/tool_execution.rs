@@ -9,10 +9,13 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::{cancellation::CancellationToken, run_log::redact_value};
+use crate::workspace_manifest::{
+    DEFAULT_WORKSPACE_MANIFEST_MAX_ENTRIES, WorkspaceManifest, WorkspaceManifestConfig,
+    WorkspaceManifestError, build_workspace_manifest,
+};
+use crate::{cancellation::CancellationToken, hashing::sha256_hex, run_log::redact_value};
 
 const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
 const DEFAULT_SEARCH_MAX_RESULTS: usize = 100;
@@ -38,6 +41,50 @@ impl WorkspaceToolExecutor {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    pub fn workspace_manifest(
+        &self,
+        args: WorkspaceManifestArgs,
+    ) -> Result<WorkspaceManifestResult, ToolExecutionError> {
+        self.workspace_manifest_with_cancellation(args, &CancellationToken::new())
+    }
+
+    pub fn workspace_manifest_with_cancellation(
+        &self,
+        args: WorkspaceManifestArgs,
+        cancellation_token: &CancellationToken,
+    ) -> Result<WorkspaceManifestResult, ToolExecutionError> {
+        check_canceled(cancellation_token, "workspace_manifest")?;
+        let max_entries = args
+            .max_entries
+            .unwrap_or(DEFAULT_WORKSPACE_MANIFEST_MAX_ENTRIES);
+        let config = WorkspaceManifestConfig::new(max_entries)
+            .with_respect_gitignore(args.respect_gitignore.unwrap_or(true));
+        let manifest =
+            build_workspace_manifest(&self.root, args.root.as_deref(), config, cancellation_token)
+                .map_err(|source| match source {
+                    WorkspaceManifestError::Canceled { source } => {
+                        ToolExecutionError::CommandCanceled {
+                            program: "workspace_manifest".to_owned(),
+                            reason: source.reason().to_owned(),
+                        }
+                    }
+                    source => ToolExecutionError::WorkspaceManifest { source },
+                })?;
+        let summary_markdown = manifest.summary_markdown();
+
+        Ok(WorkspaceManifestResult {
+            status: ToolStatus::Ok,
+            summary: format!(
+                "Built workspace manifest with {} of {} files.",
+                manifest.included_files, manifest.total_discovered_files
+            ),
+            error_code: None,
+            manifest_hash: manifest.manifest_hash.clone(),
+            summary_markdown,
+            manifest,
+        })
     }
 
     pub fn read_file(&self, args: ReadFileArgs) -> Result<ReadFileResult, ToolExecutionError> {
@@ -541,6 +588,26 @@ impl ToolStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WorkspaceManifestArgs {
+    pub root: Option<String>,
+    pub respect_gitignore: Option<bool>,
+    pub max_entries: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceManifestResult {
+    pub status: ToolStatus,
+    pub summary: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    pub manifest_hash: String,
+    pub summary_markdown: String,
+    pub manifest: WorkspaceManifest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ReadFileArgs {
     pub path: String,
     pub start_line: Option<usize>,
@@ -721,6 +788,11 @@ pub enum ToolExecutionError {
     Io { path: PathBuf, source: io::Error },
     #[error("I/O error while running `{program}`: {source}")]
     CommandIo { program: String, source: io::Error },
+    #[error("workspace manifest failed: {source}")]
+    WorkspaceManifest {
+        #[from]
+        source: WorkspaceManifestError,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -1323,6 +1395,40 @@ mod tests {
         assert_eq!(line.content, "println!(\"hi\");\n");
         assert_eq!(line.size_bytes, full.size_bytes);
         assert_eq!(line.sha256, full.sha256);
+    }
+
+    #[test]
+    fn workspace_manifest_builds_result_and_excludes_sensitive_paths() {
+        let workspace = TestWorkspace::new("tool-execution");
+        workspace.write("src/lib.rs", "pub fn answer() -> i32 { 42 }\n");
+        workspace.write(".secrets/token.txt", "secret\n");
+        let tools = WorkspaceToolExecutor::new(workspace.path()).expect("workspace should open");
+
+        let result = tools
+            .workspace_manifest(WorkspaceManifestArgs {
+                root: None,
+                respect_gitignore: Some(true),
+                max_entries: Some(10),
+            })
+            .expect("manifest should build");
+
+        assert_eq!(result.status, ToolStatus::Ok);
+        assert_eq!(result.manifest_hash, result.manifest.manifest_hash);
+        assert!(result.summary_markdown.contains(&result.manifest_hash));
+        assert!(
+            result
+                .manifest
+                .entries
+                .iter()
+                .any(|entry| entry.path == "src/lib.rs")
+        );
+        assert!(
+            !result
+                .manifest
+                .entries
+                .iter()
+                .any(|entry| entry.path.starts_with(".secrets/"))
+        );
     }
 
     #[test]
