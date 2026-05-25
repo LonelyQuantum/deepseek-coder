@@ -459,13 +459,23 @@ interface PlanUpdated {
 interface ContextBuilt {
   inputTokens: number;
   maxInputTokens: number;
+  stablePrefixHash: string;
   stablePrefixTokens: number;
+  stablePrefixBudgetTokens: number;
+  stablePrefixBudgetRatioPpm: number;
   dynamicPreludeTokens: number;
   turnSuffixTokens: number;
   estimator: {
     name: string;
     exact: boolean;
     description: string;
+    calibration?: {
+      sampleCount: number;
+      inputUnit: string;
+      slopePpm: number;
+      interceptTokens: number;
+      meanAbsolutePercentageErrorPpm: number;
+    };
   };
   cacheHitTokens?: number;
   cacheMissTokens?: number;
@@ -512,7 +522,7 @@ interface ContextBuilt {
     title?: string;
     estimatedTokens: number;
     inclusionReason: string;
-    omissionReason: "token_budget_exceeded";
+    omissionReason: "token_budget_exceeded" | "stable_prefix_budget_exceeded";
   }>;
   sections: Array<{
     placement: "stable_prefix" | "dynamic_prelude" | "turn_suffix";
@@ -532,7 +542,7 @@ interface ContextBuilt {
 }
 ```
 
-Phase 2a 扩展后，`context.built` 不携带完整 prompt 文本，只携带可审计的 token/source/section 报告。`manifest` 字段来自自动生成或调用方提供的 workspace manifest summary，用于让前端解释稳定前缀、截断原因和 manifest hash。
+Phase 2b 扩展后，`context.built` 不携带完整 prompt 文本，只携带可审计的 token/source/section 报告。`stablePrefixHash` 用于比较同一 workspace 的稳定前缀是否发生变化；`estimator.calibration` 只记录聚合校准元数据，不能包含可还原 prompt 的样本内容。`manifest` 字段来自自动生成或调用方提供的 workspace manifest summary，用于让前端解释稳定前缀、截断原因和 manifest hash。
 
 ### `provider.requested`
 

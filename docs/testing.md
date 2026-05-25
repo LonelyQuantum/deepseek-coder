@@ -115,7 +115,7 @@ Phase 2 的默认 CI 应优先覆盖离线、确定性测试：
 - Context Capsule renderer：验证 `StablePrefix`、`DynamicPrelude`、`TurnSuffix` 三层分组、显式 placement override、`content == rendered` 兼容字段，以及修改 `TurnSuffix` 不改变 `StablePrefix`。
 - manifest fixture：固定工作区结构、ignore 规则、`sha256`、`manifestHash`、`maxEntries` 和 omitted reason。
 - Context Builder manifest 接入：验证 Turn Loop 自动注入 manifest summary、`context.built` 输出 stable/dynamic/suffix section token、manifest hash 和 omitted reason。
-- token estimator metadata：`utf8_bytes` 和校准估算器都必须明确 `exact=false`，不能误报为真实 tokenizer。
+- token estimator metadata：`utf8_bytes` 和校准估算器都必须明确 `exact=false`，不能误报为真实 tokenizer；校准 fixture 覆盖系数、误差和不保存 prompt 原文的边界。
 - attachment fixture：路径越界、重复 attachment、超大小 selection / explicit content 和 diagnostic 形状错误均有稳定错误或省略原因。
 - JSON Schema validation：tool call arguments 在 typed deserialization 前通过 schema validator。
 

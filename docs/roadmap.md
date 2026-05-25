@@ -132,9 +132,9 @@ Phase 2 的 1M Context Capsule 按 4 个增量轮次推进：
    - [x] Context Builder 接入 manifest summary，并扩展 `context.built` payload。
 
 2. **Phase 2b：TokenEstimator 与稳定前缀**
-   - 建立 `TokenEstimator` trait，保留 `utf8_bytes` 默认估算器。
-   - 增加基于真实 provider usage 的 `CalibratedEstimator`，但仍标注 `exact=false`。
-   - 按 `CachePlacement::{StablePrefix, DynamicPrelude, TurnSuffix}` 构建缓存友好 prompt。
+   - [x] 建立 `TokenEstimator` trait，保留 `utf8_bytes` 默认估算器。
+   - [x] 增加基于 provider usage 样本的 `CalibratedEstimator`，但仍标注 `exact=false`，且不保存 prompt 原文。
+   - [x] 按 `CachePlacement::{StablePrefix, DynamicPrelude, TurnSuffix}` 构建缓存友好 prompt，并输出 `stablePrefixHash` 与稳定前缀预算。
 
 3. **Phase 2c：Attachments、provider summary 与 cache 实验**
    - 接入 `agent.sendTurn.attachments` 的 file、selection/explicit content、diagnostic。

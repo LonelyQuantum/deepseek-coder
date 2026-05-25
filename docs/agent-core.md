@@ -60,9 +60,9 @@ Agent Core 不应通过启发式后处理掩盖失败。
 
 Phase 1 已实现基础 Context Builder，详见 `docs/context-capsule.md`。它能从用户任务、项目规则、git 状态、文件、工具结果和计划等片段生成稳定排序的上下文输入，并输出 token 预算报告。
 
-当前 token 统计使用 `utf8_bytes` 估算器，不是 DeepSeek tokenizer 的精确 token 数。Context Builder 已接入基础 Agent Turn Loop，并会写入 `context.built` run log 事件；基础 RPC 事件桥接已能把该事件转换为 JSON-RPC notification，`TurnEventSink` 已能在事件写入后立即输出，RPC request loop 和真实 Turn Loop handler 已接入。
+当前 token 统计通过 `TokenEstimator` trait 接入，默认使用 `utf8_bytes` 估算器，不是 DeepSeek tokenizer 的精确 token 数；Phase 2b 已提供 `CalibratedEstimator`，基于 provider usage 样本拟合但仍报告 `exact=false`。Context Builder 已接入基础 Agent Turn Loop，并会写入 `context.built` run log 事件；基础 RPC 事件桥接已能把该事件转换为 JSON-RPC notification，`TurnEventSink` 已能在事件写入后立即输出，RPC request loop 和真实 Turn Loop handler 已接入。
 
-Phase 2a 已把基础 builder 升级为结构化 `ContextCapsule`：先构建可审计的 sections、sources 和 token report，再由 `context_capsule.v1` deterministic renderer 按 `CachePlacement::{StablePrefix, DynamicPrelude, TurnSuffix}` 生成 provider 输入。现阶段 `content` 是兼容别名，始终等于 `rendered`；Turn Loop 已自动生成 workspace manifest summary 并放入 `StablePrefix`。attachments、provider cache usage 和大仓库 token 预算后续都应接入该结构，而不是各自拼接 prompt 字符串。
+Phase 2a/2b 已把基础 builder 升级为结构化 `ContextCapsule`：先构建可审计的 sections、sources 和 token report，再由 `context_capsule.v1` deterministic renderer 按 `CachePlacement::{StablePrefix, DynamicPrelude, TurnSuffix}` 生成 provider 输入。现阶段 `content` 是兼容别名，始终等于 `rendered`；Turn Loop 已自动生成 workspace manifest summary 并放入 `StablePrefix`；`context.built` 会输出 `stablePrefixHash`、稳定前缀预算和 estimator metadata。attachments、provider cache usage 和大仓库 token 预算后续都应接入该结构，而不是各自拼接 prompt 字符串。
 
 ## 本地工具执行
 

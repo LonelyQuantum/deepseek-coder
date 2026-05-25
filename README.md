@@ -617,7 +617,7 @@ extension.ts
 - [x] Phase 2a-2：Context Capsule 数据模型与稳定 renderer。已定义 `ContextCapsule`、`ContextSection`、`ContextSectionItem`、`CachePlacement` 和 `context_capsule.v1` 稳定渲染流程；现有 provider 输入继续使用兼容字段 `content`，其值与 `rendered` 保持一致。
 - [x] Phase 2a-3：Workspace Manifest v0。已实现结构化 JSON、canonical `manifestHash`、默认 `maxEntries=500`、硬安全排除、默认工程排除、`.gitignore` + `.deepseek-coderignore`，并把 `workspace_manifest` 工具切换为可执行。
 - [x] Phase 2a-4：Context Builder manifest 接入。已在 Turn Loop 中自动生成 manifest summary 并放入 `StablePrefix`，同时扩展 `context.built` 事件输出 section token、manifest hash 和截断原因。
-- [ ] Phase 2b：TokenEstimator 与稳定前缀。建立 `TokenEstimator` trait，保留 `utf8_bytes` 默认估算器，增加本地校准估算器，并按 `CachePlacement::{StablePrefix, DynamicPrelude, TurnSuffix}` 构建缓存友好 prompt。
+- [x] Phase 2b：TokenEstimator 与稳定前缀。已建立 `TokenEstimator` trait、默认 `utf8_bytes` 估算器和 `CalibratedEstimator`，并在 `context.built` 中输出 `stablePrefixHash`、稳定前缀预算和校准 metadata；修改 `TurnSuffix` 不改变 `StablePrefix` 已有离线测试覆盖。
 - [ ] Phase 2c：Attachments、provider summary 和 cache 实验。让 `agent.sendTurn.attachments` 接入 file/selection/diagnostic 等来源，新增 `provider.completed` 事件记录 usage/cache/stream 摘要，并提供 DeepSeek cache hit/miss ignored live 验收。
 - [ ] Phase 2d：大仓库验收、超预算解释、Run Log 体积控制和 JSON Schema 校验层。覆盖 200K、500K、900K 样例仓库，统一输出截断/脱敏边界，并在 typed deserialization 前执行 tool call JSON Schema 校验。
 
