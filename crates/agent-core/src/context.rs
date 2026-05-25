@@ -44,10 +44,15 @@ impl ContextBuilder {
             .enumerate()
             .map(|(index, item)| IndexedContextItem { index, item })
             .collect::<Vec<_>>();
-        indexed_items.sort_by_key(|item| (item.item.kind.priority(), item.index));
+        indexed_items.sort_by_key(|item| {
+            let placement = item
+                .item
+                .cache_placement
+                .unwrap_or_else(|| CachePlacement::default_for_kind(item.item.kind));
+            (placement.order(), item.item.kind.priority(), item.index)
+        });
 
-        let mut content = String::new();
-        let mut input_tokens = 0_u64;
+        let mut included_items = Vec::new();
         let mut included_sources = Vec::new();
         let mut omitted_sources = Vec::new();
         let mut seen_singletons = HashSet::new();
@@ -62,25 +67,22 @@ impl ContextBuilder {
                 &mut seen_file_paths,
                 &mut seen_command_ids,
             )?;
-            let rendered = render_item(&prepared);
-            let item_tokens = estimate_token_proxy(&rendered)?;
-            let separator_tokens = if content.is_empty() {
-                0
-            } else {
-                estimate_token_proxy("\n")?
-            };
-            let next_input_tokens = input_tokens
-                .checked_add(separator_tokens)
-                .ok_or(ContextBuildError::TokenCountOverflow)?
-                .checked_add(item_tokens)
-                .ok_or(ContextBuildError::TokenCountOverflow)?;
+            let section_item = section_item_from_prepared(&prepared)?;
+            let item_tokens = section_item.tokens;
+            let mut candidate_items = included_items.clone();
+            candidate_items.push(section_item.clone());
+            let candidate_sections = build_sections(candidate_items.clone())?;
+            let candidate_rendered = render_context_sections(&candidate_sections);
+            let candidate_input_tokens = estimate_token_proxy(&candidate_rendered)?;
 
-            if next_input_tokens > self.config.max_input_tokens {
+            if candidate_input_tokens > self.config.max_input_tokens {
                 if prepared.source.required {
                     return Err(ContextBuildError::RequiredContextExceedsBudget {
                         max_input_tokens: self.config.max_input_tokens,
-                        used_tokens: input_tokens,
-                        required_tokens: next_input_tokens,
+                        used_tokens: estimate_token_proxy(&render_context_sections(
+                            &build_sections(included_items.clone())?,
+                        ))?,
+                        required_tokens: candidate_input_tokens,
                         context_source: prepared.source,
                     });
                 }
@@ -94,11 +96,7 @@ impl ContextBuilder {
                 continue;
             }
 
-            if !content.is_empty() {
-                content.push('\n');
-            }
-            content.push_str(&rendered);
-            input_tokens = next_input_tokens;
+            included_items = candidate_items;
             included_sources.push(ContextIncludedSource {
                 source: prepared.source,
                 tokens: item_tokens,
@@ -106,8 +104,14 @@ impl ContextBuilder {
             });
         }
 
+        let sections = build_sections(included_items)?;
+        let rendered = render_context_sections(&sections);
+        let input_tokens = estimate_token_proxy(&rendered)?;
+
         Ok(ContextCapsule {
-            content,
+            content: rendered.clone(),
+            rendered,
+            sections,
             token_report: ContextTokenReport {
                 input_tokens,
                 max_input_tokens: self.config.max_input_tokens,
@@ -148,6 +152,8 @@ impl Default for ContextBuilderConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContextCapsule {
+    pub sections: Vec<ContextSection>,
+    pub rendered: String,
     pub content: String,
     pub token_report: ContextTokenReport,
 }
@@ -161,6 +167,51 @@ impl ContextCapsule {
             "includedSources": self.token_report.included_sources,
             "omittedSources": self.token_report.omitted_sources,
         })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextSection {
+    pub placement: CachePlacement,
+    pub tokens: u64,
+    pub items: Vec<ContextSectionItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextSectionItem {
+    pub placement: CachePlacement,
+    #[serde(flatten)]
+    pub source: ContextSourceRef,
+    pub content: String,
+    pub tokens: u64,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CachePlacement {
+    StablePrefix,
+    DynamicPrelude,
+    TurnSuffix,
+}
+
+impl CachePlacement {
+    const fn order(self) -> u8 {
+        match self {
+            Self::StablePrefix => 0,
+            Self::DynamicPrelude => 1,
+            Self::TurnSuffix => 2,
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::StablePrefix => "Stable Prefix",
+            Self::DynamicPrelude => "Dynamic Prelude",
+            Self::TurnSuffix => "Turn Suffix",
+        }
     }
 }
 
@@ -240,6 +291,8 @@ pub struct ContextItem {
     pub reason: String,
     pub required: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_placement: Option<CachePlacement>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command_id: Option<String>,
@@ -258,6 +311,7 @@ impl ContextItem {
             content: content.into(),
             reason: reason.into(),
             required: true,
+            cache_placement: None,
             path: None,
             command_id: None,
             title: None,
@@ -305,6 +359,11 @@ impl ContextItem {
 
     pub fn with_required(mut self, required: bool) -> Self {
         self.required = required;
+        self
+    }
+
+    pub fn with_cache_placement(mut self, cache_placement: CachePlacement) -> Self {
+        self.cache_placement = Some(cache_placement);
         self
     }
 
@@ -394,6 +453,26 @@ impl ContextItemKind {
     }
 }
 
+impl CachePlacement {
+    pub const fn default_for_kind(kind: ContextItemKind) -> Self {
+        match kind {
+            ContextItemKind::SystemPolicy
+            | ContextItemKind::ProjectRules
+            | ContextItemKind::WorkspaceManifest => Self::StablePrefix,
+            ContextItemKind::GitStatus | ContextItemKind::GitDiff | ContextItemKind::Diagnostic => {
+                Self::DynamicPrelude
+            }
+            ContextItemKind::UserTask
+            | ContextItemKind::File
+            | ContextItemKind::ToolResult
+            | ContextItemKind::Plan
+            | ContextItemKind::AcceptanceCriteria
+            | ContextItemKind::PreviousRunSummary
+            | ContextItemKind::Other => Self::TurnSuffix,
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum ContextBuildError {
     #[error("max input tokens must be greater than zero")]
@@ -429,6 +508,7 @@ struct IndexedContextItem<'a> {
 }
 
 struct PreparedContextItem {
+    placement: CachePlacement,
     source: ContextSourceRef,
     content: String,
     inclusion_reason: String,
@@ -457,6 +537,9 @@ fn prepare_item(item: &ContextItem) -> Result<PreparedContextItem, ContextBuildE
         .map(redact_text);
 
     Ok(PreparedContextItem {
+        placement: item
+            .cache_placement
+            .unwrap_or_else(|| CachePlacement::default_for_kind(item.kind)),
         source: ContextSourceRef {
             kind: item.kind,
             required: item.required,
@@ -497,9 +580,87 @@ fn validate_unique_source(
     Ok(())
 }
 
-fn render_item(item: &PreparedContextItem) -> String {
+fn section_item_from_prepared(
+    item: &PreparedContextItem,
+) -> Result<ContextSectionItem, ContextBuildError> {
+    let mut section_item = ContextSectionItem {
+        placement: item.placement,
+        source: item.source.clone(),
+        content: item.content.clone(),
+        tokens: 0,
+        reason: item.inclusion_reason.clone(),
+    };
+    section_item.tokens = estimate_token_proxy(&render_context_item(&section_item))?;
+
+    Ok(section_item)
+}
+
+fn build_sections(
+    items: Vec<ContextSectionItem>,
+) -> Result<Vec<ContextSection>, ContextBuildError> {
+    let mut sections: Vec<ContextSection> = Vec::new();
+
+    for item in items {
+        if let Some(section) = sections
+            .last_mut()
+            .filter(|section| section.placement == item.placement)
+        {
+            section.items.push(item);
+            continue;
+        }
+
+        sections.push(ContextSection {
+            placement: item.placement,
+            tokens: 0,
+            items: vec![item],
+        });
+    }
+
+    for section in &mut sections {
+        let tokens = estimate_token_proxy(&render_context_section(section))?;
+        section.tokens = tokens;
+    }
+
+    Ok(sections)
+}
+
+fn render_context_sections(sections: &[ContextSection]) -> String {
+    if sections.is_empty() {
+        return String::new();
+    }
+
+    let mut rendered = String::new();
+    rendered.push_str("# Context Capsule\n");
+    rendered.push_str("Renderer: context_capsule.v1\n");
+
+    for section in sections {
+        rendered.push('\n');
+        rendered.push_str(&render_context_section(section));
+    }
+
+    rendered
+}
+
+fn render_context_section(section: &ContextSection) -> String {
     let mut rendered = String::new();
     rendered.push_str("## ");
+    rendered.push_str(section.placement.label());
+    rendered.push('\n');
+    rendered.push_str("Placement: ");
+    rendered.push_str(cache_placement_name(section.placement));
+    rendered.push('\n');
+
+    for item in &section.items {
+        rendered.push('\n');
+        rendered.push_str(&render_context_item(item));
+    }
+
+    rendered
+}
+
+fn render_context_item(item: &ContextSectionItem) -> String {
+    let mut rendered = String::new();
+    rendered.push_str("### ");
     rendered.push_str(
         item.source
             .title
@@ -510,6 +671,9 @@ fn render_item(item: &PreparedContextItem) -> String {
     rendered.push_str("Kind: ");
     rendered.push_str(kind_name(item.source.kind));
     rendered.push('\n');
+    rendered.push_str("Placement: ");
+    rendered.push_str(cache_placement_name(item.placement));
+    rendered.push('\n');
     rendered.push_str("Required: ");
     rendered.push_str(if item.source.required {
         "true"
@@ -518,7 +682,7 @@ fn render_item(item: &PreparedContextItem) -> String {
     });
     rendered.push('\n');
     rendered.push_str("Reason: ");
-    rendered.push_str(&item.inclusion_reason);
+    rendered.push_str(&item.reason);
     rendered.push('\n');
 
     if let Some(path) = &item.source.path {
@@ -536,6 +700,14 @@ fn render_item(item: &PreparedContextItem) -> String {
     rendered.push_str(&item.content);
     rendered.push('\n');
     rendered
+}
+
+fn cache_placement_name(placement: CachePlacement) -> &'static str {
+    match placement {
+        CachePlacement::StablePrefix => "stable_prefix",
+        CachePlacement::DynamicPrelude => "dynamic_prelude",
+        CachePlacement::TurnSuffix => "turn_suffix",
+    }
 }
 
 fn kind_name(kind: ContextItemKind) -> &'static str {
@@ -617,8 +789,8 @@ fn validate_command_id(command_id: &str) -> Result<String, ContextBuildError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ContextBuildError, ContextBuilder, ContextBuilderConfig, ContextItem, ContextItemKind,
-        ContextOmissionReason,
+        CachePlacement, ContextBuildError, ContextBuilder, ContextBuilderConfig, ContextCapsule,
+        ContextItem, ContextItemKind, ContextOmissionReason, render_context_section,
     };
     use crate::run_log::REDACTED_VALUE;
 
@@ -640,26 +812,30 @@ mod tests {
 
         let project_rules_index = capsule
             .content
-            .find("## Project Rules")
+            .find("### Project Rules")
             .expect("project rules should be rendered");
         let user_task_index = capsule
             .content
-            .find("## User Task")
+            .find("### User Task")
             .expect("user task should be rendered");
         let file_index = capsule
             .content
-            .find("## File")
+            .find("### File")
             .expect("file should be rendered");
 
         assert!(project_rules_index < user_task_index);
         assert!(user_task_index < file_index);
+        assert_eq!(capsule.rendered, capsule.content);
         assert_eq!(
             capsule.token_report.input_tokens,
-            u64::try_from(capsule.content.len()).expect("content length should fit u64")
+            u64::try_from(capsule.rendered.len()).expect("content length should fit u64")
         );
         assert_eq!(capsule.token_report.estimator.name, "utf8_bytes");
         assert!(!capsule.token_report.estimator.exact);
         assert_eq!(capsule.token_report.included_sources.len(), 3);
+        assert_eq!(capsule.sections.len(), 2);
+        assert_eq!(capsule.sections[0].placement, CachePlacement::StablePrefix);
+        assert_eq!(capsule.sections[1].placement, CachePlacement::TurnSuffix);
         assert_eq!(
             capsule.token_report.included_sources[2]
                 .source
@@ -667,6 +843,83 @@ mod tests {
                 .as_deref(),
             Some("src/lib.rs")
         );
+    }
+
+    #[test]
+    fn context_builder_groups_items_by_cache_placement() {
+        let capsule = ContextBuilder::new(ContextBuilderConfig::new(10_000))
+            .with_item(ContextItem::user_task("fix the parser"))
+            .with_item(ContextItem::required(
+                ContextItemKind::GitStatus,
+                " M src/parser.rs",
+                "workspace changes",
+            ))
+            .with_item(ContextItem::project_rules(
+                "keep docs in Chinese",
+                "project rules",
+            ))
+            .build()
+            .expect("context should build");
+
+        let placements = capsule
+            .sections
+            .iter()
+            .map(|section| section.placement)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            placements,
+            vec![
+                CachePlacement::StablePrefix,
+                CachePlacement::DynamicPrelude,
+                CachePlacement::TurnSuffix,
+            ]
+        );
+        assert_eq!(
+            capsule.sections[0].items[0].source.kind,
+            ContextItemKind::ProjectRules
+        );
+        assert_eq!(
+            capsule.sections[1].items[0].source.kind,
+            ContextItemKind::GitStatus
+        );
+        assert_eq!(
+            capsule.sections[2].items[0].source.kind,
+            ContextItemKind::UserTask
+        );
+    }
+
+    #[test]
+    fn context_builder_allows_explicit_cache_placement_override() {
+        let capsule = ContextBuilder::new(ContextBuilderConfig::new(10_000))
+            .with_item(
+                ContextItem::file("src/lib.rs", "pub mod context;", "stable snapshot")
+                    .with_cache_placement(CachePlacement::StablePrefix),
+            )
+            .with_item(ContextItem::user_task("review this file"))
+            .build()
+            .expect("context should build");
+
+        assert_eq!(capsule.sections[0].placement, CachePlacement::StablePrefix);
+        assert_eq!(
+            capsule.sections[0].items[0].source.kind,
+            ContextItemKind::File
+        );
+        assert_eq!(
+            capsule.sections[0].items[0].source.path.as_deref(),
+            Some("src/lib.rs")
+        );
+    }
+
+    #[test]
+    fn stable_prefix_rendering_survives_turn_suffix_changes() {
+        let first = stable_prefix_fixture("first user task");
+        let second = stable_prefix_fixture("second user task with different details");
+
+        assert_eq!(
+            rendered_section(&first, CachePlacement::StablePrefix),
+            rendered_section(&second, CachePlacement::StablePrefix)
+        );
+        assert_ne!(first.rendered, second.rendered);
     }
 
     #[test]
@@ -831,5 +1084,25 @@ mod tests {
             payload["includedSources"][0]["kind"],
             serde_json::json!("user_task")
         );
+    }
+
+    fn stable_prefix_fixture(user_task: &str) -> ContextCapsule {
+        ContextBuilder::new(ContextBuilderConfig::new(10_000))
+            .with_item(ContextItem::project_rules(
+                "keep documentation in Chinese",
+                "project rules",
+            ))
+            .with_item(ContextItem::user_task(user_task))
+            .build()
+            .expect("context should build")
+    }
+
+    fn rendered_section(capsule: &ContextCapsule, placement: CachePlacement) -> String {
+        let section = capsule
+            .sections
+            .iter()
+            .find(|section| section.placement == placement)
+            .expect("section should exist");
+        render_context_section(section)
     }
 }
