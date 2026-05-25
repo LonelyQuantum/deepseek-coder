@@ -307,3 +307,22 @@ test("read_file result schema exposes file summary metadata", () => {
     0,
   );
 });
+
+test("workspace_manifest is executable and exposes manifest metadata schema", () => {
+  const workspaceManifest = findToolDefinition("workspace_manifest");
+
+  assert.ok(workspaceManifest);
+  assert.equal(workspaceManifest.implementationStatus, "executor_implemented");
+  assert.deepEqual(workspaceManifest.resultSchema.required, [
+    "status",
+    "summary",
+    "manifestHash",
+    "summaryMarkdown",
+    "manifest",
+  ]);
+  assert.equal(
+    (workspaceManifest.resultSchema.properties as Record<string, { pattern?: string }>)
+      .manifestHash?.pattern,
+    "^sha256:[0-9a-f]{64}$",
+  );
+});

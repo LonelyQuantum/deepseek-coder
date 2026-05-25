@@ -145,6 +145,44 @@ const statusResultSchema = {
   },
 } as const satisfies JsonSchema;
 
+const workspaceManifestResultSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["status", "summary", "manifestHash", "summaryMarkdown", "manifest"],
+  properties: {
+    status: { type: "string", enum: ["ok", "failed"] },
+    summary: { type: "string" },
+    errorCode: { type: "string" },
+    manifestHash: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    summaryMarkdown: { type: "string" },
+    manifest: {
+      type: "object",
+      additionalProperties: true,
+      required: [
+        "manifestVersion",
+        "manifestHash",
+        "maxEntries",
+        "totalDiscoveredFiles",
+        "includedFiles",
+        "entries",
+        "omitted",
+      ],
+      properties: {
+        manifestVersion: { type: "integer", minimum: 1 },
+        manifestHash: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        workspaceRoot: { type: "string" },
+        scanRoot: { type: "string" },
+        maxEntries: { type: "integer", minimum: 1 },
+        totalDiscoveredFiles: { type: "integer", minimum: 0 },
+        includedFiles: { type: "integer", minimum: 0 },
+        totalSizeBytes: { type: "integer", minimum: 0 },
+        entries: { type: "array", items: { type: "object" } },
+        omitted: { type: "array", items: { type: "object" } },
+      },
+    },
+  },
+} as const satisfies JsonSchema;
+
 const readFileResultSchema = {
   type: "object",
   additionalProperties: false,
@@ -167,16 +205,17 @@ export const toolDefinitions = [
     description: "生成 workspace manifest。",
     risk: "read",
     approval: "none",
-    implementationStatus: "schema_only",
+    implementationStatus: "executor_implemented",
     argumentSchema: {
       type: "object",
       additionalProperties: false,
       properties: {
-        root: { type: "string" },
+        root: { type: "string", minLength: 1 },
         respectGitignore: { type: "boolean" },
+        maxEntries: { type: "integer", minimum: 1 },
       },
     },
-    resultSchema: statusResultSchema,
+    resultSchema: workspaceManifestResultSchema,
   },
   {
     name: "read_file",

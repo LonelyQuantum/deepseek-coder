@@ -92,8 +92,39 @@ const WORKSPACE_MANIFEST_ARGUMENT_SCHEMA: &str = r#"{
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "root": { "type": "string" },
-    "respectGitignore": { "type": "boolean" }
+    "root": { "type": "string", "minLength": 1 },
+    "respectGitignore": { "type": "boolean" },
+    "maxEntries": { "type": "integer", "minimum": 1 }
+  }
+}"#;
+
+const WORKSPACE_MANIFEST_RESULT_SCHEMA: &str = r#"{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "summary", "manifestHash", "summaryMarkdown", "manifest"],
+  "properties": {
+    "status": { "type": "string", "enum": ["ok", "failed"] },
+    "summary": { "type": "string" },
+    "errorCode": { "type": "string" },
+    "manifestHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "summaryMarkdown": { "type": "string" },
+    "manifest": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["manifestVersion", "manifestHash", "maxEntries", "totalDiscoveredFiles", "includedFiles", "entries", "omitted"],
+      "properties": {
+        "manifestVersion": { "type": "integer", "minimum": 1 },
+        "manifestHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "workspaceRoot": { "type": "string" },
+        "scanRoot": { "type": "string" },
+        "maxEntries": { "type": "integer", "minimum": 1 },
+        "totalDiscoveredFiles": { "type": "integer", "minimum": 0 },
+        "includedFiles": { "type": "integer", "minimum": 0 },
+        "totalSizeBytes": { "type": "integer", "minimum": 0 },
+        "entries": { "type": "array", "items": { "type": "object" } },
+        "omitted": { "type": "array", "items": { "type": "object" } }
+      }
+    }
   }
 }"#;
 
@@ -217,9 +248,9 @@ pub const BUILTIN_TOOLS: &[ToolDefinition] = &[
         "Generate the workspace manifest.",
         RiskLevel::Read,
         ApprovalRequirement::None,
-        ToolImplementationStatus::SchemaOnly,
+        ToolImplementationStatus::ExecutorImplemented,
         WORKSPACE_MANIFEST_ARGUMENT_SCHEMA,
-        STATUS_RESULT_SCHEMA,
+        WORKSPACE_MANIFEST_RESULT_SCHEMA,
     ),
     ToolDefinition::new(
         ToolName::ReadFile,
@@ -360,6 +391,32 @@ mod tests {
             read_file
                 .result_schema
                 .contains("\"pattern\": \"^[0-9a-f]{64}$\"")
+        );
+    }
+
+    #[test]
+    fn workspace_manifest_result_schema_exposes_manifest_metadata() {
+        let workspace_manifest = find_builtin_tool(ToolName::WorkspaceManifest.as_str())
+            .expect("workspace_manifest tool must be registered");
+
+        assert_eq!(
+            workspace_manifest.implementation_status,
+            super::ToolImplementationStatus::ExecutorImplemented
+        );
+        assert!(
+            workspace_manifest
+                .result_schema
+                .contains("\"manifestHash\"")
+        );
+        assert!(
+            workspace_manifest
+                .result_schema
+                .contains("\"summaryMarkdown\"")
+        );
+        assert!(
+            workspace_manifest
+                .result_schema
+                .contains("\"pattern\": \"^sha256:[0-9a-f]{64}$\"")
         );
     }
 
