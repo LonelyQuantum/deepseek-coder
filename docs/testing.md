@@ -111,8 +111,10 @@ cargo demo-live
 
 Phase 2 的默认 CI 应优先覆盖离线、确定性测试：
 
+- `read_file` 摘要元数据：验证完整文件 `sha256`、`sizeBytes`、行范围读取和 JSON camelCase 序列化。
+- Context Capsule renderer：验证 `StablePrefix`、`DynamicPrelude`、`TurnSuffix` 三层分组、显式 placement override、`content == rendered` 兼容字段，以及修改 `TurnSuffix` 不改变 `StablePrefix`。
 - manifest fixture：固定工作区结构、ignore 规则、`sha256`、`manifestHash`、`maxEntries` 和 omitted reason。
-- Context Capsule renderer：同一输入两次渲染完全一致；修改 `TurnSuffix` 不改变 `StablePrefix`。
+- Context Capsule renderer 后续扩展：在 manifest v0 接入后继续验证同一输入两次渲染完全一致，以及 manifest summary 的稳定序列化。
 - token estimator metadata：`utf8_bytes` 和校准估算器都必须明确 `exact=false`，不能误报为真实 tokenizer。
 - attachment fixture：路径越界、重复 attachment、超大小 selection / explicit content 和 diagnostic 形状错误均有稳定错误或省略原因。
 - JSON Schema validation：tool call arguments 在 typed deserialization 前通过 schema validator。

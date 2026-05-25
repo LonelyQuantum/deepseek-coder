@@ -62,7 +62,7 @@ Phase 1 已实现基础 Context Builder，详见 `docs/context-capsule.md`。它
 
 当前 token 统计使用 `utf8_bytes` 估算器，不是 DeepSeek tokenizer 的精确 token 数。Context Builder 已接入基础 Agent Turn Loop，并会写入 `context.built` run log 事件；基础 RPC 事件桥接已能把该事件转换为 JSON-RPC notification，`TurnEventSink` 已能在事件写入后立即输出，RPC request loop 和真实 Turn Loop handler 已接入。
 
-Phase 2 将把基础 builder 升级为结构化 `ContextCapsule`：先构建可审计的 sections、sources、token report 和 deterministic renderer，再按 `CachePlacement::{StablePrefix, DynamicPrelude, TurnSuffix}` 生成 provider 输入。workspace manifest、attachments、provider cache usage 和大仓库 token 预算均接入该结构，而不是各自拼接 prompt 字符串。
+Phase 2a-2 已把基础 builder 升级为结构化 `ContextCapsule`：先构建可审计的 sections、sources 和 token report，再由 `context_capsule.v1` deterministic renderer 按 `CachePlacement::{StablePrefix, DynamicPrelude, TurnSuffix}` 生成 provider 输入。现阶段 `content` 是兼容别名，始终等于 `rendered`；workspace manifest、attachments、provider cache usage 和大仓库 token 预算后续都应接入该结构，而不是各自拼接 prompt 字符串。
 
 ## 本地工具执行
 

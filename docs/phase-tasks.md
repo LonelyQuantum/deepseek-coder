@@ -51,8 +51,8 @@
 
 | 状态 | 任务 | 来源 | 说明 |
 | --- | --- | --- | --- |
-| [ ] | Phase 2a-1：`read_file` 增加 `sha256` / `sizeBytes` | `docs/tool-system.md`、`docs/context-capsule.md` | 第一轮低风险入口；为 manifest 文件摘要和工具结果一致性校验提供基础。 |
-| [ ] | Phase 2a-2：定义 `ContextCapsule` / `ContextSection` / `CachePlacement` 和稳定 renderer | `README.md`、`docs/context-capsule.md`、`docs/agent-core.md` | 明确 `StablePrefix`、`DynamicPrelude`、`TurnSuffix` 三层布局，和现有 priority 排序解耦。 |
+| [x] | Phase 2a-1：`read_file` 增加 `sha256` / `sizeBytes` | `docs/tool-system.md`、`docs/context-capsule.md` | 已完成：`read_file` 返回完整文件的 `sha256` 和 `sizeBytes`，Rust/TypeScript result schema 与单元测试已同步。 |
+| [x] | Phase 2a-2：定义 `ContextCapsule` / `ContextSection` / `CachePlacement` 和稳定 renderer | `README.md`、`docs/context-capsule.md`、`docs/agent-core.md` | 已完成：三层布局与 kind priority 解耦，`context_capsule.v1` renderer 可稳定生成 provider 输入，`content` 兼容别名与 `rendered` 保持一致。 |
 | [ ] | Phase 2a-3：workspace manifest v0 自动构建 | `README.md`、`docs/context-capsule.md`、`docs/tool-system.md` | 结构化 JSON、canonical `manifestHash`、默认 `maxEntries=500`、硬安全排除、默认工程排除、`.gitignore` + `.deepseek-coderignore`。 |
 | [ ] | Phase 2a-4：Context Builder 接入 manifest summary 和扩展 `context.built` payload | `docs/context-capsule.md`、`docs/json-rpc-protocol.md` | 输出 stable/dynamic/suffix token、included/omitted source、manifest hash 和截断原因；补离线 fixture 测试。 |
 | [ ] | Phase 2b-1：TokenEstimator trait 与 `CalibratedEstimator` | `docs/roadmap.md`、`docs/context-capsule.md`、`docs/deepseek-api-adapter.md` | 默认保持 `utf8_bytes`；校准数据只本地保存；无官方 tokenizer 或等价证明前 `exact=false`。 |

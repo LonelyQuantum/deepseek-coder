@@ -93,8 +93,10 @@ pub struct ToolDefinition {
 - `path`
 - `content`
 - `lineCount`
+- `sha256`：完整文件 UTF-8 内容的 SHA-256 小写 hex。
+- `sizeBytes`：完整文件 UTF-8 内容的字节数。
 
-Phase 2a 会把 `sha256` 和 `sizeBytes` 加入 `read_file` 结果，供 workspace manifest、Context Capsule 来源审计和工具结果一致性校验使用。
+`startLine` / `endLine` 只影响返回的 `content` 片段；`sha256` 和 `sizeBytes` 始终描述完整文件，供 workspace manifest、Context Capsule 来源审计和工具结果一致性校验使用。
 
 ## 内置工具
 
@@ -296,7 +298,7 @@ fixture 中的 `tools` 被当作无序集合校验；测试会按工具名规整
 
 `WorkspaceToolExecutor` 当前提供：
 
-- `read_file`：只读取 workspace 内 UTF-8 文本文件，支持 1-based 行范围。
+- `read_file`：只读取 workspace 内 UTF-8 文本文件，支持 1-based 行范围，并返回完整文件的 `sha256` 和 `sizeBytes`。
 - `search`：通过 `rg --json --fixed-strings` 搜索，默认排除 `.git/`、`.secrets/`、`.secret/`、`.env*`、`node_modules/` 和 `target/`。
 - `apply_patch`：应用受限 unified diff，要求 patch 实际文件集合与 `expectedFiles` 完全一致；执行时会先在内存中完成全部文件的 hunk 校验和 staging，再统一写盘，因此解析或 hunk mismatch 不会留下部分文件已修改的状态；成功后返回 reverse patch。
 - `shell`：在 workspace 内执行非交互式命令，支持超时，返回 exit code、stdout、stderr 和耗时。
@@ -330,7 +332,7 @@ fixture 中的 `tools` 被当作无序集合校验；测试会按工具名规整
 
 ### `read_file`
 
-- Phase 2a 增加 `sha256` 和 `sizeBytes`，并补充对应单元测试。
+- Phase 2a-1 已增加 `sha256` 和 `sizeBytes`，并补充对应单元测试。
 - 后续增加编码信息和内容截断元数据。
 - 支持按 token 预算或语法边界读取片段，避免长文件被随意切断。
 - 增加文件快照 id，方便 run log 复现“读取时看到的内容”。
