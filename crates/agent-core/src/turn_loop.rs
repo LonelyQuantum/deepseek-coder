@@ -1,7 +1,7 @@
-use std::{future::Future, path::Path, pin::Pin};
+use std::{collections::HashSet, future::Future, path::Path, pin::Pin, time::Instant};
 
 use futures_util::{Stream, StreamExt};
-use serde::de::DeserializeOwned;
+use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
 use thiserror::Error;
 
@@ -20,10 +20,13 @@ use crate::{
     run_log::{RunLogError, RunLogEvent, RunLogWriter},
     tool::{ToolDefinition, ToolName, find_builtin_tool},
     tool_execution::{
-        ApplyPatchArgs, ShellArgs, ToolExecutionError, ToolStatus, WorkspaceManifestArgs,
-        WorkspaceToolExecutor, redacted_tool_result_value,
+        ApplyPatchArgs, ReadFileArgs, ShellArgs, ToolExecutionError, ToolStatus,
+        WorkspaceManifestArgs, WorkspaceToolExecutor, redacted_tool_result_value,
     },
 };
+
+const DEFAULT_MAX_ATTACHMENTS: usize = 32;
+const DEFAULT_MAX_ATTACHMENT_BYTES: u64 = 256 * 1024;
 
 #[derive(Debug)]
 pub struct AgentTurnLoop<P, A> {
@@ -299,6 +302,7 @@ where
     {
         let cancellation_token = request.cancellation_token.clone();
         cancellation_token.check()?;
+        let started = Instant::now();
         let mut stream = self
             .provider
             .complete_stream(request)
@@ -346,6 +350,14 @@ where
 
         cancellation_token.check()?;
         let response = response.ok_or(AgentTurnLoopError::ProviderStreamEndedWithoutCompletion)?;
+        append_provider_completed_event(
+            run_log,
+            event_sink,
+            turn_id,
+            iteration,
+            started.elapsed().as_millis(),
+            &response.completion,
+        )?;
         Ok(CollectedProviderTurn {
             response,
             emitted_content_delta,
@@ -395,8 +407,183 @@ where
         for item in &input.context_items {
             builder.add_item(item.clone());
         }
+        for item in self.attachment_context_items(input)? {
+            builder.add_item(item);
+        }
 
         Ok(builder.build()?)
+    }
+
+    fn attachment_context_items(
+        &self,
+        input: &AgentTurnInput,
+    ) -> Result<Vec<ContextItem>, AgentTurnLoopError> {
+        if input.attachments.len() > self.config.max_attachments {
+            return Err(AgentTurnLoopError::TooManyAttachments {
+                count: input.attachments.len(),
+                max_attachments: self.config.max_attachments,
+            });
+        }
+
+        let mut items = Vec::new();
+        let mut seen = HashSet::new();
+        for (index, attachment) in input.attachments.iter().enumerate() {
+            input.cancellation_token.check()?;
+            let key = attachment.dedup_key(index);
+            if !seen.insert(key.clone()) {
+                return Err(AgentTurnLoopError::DuplicateAttachment {
+                    index,
+                    signature: attachment_dedup_signature(&key),
+                });
+            }
+
+            let item = match attachment.kind {
+                TurnAttachmentKind::File => {
+                    self.file_attachment_context_item(index, attachment, &input.cancellation_token)?
+                }
+                TurnAttachmentKind::Selection => self.text_attachment_context_item(
+                    index,
+                    attachment,
+                    ContextItemKind::Selection,
+                    "selection attachment",
+                    "attached editor selection from agent.sendTurn",
+                )?,
+                TurnAttachmentKind::ExplicitContent => self.text_attachment_context_item(
+                    index,
+                    attachment,
+                    ContextItemKind::ExplicitContent,
+                    "explicit content attachment",
+                    "explicit content supplied with agent.sendTurn",
+                )?,
+                TurnAttachmentKind::Diagnostic => self.text_attachment_context_item(
+                    index,
+                    attachment,
+                    ContextItemKind::Diagnostic,
+                    "diagnostic attachment",
+                    "diagnostic supplied with agent.sendTurn",
+                )?,
+            };
+            items.push(item);
+        }
+
+        Ok(items)
+    }
+
+    fn file_attachment_context_item(
+        &self,
+        index: usize,
+        attachment: &TurnAttachment,
+        cancellation_token: &CancellationToken,
+    ) -> Result<ContextItem, AgentTurnLoopError> {
+        let path = attachment_path(index, attachment)?;
+        if attachment.text.is_some() {
+            return Err(AgentTurnLoopError::InvalidAttachment {
+                index,
+                detail: "file attachments must not include inline text".to_owned(),
+            });
+        }
+
+        let result = self.tools.read_file_with_cancellation(
+            ReadFileArgs {
+                path: path.clone(),
+                start_line: attachment
+                    .range
+                    .map(|range| validate_text_range(index, range))
+                    .transpose()?
+                    .map(|range| range.start_line as usize),
+                end_line: attachment.range.map(|range| range.end_line as usize),
+            },
+            cancellation_token,
+        )?;
+        ensure_attachment_size(
+            index,
+            result.content.len() as u64,
+            self.config.max_attachment_bytes,
+        )?;
+
+        let mut content = String::new();
+        content.push_str("Attachment-Kind: file\n");
+        content.push_str("SHA-256: ");
+        content.push_str(&result.sha256);
+        content.push('\n');
+        content.push_str("Size-Bytes: ");
+        content.push_str(&result.size_bytes.to_string());
+        content.push('\n');
+        content.push_str("Line-Count: ");
+        content.push_str(&result.line_count.to_string());
+        content.push('\n');
+        if let Some(range) = attachment.range {
+            content.push_str("Range: ");
+            content.push_str(&range.label());
+            content.push('\n');
+        }
+        content.push('\n');
+        content.push_str(&result.content);
+
+        Ok(
+            ContextItem::file(path, content, "attached file from agent.sendTurn")
+                .with_title(attachment_title(index, "file", attachment.range)),
+        )
+    }
+
+    fn text_attachment_context_item(
+        &self,
+        index: usize,
+        attachment: &TurnAttachment,
+        kind: ContextItemKind,
+        label: &str,
+        reason: &str,
+    ) -> Result<ContextItem, AgentTurnLoopError> {
+        let text = attachment_text(index, attachment)?;
+        ensure_attachment_size(index, text.len() as u64, self.config.max_attachment_bytes)?;
+
+        match kind {
+            ContextItemKind::Selection | ContextItemKind::Diagnostic => {
+                let _ = attachment_path(index, attachment)?;
+                let range =
+                    attachment
+                        .range
+                        .ok_or_else(|| AgentTurnLoopError::InvalidAttachment {
+                            index,
+                            detail: "selection and diagnostic attachments require a range"
+                                .to_owned(),
+                        })?;
+                validate_text_range(index, range)?;
+            }
+            ContextItemKind::ExplicitContent
+                if attachment.path.is_some() || attachment.range.is_some() =>
+            {
+                return Err(AgentTurnLoopError::InvalidAttachment {
+                    index,
+                    detail: "explicit_content attachments must not include path or range"
+                        .to_owned(),
+                });
+            }
+            ContextItemKind::ExplicitContent => {}
+            _ => {}
+        }
+
+        let mut content = String::new();
+        content.push_str("Attachment-Kind: ");
+        content.push_str(kind_name_for_attachment(kind));
+        content.push('\n');
+        if let Some(range) = attachment.range {
+            content.push_str("Range: ");
+            content.push_str(&range.label());
+            content.push('\n');
+        }
+        content.push('\n');
+        content.push_str(text);
+
+        let mut item = ContextItem::required(kind, content, reason).with_title(attachment_title(
+            index,
+            label,
+            attachment.range,
+        ));
+        if let Some(path) = attachment.path.as_deref() {
+            item = item.with_path(path);
+        }
+        Ok(item)
     }
 
     fn execute_tool_call(
@@ -755,11 +942,122 @@ where
     Ok(event)
 }
 
+fn append_provider_completed_event<L>(
+    run_log: &mut L,
+    event_sink: &mut (impl TurnEventSink + ?Sized),
+    turn_id: &str,
+    iteration: usize,
+    duration_ms: u128,
+    completion: &TurnProviderCompletion,
+) -> Result<RunLogEvent, AgentTurnLoopError>
+where
+    L: RunLogWriter + ?Sized,
+{
+    let duration_ms = u64::try_from(duration_ms).unwrap_or(u64::MAX);
+    let mut payload = serde_json::to_value(completion)?;
+    if let Value::Object(payload) = &mut payload {
+        payload.insert("iteration".to_owned(), json!(iteration));
+        payload.insert("durationMs".to_owned(), json!(duration_ms));
+    }
+    append_turn_event(
+        run_log,
+        event_sink,
+        "provider.completed",
+        Some(turn_id.to_owned()),
+        payload,
+    )
+}
+
+fn attachment_path(
+    index: usize,
+    attachment: &TurnAttachment,
+) -> Result<String, AgentTurnLoopError> {
+    let path = attachment
+        .path
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .ok_or_else(|| AgentTurnLoopError::InvalidAttachment {
+            index,
+            detail: "attachment path is required".to_owned(),
+        })?;
+    Ok(path.to_owned())
+}
+
+fn attachment_text(index: usize, attachment: &TurnAttachment) -> Result<&str, AgentTurnLoopError> {
+    attachment
+        .text
+        .as_deref()
+        .filter(|text| !text.trim().is_empty())
+        .ok_or_else(|| AgentTurnLoopError::InvalidAttachment {
+            index,
+            detail: "attachment text is required".to_owned(),
+        })
+}
+
+fn ensure_attachment_size(
+    index: usize,
+    size_bytes: u64,
+    max_bytes: u64,
+) -> Result<(), AgentTurnLoopError> {
+    if size_bytes > max_bytes {
+        return Err(AgentTurnLoopError::AttachmentTooLarge {
+            index,
+            size_bytes,
+            max_bytes,
+        });
+    }
+    Ok(())
+}
+
+fn validate_text_range(index: usize, range: TextRange) -> Result<TextRange, AgentTurnLoopError> {
+    if range.start_line == 0
+        || range.start_column == 0
+        || range.end_line == 0
+        || range.end_column == 0
+        || range.end_line < range.start_line
+        || (range.end_line == range.start_line && range.end_column < range.start_column)
+    {
+        return Err(AgentTurnLoopError::InvalidAttachment {
+            index,
+            detail: format!("invalid text range {}", range.label()),
+        });
+    }
+
+    Ok(range)
+}
+
+fn attachment_title(index: usize, label: &str, range: Option<TextRange>) -> String {
+    match range {
+        Some(range) => format!("{label} #{} ({})", index + 1, range.label()),
+        None => format!("{label} #{}", index + 1),
+    }
+}
+
+fn kind_name_for_attachment(kind: ContextItemKind) -> &'static str {
+    match kind {
+        ContextItemKind::Selection => "selection",
+        ContextItemKind::ExplicitContent => "explicit_content",
+        ContextItemKind::Diagnostic => "diagnostic",
+        ContextItemKind::File => "file",
+        _ => "attachment",
+    }
+}
+
+fn attachment_dedup_signature(key: &str) -> String {
+    crate::hashing::sha256_hex(key.as_bytes())
+        .chars()
+        .take(16)
+        .collect()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AgentTurnLoopConfig {
     pub max_input_tokens: u64,
     pub max_model_turns: usize,
     pub reasoning_mode: ReasoningContentMode,
+    pub max_attachments: usize,
+    pub max_attachment_bytes: u64,
 }
 
 impl Default for AgentTurnLoopConfig {
@@ -768,6 +1066,8 @@ impl Default for AgentTurnLoopConfig {
             max_input_tokens: 1_000_000,
             max_model_turns: 8,
             reasoning_mode: ReasoningContentMode::ThinkingEnabled,
+            max_attachments: DEFAULT_MAX_ATTACHMENTS,
+            max_attachment_bytes: DEFAULT_MAX_ATTACHMENT_BYTES,
         }
     }
 }
@@ -778,6 +1078,7 @@ pub struct AgentTurnInput {
     pub user_task: String,
     pub mode: AgentRunMode,
     pub context_items: Vec<ContextItem>,
+    pub attachments: Vec<TurnAttachment>,
     pub cancellation_token: CancellationToken,
 }
 
@@ -788,6 +1089,7 @@ impl AgentTurnInput {
             user_task: user_task.into(),
             mode: AgentRunMode::Edit,
             context_items: Vec::new(),
+            attachments: Vec::new(),
             cancellation_token: CancellationToken::new(),
         }
     }
@@ -802,9 +1104,121 @@ impl AgentTurnInput {
         self
     }
 
+    pub fn with_attachment(mut self, attachment: TurnAttachment) -> Self {
+        self.attachments.push(attachment);
+        self
+    }
+
+    pub fn with_attachments(mut self, attachments: Vec<TurnAttachment>) -> Self {
+        self.attachments = attachments;
+        self
+    }
+
     pub fn with_cancellation_token(mut self, cancellation_token: CancellationToken) -> Self {
         self.cancellation_token = cancellation_token;
         self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TurnAttachment {
+    pub kind: TurnAttachmentKind,
+    pub path: Option<String>,
+    pub range: Option<TextRange>,
+    pub text: Option<String>,
+}
+
+impl TurnAttachment {
+    pub fn file(path: impl Into<String>) -> Self {
+        Self {
+            kind: TurnAttachmentKind::File,
+            path: Some(path.into()),
+            range: None,
+            text: None,
+        }
+    }
+
+    pub fn selection(path: impl Into<String>, range: TextRange, text: impl Into<String>) -> Self {
+        Self {
+            kind: TurnAttachmentKind::Selection,
+            path: Some(path.into()),
+            range: Some(range),
+            text: Some(text.into()),
+        }
+    }
+
+    pub fn explicit_content(text: impl Into<String>) -> Self {
+        Self {
+            kind: TurnAttachmentKind::ExplicitContent,
+            path: None,
+            range: None,
+            text: Some(text.into()),
+        }
+    }
+
+    pub fn diagnostic(path: impl Into<String>, range: TextRange, text: impl Into<String>) -> Self {
+        Self {
+            kind: TurnAttachmentKind::Diagnostic,
+            path: Some(path.into()),
+            range: Some(range),
+            text: Some(text.into()),
+        }
+    }
+
+    fn dedup_key(&self, index: usize) -> String {
+        let mut key = format!("{:?}|", self.kind);
+        key.push_str(self.path.as_deref().unwrap_or("<no-path>"));
+        key.push('|');
+        if let Some(range) = self.range {
+            key.push_str(&range.label());
+        } else {
+            key.push_str("<no-range>");
+        }
+        key.push('|');
+        if let Some(text) = self.text.as_deref() {
+            key.push_str(&crate::hashing::sha256_hex(text.as_bytes()));
+        } else {
+            key.push_str("<no-text>");
+        }
+        if self.kind == TurnAttachmentKind::ExplicitContent && self.text.is_none() {
+            key.push('|');
+            key.push_str(&index.to_string());
+        }
+        key
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TurnAttachmentKind {
+    File,
+    Selection,
+    ExplicitContent,
+    Diagnostic,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TextRange {
+    pub start_line: u32,
+    pub start_column: u32,
+    pub end_line: u32,
+    pub end_column: u32,
+}
+
+impl TextRange {
+    pub const fn new(start_line: u32, start_column: u32, end_line: u32, end_column: u32) -> Self {
+        Self {
+            start_line,
+            start_column,
+            end_line,
+            end_column,
+        }
+    }
+
+    fn label(self) -> String {
+        format!(
+            "{}:{}-{}:{}",
+            self.start_line, self.start_column, self.end_line, self.end_column
+        )
     }
 }
 
@@ -855,6 +1269,7 @@ pub struct TurnProviderResponse {
     pub content: Option<String>,
     pub reasoning_content: Option<String>,
     pub tool_calls: Vec<ChatToolCall>,
+    pub completion: TurnProviderCompletion,
 }
 
 impl TurnProviderResponse {
@@ -863,6 +1278,7 @@ impl TurnProviderResponse {
             content: Some(content.into()),
             reasoning_content: None,
             tool_calls: Vec::new(),
+            completion: TurnProviderCompletion::fixture(TurnProviderFinishReason::Stop),
         }
     }
 
@@ -875,7 +1291,13 @@ impl TurnProviderResponse {
             content,
             reasoning_content,
             tool_calls,
+            completion: TurnProviderCompletion::fixture(TurnProviderFinishReason::ToolCalls),
         }
+    }
+
+    pub fn with_completion(mut self, completion: TurnProviderCompletion) -> Self {
+        self.completion = completion;
+        self
     }
 }
 
@@ -922,6 +1344,76 @@ impl TurnProviderDelta {
                 .as_deref()
                 .is_none_or(|reasoning_content| reasoning_content.is_empty())
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnProviderCompletion {
+    pub model: String,
+    pub finish_reason: TurnProviderFinishReason,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<TurnProviderUsage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub streaming: Option<TurnProviderStreamingSummary>,
+}
+
+impl TurnProviderCompletion {
+    pub fn new(model: impl Into<String>, finish_reason: TurnProviderFinishReason) -> Self {
+        Self {
+            model: model.into(),
+            finish_reason,
+            usage: None,
+            streaming: None,
+        }
+    }
+
+    pub fn fixture(finish_reason: TurnProviderFinishReason) -> Self {
+        Self::new("fixture", finish_reason)
+    }
+
+    pub fn with_usage(mut self, usage: TurnProviderUsage) -> Self {
+        self.usage = Some(usage);
+        self
+    }
+
+    pub fn with_streaming(mut self, streaming: TurnProviderStreamingSummary) -> Self {
+        self.streaming = Some(streaming);
+        self
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnProviderFinishReason {
+    Stop,
+    Length,
+    ToolCalls,
+    ContentFilter,
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnProviderUsage {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_hit_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_miss_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnProviderStreamingSummary {
+    pub chunk_count: u64,
+    pub tool_call_delta_count: u64,
 }
 
 pub type TurnProviderStream =
@@ -1064,6 +1556,21 @@ pub enum AgentTurnLoopError {
     },
     #[error("tool result serialization failed: {0}")]
     Serialization(#[from] serde_json::Error),
+    #[error("too many attachments: got {count}, max {max_attachments}")]
+    TooManyAttachments {
+        count: usize,
+        max_attachments: usize,
+    },
+    #[error("duplicate attachment at index {index}: signature {signature}")]
+    DuplicateAttachment { index: usize, signature: String },
+    #[error("invalid attachment at index {index}: {detail}")]
+    InvalidAttachment { index: usize, detail: String },
+    #[error("attachment at index {index} is too large: {size_bytes} bytes, max {max_bytes}")]
+    AttachmentTooLarge {
+        index: usize,
+        size_bytes: u64,
+        max_bytes: u64,
+    },
     #[error("assistant tool call response is missing reasoning_content while thinking is enabled")]
     MissingAssistantReasoningContent,
     #[error("approval `{approval_id}` rejected for tool call `{tool_call_id}`: {reason}")]
@@ -1108,6 +1615,10 @@ impl AgentTurnLoopError {
             Self::UnsupportedTool { .. } => "E_UNSUPPORTED_TOOL",
             Self::InvalidToolArguments { .. } => "E_INVALID_TOOL_ARGUMENTS",
             Self::Serialization(_) => "E_SERIALIZATION",
+            Self::TooManyAttachments { .. }
+            | Self::DuplicateAttachment { .. }
+            | Self::InvalidAttachment { .. }
+            | Self::AttachmentTooLarge { .. } => "E_INVALID_ATTACHMENT",
             Self::MissingAssistantReasoningContent => "E_MISSING_REASONING_CONTENT",
             Self::ApprovalRejected { .. } => "E_APPROVAL_REJECTED",
             Self::ApprovalCanceled { .. } => "E_APPROVAL_CANCELED",
