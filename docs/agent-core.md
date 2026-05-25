@@ -62,7 +62,7 @@ Phase 1 已实现基础 Context Builder，详见 `docs/context-capsule.md`。它
 
 当前 token 统计通过 `TokenEstimator` trait 接入，默认使用 `utf8_bytes` 估算器，不是 DeepSeek tokenizer 的精确 token 数；Phase 2b 已提供 `CalibratedEstimator`，基于 provider usage 样本拟合但仍报告 `exact=false`。Context Builder 已接入基础 Agent Turn Loop，并会写入 `context.built` run log 事件；基础 RPC 事件桥接已能把该事件转换为 JSON-RPC notification，`TurnEventSink` 已能在事件写入后立即输出，RPC request loop 和真实 Turn Loop handler 已接入。
 
-Phase 2a/2b 已把基础 builder 升级为结构化 `ContextCapsule`：先构建可审计的 sections、sources 和 token report，再由 `context_capsule.v1` deterministic renderer 按 `CachePlacement::{StablePrefix, DynamicPrelude, TurnSuffix}` 生成 provider 输入。现阶段 `content` 是兼容别名，始终等于 `rendered`；Turn Loop 已自动生成 workspace manifest summary 并放入 `StablePrefix`；`context.built` 会输出 `stablePrefixHash`、稳定前缀预算和 estimator metadata。attachments、provider cache usage 和大仓库 token 预算后续都应接入该结构，而不是各自拼接 prompt 字符串。
+Phase 2a/2b/2c 已把基础 builder 升级为结构化 `ContextCapsule`：先构建可审计的 sections、sources 和 token report，再由 `context_capsule.v1` deterministic renderer 按 `CachePlacement::{StablePrefix, DynamicPrelude, TurnSuffix}` 生成 provider 输入。现阶段 `content` 是兼容别名，始终等于 `rendered`；Turn Loop 已自动生成 workspace manifest summary 并放入 `StablePrefix`；`context.built` 会输出 `stablePrefixHash`、稳定前缀预算和 estimator metadata。`agent.sendTurn.attachments` 已接入 file、selection、explicit_content 和 diagnostic；provider usage/cache/stream 摘要通过独立 `provider.completed` 事件进入 run log。
 
 ## 本地工具执行
 
@@ -98,6 +98,6 @@ Phase 1 已通过以下闭环验收：
 - 将 TUI/VS Code 接入真实 RPC pending approval 队列。
 - 增加 tool call 参数 JSON Schema 校验层，补足当前仅依赖 Rust 反序列化的基础校验。
 - 实现命令风险分类器和更强 sandbox，区分普通测试命令、网络访问、删除、reset、发布等高风险操作。
-- 扩展 Phase 2 Context Capsule：实现校准 token estimator、attachments、`provider.completed` usage/cache 事件和大仓库验收。
+- 扩展 Phase 2 Context Capsule：继续推进大仓库验收、超预算解释、Run Log 输出体积控制和 provider cache hit/miss 手动样本。
 - 在工具结果进入 run log 或下一轮 prompt 前增加统一大小限制。
 - 扩展 `crates/agent-rpc` 的 client 断连取消和多 active run 管理，供 CLI/TUI/VS Code 共享。

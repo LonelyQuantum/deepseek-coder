@@ -137,9 +137,9 @@ Phase 2 的 1M Context Capsule 按 4 个增量轮次推进：
    - [x] 按 `CachePlacement::{StablePrefix, DynamicPrelude, TurnSuffix}` 构建缓存友好 prompt，并输出 `stablePrefixHash` 与稳定前缀预算。
 
 3. **Phase 2c：Attachments、provider summary 与 cache 实验**
-   - 接入 `agent.sendTurn.attachments` 的 file、selection/explicit content、diagnostic。
-   - 新增 `provider.completed` 事件，记录模型、duration、usage、cache hit/miss 和 stream 摘要。
-   - 建立 DeepSeek cache hit/miss ignored live experiment。
+   - [x] 接入 `agent.sendTurn.attachments` 的 file、selection/explicit_content、diagnostic。
+   - [x] 新增 `provider.completed` 事件，记录模型、duration、usage、cache hit/miss 和 stream 摘要。
+   - [x] 建立 DeepSeek cache hit/miss ignored live experiment 的基础解析路径；更大重复前缀样本归入 Phase 2d 前增强。
 
 4. **Phase 2d：大仓库验收与体积控制**
    - 200K、500K、900K 样例仓库 token 预算和 Context Capsule 验收。

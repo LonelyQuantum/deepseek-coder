@@ -113,7 +113,7 @@ crates/agent-core/src/run_log.rs
 
 ## 后续增强
 
-- Phase 2c 增加独立 `provider.completed` 事件，记录 provider usage、cache hit/miss、duration 和 streaming 摘要。
+- Phase 2c 已增加独立 `provider.completed` 事件，记录 provider usage、cache hit/miss、duration 和 streaming 摘要；后续应补事件 payload 强类型 fixture 和日志体积控制。
 - 扩展 Agent Turn Loop 接入，自动记录 patch proposal、验证命令、取消和恢复事件。
 - 增加事件 payload 的强类型 schema，并与 `docs/json-rpc-protocol.md` 和 `packages/protocol` 做兼容性测试。
 - 增加日志轮转或分片策略，防止长时间运行和高频 streaming 事件让单个 `events.jsonl` 过大。

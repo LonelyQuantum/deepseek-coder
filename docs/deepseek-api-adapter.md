@@ -204,8 +204,8 @@ cargo test -p deepseek-coder-agent-core --test deepseek_api_live -- --ignored --
 - 抽象 provider capability model，显式表达 thinking、tool_choice、FIM、stream usage、cache usage、最大上下文和最大输出长度等能力，而不是把规则散落在调用处。
 - 增加更细的错误分类，用于区分认证失败、限速、无效参数、服务端错误、网络中断和被截断的 stream；分类只用于明确提示和重试决策，不做静默兜底。
 - 继续收集不同模型、不同工具 schema 和 thinking/tool-call 组合下的 streaming delta 形态，必要时补更细的兼容性测试。
-- 增加针对 cache usage 字段的测试和上下文缓存统计记录。
-- Phase 2c 通过独立 `provider.completed` 事件记录模型名、duration、usage、`prompt_cache_hit_tokens`、`prompt_cache_miss_tokens` 和 streaming 摘要；该事件不与 `provider.requested` 混用。
+- Phase 2c 已增加针对 cache usage 字段的离线测试、ignored live cache usage 实验入口，以及 `provider.completed` 上下文缓存统计记录。
+- Phase 2c 已通过独立 `provider.completed` 事件记录模型名、duration、usage、`prompt_cache_hit_tokens`、`prompt_cache_miss_tokens` 和 streaming 摘要；该事件不与 `provider.requested` 混用。
 - Phase 2b 已实现 `CalibratedEstimator` 的离线拟合与 metadata；Phase 2c 再通过 `provider.completed` 从真实 API usage 收集本地校准数据。校准样本只保存在本地，不进入仓库或公开 run log。
 - 增加 provider 配置来源抽象：环境变量、本地配置文件、系统密钥管理器和测试专用 `.secrets/`，并统一保证 API Key 不进入 Debug、错误、run log 或文档示例。
 - 保持真实联网测试为手动 opt-in，并继续控制 `max_tokens`，避免 CI 或普通开发命令产生不可预期的 API 消耗。

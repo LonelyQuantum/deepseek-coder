@@ -618,7 +618,7 @@ extension.ts
 - [x] Phase 2a-3：Workspace Manifest v0。已实现结构化 JSON、canonical `manifestHash`、默认 `maxEntries=500`、硬安全排除、默认工程排除、`.gitignore` + `.deepseek-coderignore`，并把 `workspace_manifest` 工具切换为可执行。
 - [x] Phase 2a-4：Context Builder manifest 接入。已在 Turn Loop 中自动生成 manifest summary 并放入 `StablePrefix`，同时扩展 `context.built` 事件输出 section token、manifest hash 和截断原因。
 - [x] Phase 2b：TokenEstimator 与稳定前缀。已建立 `TokenEstimator` trait、默认 `utf8_bytes` 估算器和 `CalibratedEstimator`，并在 `context.built` 中输出 `stablePrefixHash`、稳定前缀预算和校准 metadata；修改 `TurnSuffix` 不改变 `StablePrefix` 已有离线测试覆盖。
-- [ ] Phase 2c：Attachments、provider summary 和 cache 实验。让 `agent.sendTurn.attachments` 接入 file/selection/diagnostic 等来源，新增 `provider.completed` 事件记录 usage/cache/stream 摘要，并提供 DeepSeek cache hit/miss ignored live 验收。
+- [x] Phase 2c：Attachments、provider summary 和 cache 实验。已让 `agent.sendTurn.attachments` 接入 file/selection/explicit_content/diagnostic 等来源，并加入数量、大小、路径和重复来源校验；Turn Loop 会写入 `provider.completed`，记录模型、duration、usage、cache hit/miss 和 streaming 摘要；DeepSeek streaming usage/cache 解析已有离线和 live 基础，后续 Phase 2d 前可继续扩展 cache hit/miss 手动实验样本。
 - [ ] Phase 2d：大仓库验收、超预算解释、Run Log 体积控制和 JSON Schema 校验层。覆盖 200K、500K、900K 样例仓库，统一输出截断/脱敏边界，并在 typed deserialization 前执行 tool call JSON Schema 校验。
 
 验收标准：
