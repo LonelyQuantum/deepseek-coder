@@ -19,8 +19,10 @@ use deepseek_coder_agent_core::{
     },
     turn_loop::{
         AgentRunMode, AgentTurnInput, AgentTurnLoop, AgentTurnLoopConfig, AgentTurnLoopError,
-        ApprovalDecision, ApprovalPolicy, ApprovalPolicyError, TurnApprovalRequest, TurnEventSink,
-        TurnEventSinkError, TurnProvider,
+        ApprovalDecision, ApprovalPolicy, ApprovalPolicyError, TextRange as CoreTextRange,
+        TurnApprovalRequest, TurnAttachment as CoreTurnAttachment,
+        TurnAttachmentKind as CoreTurnAttachmentKind, TurnEventSink, TurnEventSinkError,
+        TurnProvider,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -255,10 +257,11 @@ pub struct TurnAttachment {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum TurnAttachmentKind {
     File,
     Selection,
+    ExplicitContent,
     Diagnostic,
 }
 
@@ -288,6 +291,27 @@ impl From<RpcRunMode> for AgentRunMode {
             RpcRunMode::Ask => Self::Ask,
         }
     }
+}
+
+fn core_turn_attachment_from_rpc(
+    attachment: &TurnAttachment,
+) -> Result<CoreTurnAttachment, AgentRpcHandlerError> {
+    Ok(CoreTurnAttachment {
+        kind: match attachment.kind {
+            TurnAttachmentKind::File => CoreTurnAttachmentKind::File,
+            TurnAttachmentKind::Selection => CoreTurnAttachmentKind::Selection,
+            TurnAttachmentKind::ExplicitContent => CoreTurnAttachmentKind::ExplicitContent,
+            TurnAttachmentKind::Diagnostic => CoreTurnAttachmentKind::Diagnostic,
+        },
+        path: attachment.path.clone(),
+        range: attachment.range.map(|range| CoreTextRange {
+            start_line: range.start_line,
+            start_column: range.start_column,
+            end_line: range.end_line,
+            end_column: range.end_column,
+        }),
+        text: attachment.text.clone(),
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -607,13 +631,6 @@ where
             ));
         }
 
-        if !params.attachments.is_empty() {
-            return Err(AgentRpcHandlerError::new(
-                JSON_RPC_INVALID_PARAMS,
-                "sendTurn attachments are not supported by the current RPC Turn Loop handler",
-            ));
-        }
-
         let workspace_root = self.workspace_root_path()?;
         let run_id = match params.run_id.clone() {
             Some(run_id) => run_id,
@@ -626,8 +643,14 @@ where
             .store
             .create_run(run_id.clone())
             .map_err(map_run_log_error)?;
+        let attachments = params
+            .attachments
+            .iter()
+            .map(core_turn_attachment_from_rpc)
+            .collect::<Result<Vec<_>, _>>()?;
         let input = AgentTurnInput::new(turn_id.clone(), params.message.clone())
-            .with_mode(params.mode.into());
+            .with_mode(params.mode.into())
+            .with_attachments(attachments);
 
         self.active_run = Some(spawn_active_run(
             run_id.clone(),
@@ -3045,8 +3068,9 @@ mod tests {
     }
 
     #[test]
-    fn turn_loop_rpc_handler_rejects_attachments_and_pending_approval_methods() {
+    fn turn_loop_rpc_handler_accepts_file_attachments_and_rejects_missing_approval() {
         let workspace = TestWorkspace::new("rpc");
+        workspace.write("README.md", "attached README\n");
         let mut handler = AgentTurnLoopRpcHandler::new(final_provider_factory);
         handler
             .initialize(
@@ -3055,7 +3079,7 @@ mod tests {
             )
             .expect("handler should initialize");
 
-        let send_error = handler
+        let send_output = handler
             .send_turn(SendTurnParams {
                 run_id: Some("run_with_attachment".to_owned()),
                 message: "Read attached file".to_owned(),
@@ -3067,8 +3091,21 @@ mod tests {
                     text: None,
                 }],
             })
-            .expect_err("attachments are not supported yet");
-        assert_eq!(send_error.code, JSON_RPC_INVALID_PARAMS);
+            .expect("file attachments should be accepted");
+        let context_built = send_output
+            .events
+            .iter()
+            .find(|event| event.event_type == "context.built")
+            .expect("context.built should be emitted");
+        assert!(
+            context_built.payload["includedSources"]
+                .as_array()
+                .expect("includedSources should be an array")
+                .iter()
+                .any(|source| {
+                    source["kind"] == json!("file") && source["path"] == json!("README.md")
+                })
+        );
 
         let approval_error = handler
             .approve(ApproveParams {
