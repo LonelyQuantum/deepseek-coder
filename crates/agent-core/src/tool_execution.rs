@@ -904,19 +904,6 @@ fn count_lines(content: &str) -> usize {
     }
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let digest = Sha256::digest(bytes);
-    let mut output = String::with_capacity(digest.len() * 2);
-
-    for byte in digest {
-        output.push(HEX[(byte >> 4) as usize] as char);
-        output.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-
-    output
-}
-
 fn select_line_range(
     content: &str,
     line_count: usize,
@@ -1282,10 +1269,11 @@ fn diff_file_paths(diff: &str) -> Vec<String> {
 mod tests {
     use super::{
         ApplyPatchArgs, GitDiffArgs, GitStatusArgs, ReadFileArgs, SearchArgs, ShellArgs,
-        ShellResult, ToolExecutionError, ToolStatus, WorkspaceToolExecutor,
-        redacted_tool_result_value, sha256_hex,
+        ShellResult, ToolExecutionError, ToolStatus, WorkspaceManifestArgs, WorkspaceToolExecutor,
+        redacted_tool_result_value,
     };
     use crate::cancellation::CancellationToken;
+    use crate::hashing::sha256_hex;
     use crate::run_log::REDACTED_VALUE;
     use crate::test_helpers::TestWorkspace;
 

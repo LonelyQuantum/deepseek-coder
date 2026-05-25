@@ -3,6 +3,7 @@
 pub mod approval;
 pub mod cancellation;
 pub mod context;
+mod hashing;
 pub mod provider;
 pub mod reasoning;
 pub mod run_log;
