@@ -12,6 +12,7 @@ pub mod test_helpers;
 pub mod tool;
 pub mod tool_execution;
 pub mod turn_loop;
+pub mod workspace_manifest;
 
 pub const PROJECT_NAME: &str = "deepseek-coder";
 pub const DEFAULT_STATE_DIR: &str = ".deepseek-coder";

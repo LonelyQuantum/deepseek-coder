@@ -8,7 +8,10 @@ use thiserror::Error;
 use crate::{
     approval::{ApprovalRequirement, RiskLevel},
     cancellation::{CancellationError, CancellationToken},
-    context::{ContextBuildError, ContextBuilder, ContextBuilderConfig, ContextItem},
+    context::{
+        ContextBuildError, ContextBuilder, ContextBuilderConfig, ContextItem, ContextItemKind,
+        ContextManifestOmitted, ContextManifestReport,
+    },
     provider::deepseek_api::{ChatMessage, ChatToolCall},
     reasoning::{
         ReasoningContentError, ReasoningContentMode, ReasoningContentState,
@@ -17,8 +20,8 @@ use crate::{
     run_log::{RunLogError, RunLogEvent, RunLogWriter},
     tool::{ToolDefinition, ToolName, find_builtin_tool},
     tool_execution::{
-        ApplyPatchArgs, ShellArgs, ToolExecutionError, ToolStatus, WorkspaceToolExecutor,
-        redacted_tool_result_value,
+        ApplyPatchArgs, ShellArgs, ToolExecutionError, ToolStatus, WorkspaceManifestArgs,
+        WorkspaceToolExecutor, redacted_tool_result_value,
     },
 };
 
@@ -355,6 +358,39 @@ where
     ) -> Result<crate::context::ContextCapsule, AgentTurnLoopError> {
         let mut builder =
             ContextBuilder::new(ContextBuilderConfig::new(self.config.max_input_tokens));
+        if !input
+            .context_items
+            .iter()
+            .any(|item| item.kind == ContextItemKind::WorkspaceManifest)
+        {
+            let manifest = self.tools.workspace_manifest_with_cancellation(
+                WorkspaceManifestArgs {
+                    root: None,
+                    respect_gitignore: Some(true),
+                    max_entries: None,
+                },
+                &input.cancellation_token,
+            )?;
+            builder.set_manifest_report(ContextManifestReport {
+                manifest_hash: manifest.manifest.manifest_hash.clone(),
+                max_entries: manifest.manifest.max_entries,
+                total_discovered_files: manifest.manifest.total_discovered_files,
+                included_files: manifest.manifest.included_files,
+                omitted: manifest
+                    .manifest
+                    .omitted
+                    .iter()
+                    .map(|omitted| ContextManifestOmitted {
+                        reason: omitted.reason.as_str().to_owned(),
+                        count: omitted.count,
+                    })
+                    .collect(),
+            });
+            builder.add_item(ContextItem::workspace_manifest(
+                manifest.summary_markdown,
+                "stable workspace manifest summary",
+            ));
+        }
         builder.add_item(ContextItem::user_task(input.user_task.clone()));
         for item in &input.context_items {
             builder.add_item(item.clone());
@@ -393,10 +429,21 @@ where
         )?;
 
         match definition.name {
-            ToolName::WorkspaceManifest => Err(AgentTurnLoopError::UnsupportedTool {
-                tool_call_id: tool_call.id.clone(),
-                name: tool_name.to_owned(),
-            }),
+            ToolName::WorkspaceManifest => {
+                let args = parse_tool_arguments(tool_call)?;
+                self.execute_without_approval(
+                    tool_call,
+                    context,
+                    args,
+                    run_log,
+                    event_sink,
+                    |tools, args, cancellation_token| {
+                        let result =
+                            tools.workspace_manifest_with_cancellation(args, cancellation_token)?;
+                        tool_record(result.status, result.summary.clone(), Vec::new(), &result)
+                    },
+                )
+            }
             ToolName::ReadFile => {
                 let args = parse_tool_arguments(tool_call)?;
                 self.execute_without_approval(
@@ -1403,6 +1450,30 @@ mod tests {
             ]
         );
         assert_eq!(events[0].payload["workspaceRoot"], workspace_root);
+        assert!(
+            events[2].payload["includedSources"]
+                .as_array()
+                .expect("includedSources should be array")
+                .iter()
+                .any(|source| source["kind"] == json!("workspace_manifest"))
+        );
+        assert!(
+            events[2].payload["manifest"]["manifestHash"]
+                .as_str()
+                .is_some_and(|hash| hash.starts_with("sha256:"))
+        );
+        assert!(
+            events[2].payload["stablePrefixTokens"]
+                .as_u64()
+                .unwrap_or_default()
+                > 0
+        );
+        assert!(
+            events[2].payload["turnSuffixTokens"]
+                .as_u64()
+                .unwrap_or_default()
+                > 0
+        );
         assert_eq!(events[6].payload["name"], "read_file");
         assert_eq!(
             events[6].payload["result"]["content"],

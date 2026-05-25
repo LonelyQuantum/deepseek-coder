@@ -13,6 +13,7 @@ const UTF8_BYTE_ESTIMATOR: &str = "utf8_bytes";
 pub struct ContextBuilder {
     config: ContextBuilderConfig,
     items: Vec<ContextItem>,
+    manifest_report: Option<ContextManifestReport>,
 }
 
 impl ContextBuilder {
@@ -20,6 +21,7 @@ impl ContextBuilder {
         Self {
             config,
             items: Vec::new(),
+            manifest_report: None,
         }
     }
 
@@ -30,6 +32,16 @@ impl ContextBuilder {
 
     pub fn with_item(mut self, item: ContextItem) -> Self {
         self.items.push(item);
+        self
+    }
+
+    pub fn set_manifest_report(&mut self, manifest_report: ContextManifestReport) -> &mut Self {
+        self.manifest_report = Some(manifest_report);
+        self
+    }
+
+    pub fn with_manifest_report(mut self, manifest_report: ContextManifestReport) -> Self {
+        self.manifest_report = Some(manifest_report);
         self
     }
 
@@ -112,6 +124,7 @@ impl ContextBuilder {
             content: rendered.clone(),
             rendered,
             sections,
+            manifest_report: self.manifest_report.clone(),
             token_report: ContextTokenReport {
                 input_tokens,
                 max_input_tokens: self.config.max_input_tokens,
@@ -155,19 +168,63 @@ pub struct ContextCapsule {
     pub sections: Vec<ContextSection>,
     pub rendered: String,
     pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manifest_report: Option<ContextManifestReport>,
     pub token_report: ContextTokenReport,
 }
 
 impl ContextCapsule {
     pub fn context_built_payload(&self) -> Value {
-        json!({
+        let mut payload = json!({
             "inputTokens": self.token_report.input_tokens,
             "maxInputTokens": self.token_report.max_input_tokens,
             "estimator": self.token_report.estimator,
+            "stablePrefixTokens": self.section_tokens(CachePlacement::StablePrefix),
+            "dynamicPreludeTokens": self.section_tokens(CachePlacement::DynamicPrelude),
+            "turnSuffixTokens": self.section_tokens(CachePlacement::TurnSuffix),
+            "sections": self.sections.iter().map(|section| {
+                json!({
+                    "placement": section.placement,
+                    "tokens": section.tokens,
+                    "itemCount": section.items.len(),
+                })
+            }).collect::<Vec<_>>(),
             "includedSources": self.token_report.included_sources,
             "omittedSources": self.token_report.omitted_sources,
-        })
+        });
+        if let Some(manifest_report) = &self.manifest_report
+            && let Value::Object(payload) = &mut payload
+        {
+            payload.insert("manifest".to_owned(), json!(manifest_report));
+        }
+
+        payload
     }
+
+    fn section_tokens(&self, placement: CachePlacement) -> u64 {
+        self.sections
+            .iter()
+            .find(|section| section.placement == placement)
+            .map(|section| section.tokens)
+            .unwrap_or(0)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextManifestReport {
+    pub manifest_hash: String,
+    pub max_entries: usize,
+    pub total_discovered_files: usize,
+    pub included_files: usize,
+    pub omitted: Vec<ContextManifestOmitted>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextManifestOmitted {
+    pub reason: String,
+    pub count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -339,6 +396,11 @@ impl ContextItem {
 
     pub fn project_rules(content: impl Into<String>, reason: impl Into<String>) -> Self {
         Self::required(ContextItemKind::ProjectRules, content, reason)
+    }
+
+    pub fn workspace_manifest(content: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self::optional(ContextItemKind::WorkspaceManifest, content, reason)
+            .with_cache_placement(CachePlacement::StablePrefix)
     }
 
     pub fn file(
@@ -790,7 +852,8 @@ fn validate_command_id(command_id: &str) -> Result<String, ContextBuildError> {
 mod tests {
     use super::{
         CachePlacement, ContextBuildError, ContextBuilder, ContextBuilderConfig, ContextCapsule,
-        ContextItem, ContextItemKind, ContextOmissionReason, render_context_section,
+        ContextItem, ContextItemKind, ContextManifestOmitted, ContextManifestReport,
+        ContextOmissionReason, render_context_section,
     };
     use crate::run_log::REDACTED_VALUE;
 
@@ -1072,6 +1135,21 @@ mod tests {
     #[test]
     fn context_built_payload_matches_token_report_shape() {
         let capsule = ContextBuilder::default()
+            .with_manifest_report(ContextManifestReport {
+                manifest_hash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    .to_owned(),
+                max_entries: 500,
+                total_discovered_files: 3,
+                included_files: 2,
+                omitted: vec![ContextManifestOmitted {
+                    reason: "max_entries_exceeded".to_owned(),
+                    count: 1,
+                }],
+            })
+            .with_item(ContextItem::workspace_manifest(
+                "Workspace Manifest v0\nManifest-Hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+                "stable manifest summary",
+            ))
             .with_item(ContextItem::user_task("summarize this repository"))
             .build()
             .expect("context should build");
@@ -1082,7 +1160,17 @@ mod tests {
         assert_eq!(payload["estimator"]["name"], "utf8_bytes");
         assert_eq!(
             payload["includedSources"][0]["kind"],
-            serde_json::json!("user_task")
+            serde_json::json!("workspace_manifest")
+        );
+        assert!(payload["stablePrefixTokens"].as_u64().unwrap_or_default() > 0);
+        assert!(payload["turnSuffixTokens"].as_u64().unwrap_or_default() > 0);
+        assert_eq!(
+            payload["manifest"]["manifestHash"],
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(
+            payload["manifest"]["omitted"][0]["reason"],
+            "max_entries_exceeded"
         );
     }
 
