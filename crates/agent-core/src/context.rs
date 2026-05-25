@@ -936,6 +936,7 @@ mod tests {
         ContextOmissionReason, render_context_section,
     };
     use crate::run_log::REDACTED_VALUE;
+    use crate::token_estimator::{CalibratedEstimator, TokenCalibrationSample};
 
     #[test]
     fn context_builder_orders_sources_and_reports_tokens() {
@@ -975,6 +976,7 @@ mod tests {
         );
         assert_eq!(capsule.token_report.estimator.name, "utf8_bytes");
         assert!(!capsule.token_report.estimator.exact);
+        assert_eq!(capsule.token_report.stable_prefix_budget_ratio_ppm, 300_000);
         assert_eq!(capsule.token_report.included_sources.len(), 3);
         assert_eq!(capsule.sections.len(), 2);
         assert_eq!(capsule.sections[0].placement, CachePlacement::StablePrefix);
@@ -1062,7 +1064,36 @@ mod tests {
             rendered_section(&first, CachePlacement::StablePrefix),
             rendered_section(&second, CachePlacement::StablePrefix)
         );
+        assert_eq!(first.stable_prefix_hash(), second.stable_prefix_hash());
         assert_ne!(first.rendered, second.rendered);
+    }
+
+    #[test]
+    fn context_builder_uses_configured_calibrated_estimator() {
+        let estimator = CalibratedEstimator::from_samples([
+            TokenCalibrationSample::new(100, 50).expect("sample"),
+            TokenCalibrationSample::new(200, 100).expect("sample"),
+        ])
+        .expect("calibration should fit");
+        let capsule =
+            ContextBuilder::new(ContextBuilderConfig::new(10_000).with_token_estimator(estimator))
+                .with_item(ContextItem::user_task("summarize the project"))
+                .build()
+                .expect("context should build");
+
+        assert_eq!(capsule.token_report.estimator.name, "calibrated_utf8");
+        assert!(!capsule.token_report.estimator.exact);
+        assert_eq!(
+            capsule
+                .token_report
+                .estimator
+                .calibration
+                .as_ref()
+                .expect("calibration metadata")
+                .sample_count,
+            2
+        );
+        assert!(capsule.token_report.input_tokens < capsule.rendered.len() as u64);
     }
 
     #[test]
@@ -1103,6 +1134,37 @@ mod tests {
     }
 
     #[test]
+    fn context_builder_omits_optional_stable_prefix_items_over_stable_prefix_budget() {
+        let capsule = ContextBuilder::new(
+            ContextBuilderConfig::new(10_000).with_stable_prefix_budget_ratio_ppm(10_000),
+        )
+        .with_item(ContextItem::project_rules(
+            "short stable rules",
+            "project rules",
+        ))
+        .with_item(ContextItem::workspace_manifest(
+            "x".repeat(500),
+            "optional stable manifest",
+        ))
+        .with_item(ContextItem::user_task("review the workspace"))
+        .build()
+        .expect("context should build while omitting optional stable item");
+
+        assert_eq!(capsule.token_report.omitted_sources.len(), 1);
+        assert_eq!(
+            capsule.token_report.omitted_sources[0].omission_reason,
+            ContextOmissionReason::StablePrefixBudgetExceeded
+        );
+        assert!(
+            capsule
+                .token_report
+                .included_sources
+                .iter()
+                .all(|source| source.source.kind != ContextItemKind::WorkspaceManifest)
+        );
+    }
+
+    #[test]
     fn context_builder_fails_when_required_item_exceeds_budget() {
         let err = ContextBuilder::new(ContextBuilderConfig::new(16))
             .with_item(ContextItem::required(
@@ -1116,6 +1178,21 @@ mod tests {
         assert!(matches!(
             err,
             ContextBuildError::RequiredContextExceedsBudget { .. }
+        ));
+    }
+
+    #[test]
+    fn context_builder_rejects_invalid_stable_prefix_budget_ratio() {
+        let err = ContextBuilder::new(
+            ContextBuilderConfig::new(10_000).with_stable_prefix_budget_ratio_ppm(0),
+        )
+        .with_item(ContextItem::user_task("hello"))
+        .build()
+        .expect_err("ratio must be positive");
+
+        assert!(matches!(
+            err,
+            ContextBuildError::InvalidStablePrefixBudgetRatio { ratio_ppm: 0 }
         ));
     }
 
@@ -1238,6 +1315,13 @@ mod tests {
         assert_eq!(payload["inputTokens"], capsule.token_report.input_tokens);
         assert_eq!(payload["maxInputTokens"], 1_000_000);
         assert_eq!(payload["estimator"]["name"], "utf8_bytes");
+        assert_eq!(payload["stablePrefixBudgetRatioPpm"], 300_000);
+        assert_eq!(payload["stablePrefixBudgetTokens"], 300_000);
+        assert!(
+            payload["stablePrefixHash"]
+                .as_str()
+                .is_some_and(|hash| hash.starts_with("sha256:"))
+        );
         assert_eq!(
             payload["includedSources"][0]["kind"],
             serde_json::json!("workspace_manifest")
