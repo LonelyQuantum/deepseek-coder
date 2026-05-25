@@ -422,7 +422,7 @@ export interface TextRange {
 }
 
 export interface TurnAttachment {
-  readonly kind: "file" | "selection" | "diagnostic";
+  readonly kind: "file" | "selection" | "explicit_content" | "diagnostic";
   readonly path?: string;
   readonly range?: TextRange;
   readonly text?: string;
@@ -568,6 +568,29 @@ export interface AssistantDeltaPayload {
   readonly text: string;
   readonly iteration?: number;
   readonly stream?: boolean;
+}
+
+export interface ProviderUsagePayload {
+  readonly promptTokens?: number;
+  readonly completionTokens?: number;
+  readonly totalTokens?: number;
+  readonly promptCacheHitTokens?: number;
+  readonly promptCacheMissTokens?: number;
+  readonly reasoningTokens?: number;
+}
+
+export interface ProviderStreamingPayload {
+  readonly chunkCount: number;
+  readonly toolCallDeltaCount: number;
+}
+
+export interface ProviderCompletedPayload {
+  readonly iteration: number;
+  readonly model: string;
+  readonly durationMs: number;
+  readonly finishReason: "stop" | "length" | "tool_calls" | "content_filter" | "error";
+  readonly usage?: ProviderUsagePayload;
+  readonly streaming?: ProviderStreamingPayload;
 }
 
 export interface ToolApprovalRequiredPayload {

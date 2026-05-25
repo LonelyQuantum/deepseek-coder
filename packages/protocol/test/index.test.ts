@@ -18,11 +18,13 @@ import {
   type CancelResult,
   type ListRunsParams,
   type ListRunsResult,
+  type ProviderCompletedPayload,
   type RunSummary,
   type RejectParams,
   type RejectResult,
   type ToolApprovalRequiredPayload,
   type ToolApprovalResolvedPayload,
+  type TurnAttachment,
   approvalStateTransitions,
   canTransitionApprovalState,
   jsonRpcVersion,
@@ -221,6 +223,63 @@ test("run summary params and results use stable protocol fields", () => {
   assert.equal(result.runs[0]?.runId, "run_1");
   assert.equal(result.runs[0]?.status, "completed");
   assert.equal(result.runs[0]?.lastSeq, 8);
+});
+
+test("attachments and provider completed payload use phase 2c fields", () => {
+  const attachments = [
+    {
+      kind: "file",
+      path: "README.md",
+    },
+    {
+      kind: "selection",
+      path: "src/lib.rs",
+      range: {
+        startLine: 1,
+        startColumn: 1,
+        endLine: 3,
+        endColumn: 1,
+      },
+      text: "pub fn demo() {}",
+    },
+    {
+      kind: "explicit_content",
+      text: "acceptance criteria",
+    },
+    {
+      kind: "diagnostic",
+      path: "src/lib.rs",
+      range: {
+        startLine: 2,
+        startColumn: 5,
+        endLine: 2,
+        endColumn: 9,
+      },
+      text: "warning: unused function",
+    },
+  ] satisfies readonly TurnAttachment[];
+  const providerCompleted = {
+    iteration: 1,
+    model: "deepseek-v4-pro",
+    durationMs: 42,
+    finishReason: "stop",
+    usage: {
+      promptTokens: 100,
+      completionTokens: 20,
+      totalTokens: 120,
+      promptCacheHitTokens: 64,
+      promptCacheMissTokens: 36,
+      reasoningTokens: 8,
+    },
+    streaming: {
+      chunkCount: 3,
+      toolCallDeltaCount: 1,
+    },
+  } satisfies ProviderCompletedPayload;
+
+  assert.equal(attachments[2]?.kind, "explicit_content");
+  assert.equal(providerCompleted.usage.promptCacheHitTokens, 64);
+  assert.equal(providerCompleted.streaming.toolCallDeltaCount, 1);
 });
 
 test("tool registry contains every declared tool exactly once", () => {
