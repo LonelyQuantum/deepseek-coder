@@ -58,11 +58,11 @@ TypeScript workspace：
 - Rust workspace、TypeScript workspace、VS Code 插件骨架和共享协议包已建立。
 - `agent-core` 已包含 provider adapter、流式解析、streaming tool call delta accumulator、`reasoning_content` 状态机、工具/审批基础类型、协作式取消 token、read/search/apply_patch/shell/git 基础执行层、基础 run log、基础 Context Builder、基础 Agent Turn Loop、async / streaming `TurnProvider` 边界和 `TurnEventSink` 实时事件出口。
 - `agent-rpc` 已实现 Run Log 事件到 `agent.event` JSON-RPC notification 的基础 stdio 桥接，`StdioEventBridge` 可直接作为 `TurnEventSink` 使用；同时已实现 `agent.initialize` / `agent.sendTurn` / `agent.approve` / `agent.reject` / `agent.cancel` / `agent.resume` / `agent.listRuns` 的双向 request loop、真实 `AgentTurnLoopRpcHandler` 和单 active run 的 RPC pending approval 等待队列。
-- CLI 已实现 `run` 最小闭环，能直接调用 Agent Core、通过 DeepSeek streaming wrapper 驱动真实 provider，在 `--json` 模式下随着 run log 写入实时输出 JSON-RPC event，失败时输出 JSON-RPC error response，并支持 stdin/stderr 交互式审批；CLI `rpc` 子命令已能作为 stdio RPC 入口驱动真实 handler；TUI 已有审批 prompt 状态机但仍未接入完整 ratatui 界面；VS Code 插件已有 RPC server 启动监管、JSON-RPC request client 和 modal approval adapter，但仍未接入完整 Chat UI、事件渲染、审批回传和 diff editor。
+- CLI 已实现 `run` 最小闭环，能直接调用 Agent Core、通过 DeepSeek streaming wrapper 驱动真实 provider，在 `--json` 模式下随着 run log 写入实时输出 JSON-RPC event，失败时输出 JSON-RPC error response，并支持 stdin/stderr 交互式审批；CLI `rpc` 子命令已能作为 stdio RPC 入口驱动真实 handler；VS Code 插件已有 RPC server 启动监管、JSON-RPC request client 和 modal approval adapter，但仍未接入完整 Chat UI、事件渲染、审批回传和 diff editor；TUI 已有审批 prompt 状态机但仍未接入完整 ratatui 界面，优先级排在 VS Code 核心体验之后。
 
 ## 后续增强
 
-- 补齐 RPC 全双工异步 run 执行队列、client 断连取消，并把 TUI/VS Code 审批原语接入真实 UI。
+- 补齐 RPC 全双工异步 run 执行队列、client 断连取消，并优先把 VS Code 审批原语接入真实 UI；TUI 后续复用同一管线。
 - 扩展 `crates/agent-rpc`，让 CLI/TUI/VS Code 通过同一套 JSON-RPC 协议调用 Agent Core。
 - 明确 `.deepseek-coder/` 本地状态的目录结构、版本迁移策略和脱敏规则。
 - 增加端到端测试，覆盖 CLI/TUI/VS Code 对同一任务产生一致 run log 的能力。

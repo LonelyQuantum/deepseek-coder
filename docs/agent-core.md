@@ -95,7 +95,7 @@ Phase 1 已通过以下闭环验收：
 ## 后续增强
 
 - 实现 RPC 全双工事件 writer 队列，让 `agent.sendTurn` 可以更早返回 accepted，并在后台持续推送事件。
-- 将 TUI/VS Code 接入真实 RPC pending approval 队列。
+- 优先将 VS Code 接入真实 RPC pending approval 队列，TUI 后续复用同一协议和审批模型。
 - 实现命令风险分类器和更强 sandbox，区分普通测试命令、网络访问、删除、reset、发布等高风险操作。
 - 扩展 DeepSeek cache hit/miss 手动样本，在大上下文重复前缀场景下记录更清晰的 live 验收过程。
 - 扩展 `crates/agent-rpc` 的 client 断连取消和多 active run 管理，供 CLI/TUI/VS Code 共享。

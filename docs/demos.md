@@ -1,6 +1,6 @@
 # 展示型 Demo
 
-本文件集中记录所有用于“看过程和结果”的展示型 demo。它们服务于人工观察，不是默认 CI 的必跑项；新增 demo 时应同时更新本文件和 `.cargo/config.toml` 中的短命令。
+本文件集中记录所有用于“看过程和结果”的展示型 demo。它们服务于人工观察，不是默认 CI 的必跑项；新增 demo 时应同时更新本文件。只有 demo 已实现并可运行时，才同步把短命令加入 `.cargo/config.toml`，避免文档里出现尚不可用的命令。
 
 ## 运行约定
 
@@ -13,12 +13,25 @@
 $env:DEEPSEEK_CODER_KEEP_DEMO_WORKSPACE = "1"
 ```
 
-## Demo 清单
+## 当前可运行 Demo
 
 | Demo | 推荐命令 | 是否联网 | 用途 |
 | --- | --- | --- | --- |
 | Fixture Agent 交互转录 | `cargo demo` | 否 | 稳定展示工具调用、写入审批、补丁执行、验证命令和 run log 汇总。 |
 | Live DeepSeek Agent 交互转录 | `cargo demo-live` | 是 | 使用真实 DeepSeek provider 展示读取文件、应用补丁、运行验证和最终总结。 |
+
+## 已确定待实现 Demo
+
+这些 demo 已纳入 Phase 2e 合并主线前收尾计划。命令名是目标短命令，只有实现后才会加入 `.cargo/config.toml`。Phase 2 合并主线前应至少完成这些离线展示入口，并增强 `cargo demo-live` 的 provider summary 展示。
+
+| Demo | 目标短命令 | 是否联网 | 优先级 | 用途 |
+| --- | --- | --- | --- | --- |
+| Context Capsule 结构展示 | `cargo demo-context` | 否 | P0 | 展示 manifest summary、Context Capsule sections、included/omitted sources 和 `context.built` payload。 |
+| Run Log 截断展示 | `cargo demo-truncation` | 否 | P0 | 展示超大工具输出如何被脱敏、截断，并通过 `runLogTruncation` 区分截断、空输出和缺失字段。 |
+| Tool Schema 错误展示 | `cargo demo-schema` | 否 | P0/P1 | 展示模型 tool call arguments 在 typed deserialization 前被 JSON Schema 拒绝，并输出稳定 `E_INVALID_TOOL_ARGUMENTS`。 |
+| Context Capsule ASCII 可视化 | `cargo demo-context-visual` | 否 | P1 | 用纯文本条形图展示 StablePrefix、DynamicPrelude、TurnSuffix token 分布，并并排输出原始 JSON。 |
+| Attachment 上下文展示 | `cargo demo-attachment` | 否 | P1/P2 | 展示 file、selection、explicit_content、diagnostic attachments 如何进入 Context Builder，以及大小、重复和路径限制。 |
+| Live Provider Summary 展示 | 复用 `cargo demo-live` | 是 | P1 | 在现有联网 demo 中展示 `provider.completed` 的模型、duration、usage、cache hit/miss 和 stream 摘要。 |
 
 ## Fixture Agent 交互转录
 

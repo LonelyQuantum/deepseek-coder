@@ -1,6 +1,6 @@
 # 编辑器插件（VS Code Extension）
 
-状态：早期 Phase 4 前置项已实现基础命令、审批弹窗 adapter、RPC server 启动监管、初始化握手和 JSON-RPC request client；尚未实现完整 Chat UI、事件渲染、真实审批回传和 diff editor 集成。
+状态：Phase 3 优先开发项。基础命令、审批弹窗 adapter、RPC server 启动监管、初始化握手和 JSON-RPC request client 已实现；尚未实现完整 Chat UI、事件渲染、真实审批回传和 diff editor 集成。
 
 VS Code 插件是 `deepseek-coder` 的一等前端。它必须通过 JSON-RPC server 复用 Rust Agent Core，而不是在 TypeScript 侧重新实现 agent loop、context builder、provider 调用或 tool execution。
 
@@ -70,16 +70,25 @@ VS Code 插件是 `deepseek-coder` 的一等前端。它必须通过 JSON-RPC se
 
 短期目标是让 VS Code 插件成为 Agent Core 的薄前端，而不是追赶成熟通用插件的全部功能。
 
-Agent Core MVP 只要求 Rust Core / RPC server 提供稳定协议和事件流；VS Code 插件工作属于早期 Phase 4 前置集成，不阻塞 Agent Core MVP 验收。
+Agent Core MVP 只要求 Rust Core / RPC server 提供稳定协议和事件流；VS Code 插件工作从 Phase 3 开始成为主要交付物。TUI 继续保留，但排在 VS Code 核心体验之后。
 
-早期 Phase 4 顺序：
+Phase 3 P0 顺序：
 
 1. 启动并监管 Rust Agent RPC Server。已完成基础实现。
 2. 渲染 `agent.event` 事件流。当前 manager 已能转发事件，但 UI 尚未消费。
-3. 通过 JSON-RPC request client 回传用户动作。当前已完成通用 `sendRequest()`，尚未接入具体 UI。
-4. 展示审批请求和命令输出摘要。当前已有 modal approval adapter，尚未接入真实 RPC 事件。
-5. 使用 VS Code 原生 diff editor 展示 patch。
-6. 读取 Problems 面板诊断并交给 Agent Core。
+3. 支持文本输入并通过 `agent.sendTurn` 发送真实 turn。
+4. 通过 JSON-RPC request client 回传用户动作。当前已完成通用 `sendRequest()`，尚未接入具体 UI。
+5. 展示审批请求和命令输出摘要。当前已有 modal approval adapter，尚未接入真实 RPC 事件。
+6. 使用 VS Code 原生 diff editor 展示 patch，并为 hunk 级审批预留交互边界。
+7. 展示 Run List / resume 和 Context Capsule 可视化。
+
+Phase 4 P1/P2 深度集成：
+
+1. 读取 Problems 面板诊断并交给 Agent Core。
+2. Terminal command approval 展示命令、cwd、风险等级、输出摘要和持久化选项。
+3. provider、model、预算、审批策略和 RPC 命令配置界面。
+4. FIM completion preview。
+5. VSIX alpha / pre-release 打包与安装说明。
 
 在这些能力稳定前，不在插件侧重复实现 context builder、tool execution 或 provider 调用。
 

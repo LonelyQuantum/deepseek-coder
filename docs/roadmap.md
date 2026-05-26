@@ -1,6 +1,6 @@
 # 路线图
 
-状态：草案，Phase 1 Agent Core MVP、合并主线前离线最终验收和 Phase 2 的 1M Context Capsule 收敛已完成，后续随 Phase 3 TUI 与共享 RPC 事件队列实现持续更新。
+状态：草案，Phase 1 Agent Core MVP、合并主线前离线最终验收和 Phase 2 的 1M Context Capsule 核心收敛已完成；Phase 2 合并主线前还需要完成展示型 demo 扩展，之后随 Phase 3 VS Code 插件核心与共享 RPC 事件队列实现持续更新。
 
 本文档把 README 中的大阶段拆成更可执行的优先级。README 保留项目入口和高层计划；这里记录跨模块的落地顺序、取舍和验收重点。具体任务的阶段、状态和来源统一登记在 `docs/phase-tasks.md`，阶段条目标记完成前应同步检查并更新该索引。
 
@@ -70,8 +70,10 @@
 
 下一步：
 
-- 进入 Phase 2 Context Capsule。
+- 完成 Phase 2e 展示型 demo 扩展，作为 Phase 2 合并主线前验收。
+- 随后进入 Phase 3 VS Code 插件核心与共享 RPC 交互管线。
 - RPC 全双工事件 writer 队列已归入 Phase 3 共享 RPC 交互管线；当前 pending approval 已真实等待，但事件仍在 request 返回时 flush，后续让 `agent.sendTurn` 更早返回 accepted 并持续推送事件。
+- TUI 保留为正式前端，但优先级调整到 VS Code 核心体验之后，复用同一套 RPC 事件管线和审批模型。
 
 Phase 1 收官后优化池：
 
@@ -80,13 +82,13 @@ Phase 1 收官后优化池：
 - Run Log 体积与隐私控制：为工具输出、verification 输出和 provider 摘要增加统一大小限制、截断原因和可导出的脱敏包边界。
 - Provider summary 事件：把 usage、cache 命中、模型名、stream 统计等写成稳定 schema，避免只依赖 provider 私有响应。
 - 本地环境诊断：增加 doctor 类检查，显式验证 `rg`、`git`、`cargo`、Node/pnpm、API key 来源和 workspace 信任状态；不做隐式搜索 backend 降级。
-- 展示型 demo 扩展：在已有 `cargo demo` / `cargo demo-live` 基础上，后续补 RPC 审批、JSON 错误、run list/resume 等展示场景，统一登记到 `docs/demos.md`。
+- 展示型 demo 扩展：在已有 `cargo demo` / `cargo demo-live` 基础上，于 Phase 2 合并主线前补齐 context、truncation、schema、context-visual、attachment 和 provider summary 等展示场景，统一登记到 `docs/demos.md`。
 
 P0 不追求：
 
-- 完整 TUI。
-- 完整 VS Code Sidebar。
-- TUI/VS Code 真实前端 UI 接入。
+- 完整 VS Code Sidebar：已移入 Phase 3。
+- 完整 TUI：已移入 Phase 5。
+- VS Code/TUI 真实前端 UI 接入：Phase 3 优先 VS Code，Phase 5 再补齐 TUI。
 - MCP 生态。
 - 多 provider UI。
 - 大仓库 1M token 基准。
@@ -103,6 +105,8 @@ P0 不追求：
 ## P1：编辑器核心体验
 
 目标：让 VS Code 插件成为 Agent Core 的薄前端，而不是第二套 Agent。
+
+Phase 3 优先交付 VS Code 插件核心体验；Phase 4 再做 VS Code 深度集成；TUI 进入 Phase 5，与生态扩展一起推进。Marketplace 发布不阻塞 Phase 3 完成，先保证本地可安装、可运行、可审计。Phase 3 开始前，Phase 2e 应先完成展示型 demo 扩展，给 VS Code Context Viz / Approval / Run Log UI 提供可观察样本。
 
 优先事项：
 
@@ -145,6 +149,14 @@ Phase 2 的 1M Context Capsule 按 4 个增量轮次推进：
    - [x] 200K、500K、900K 样例仓库 token 预算和 Context Capsule ignored/manual 验收。
    - [x] 超预算解释、Run Log 输出截断和脱敏包边界。
    - [x] tool call JSON Schema 通用校验层，且在 typed deserialization 前执行。
+
+5. **Phase 2e：合并主线前展示型 demo 扩展**
+   - [ ] `demo-context`：展示 manifest summary、Context Capsule sections、included/omitted sources 和 `context.built` payload。
+   - [ ] `demo-truncation`：展示 Run Log 脱敏、截断、`runLogTruncation`，并区分截断、空输出和缺失字段。
+   - [ ] `demo-schema`：展示 tool call arguments 在 typed deserialization 前被 JSON Schema 拒绝。
+   - [ ] `demo-context-visual`：用 ASCII 视图展示 StablePrefix、DynamicPrelude、TurnSuffix 的 token 分布，并输出原始 JSON。
+   - [ ] `demo-attachment`：展示 file、selection、explicit_content、diagnostic attachments 如何进入 Context Builder。
+   - [ ] `demo-live` provider summary 增强：展示模型、duration、usage、cache hit/miss 和 stream 摘要。
 
 后续 DeepSeek 差异化事项：
 

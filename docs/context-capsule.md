@@ -1,6 +1,6 @@
 # 上下文胶囊（Context Capsule）
 
-状态：草案，Phase 1 基础 Context Builder 已实现；Phase 2a/2b/2c/2d 已完成，下一步进入 Phase 3 的 TUI/RPC 事件消费与上下文可视化。
+状态：草案，Phase 1 基础 Context Builder 已实现；Phase 2a/2b/2c/2d 已完成，下一步进入 Phase 3 的 VS Code/RPC 事件消费与上下文可视化。
 
 Context Capsule 是一次模型回合的结构化输入包。它面向 DeepSeek 的长上下文和上下文缓存能力设计。
 

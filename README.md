@@ -1,6 +1,6 @@
 # deepseek-coder
 
-状态：设计草案。`deepseek-coder` 是一个 AGPL-3.0-or-later 许可证开源项目，目标是构建一个以 DeepSeek V4 系列 1M 上下文为核心能力的代码 Agent，先提供 CLI/TUI，随后提供一等公民级 VS Code 插件。
+状态：设计草案。`deepseek-coder` 是一个 AGPL-3.0-or-later 许可证开源项目，目标是构建一个以 DeepSeek V4 系列 1M 上下文为核心能力的代码 Agent，先提供 CLI 与一等公民级 VS Code 插件，随后补齐 TUI。
 
 本项目不是 DeepSeek 官方项目，也不与 DeepSeek AI 存在从属关系。当前阶段暂不展开商标策略。
 
@@ -566,7 +566,7 @@ extension.ts
 
 ## 开发计划
 
-当前进度：Phase 1 Agent Core MVP 功能闭环和 Phase 2 的 1M Context Capsule 收敛均已完成。DeepSeek provider、基础工具执行、Context Builder、Run Log、Turn Loop、CLI、RPC、审批、取消、真实 DeepSeek streaming/tool-call 验收、本地 fixture smoke、进程级 CLI smoke、小型真实仓库 CLI 联网验收、合并前测试收敛、Context Capsule、manifest、token estimator、attachments、provider summary、Run Log 体积控制、tool call JSON Schema 校验和 200K/500K/900K 离线大上下文验收入口均已完成；VS Code RPC server 启动监管与 JSON-RPC request client 已作为 Phase 4 前置项提前完成，不作为 Agent Core MVP 的必需验收条件。下一步进入 Phase 3 的 TUI 与全双工 RPC 事件队列。
+当前进度：Phase 1 Agent Core MVP 功能闭环和 Phase 2 的 1M Context Capsule 核心收敛均已完成。DeepSeek provider、基础工具执行、Context Builder、Run Log、Turn Loop、CLI、RPC、审批、取消、真实 DeepSeek streaming/tool-call 验收、本地 fixture smoke、进程级 CLI smoke、小型真实仓库 CLI 联网验收、合并前测试收敛、Context Capsule、manifest、token estimator、attachments、provider summary、Run Log 体积控制、tool call JSON Schema 校验和 200K/500K/900K 离线大上下文验收入口均已完成；VS Code RPC server 启动监管与 JSON-RPC request client 已作为 Phase 3 前置项提前完成，不作为 Agent Core MVP 的必需验收条件。下一步先完成 Phase 2e 的展示型 demo 扩展并作为合并主线前验收，再进入 Phase 3 的 VS Code 插件核心与共享 RPC 事件队列。
 
 ### Phase 0：项目章程
 
@@ -600,7 +600,7 @@ extension.ts
 - [x] 合并前 RPC/CLI/protocol 验收补齐：补 RPC request loop pending approval 并发拒绝与 EOF shutdown 取消测试、CLI `rpc` 模式进程级 stdio smoke，以及 Rust/TypeScript/协议文档错误码交叉校验。
 - [x] 合并前最终验收：已运行 `pnpm run check`、`cargo test --workspace -- --list`、离线展示 demo、`git diff --check` 和敏感信息扫描；本轮 RPC/CLI/protocol 离线变更未新增必须阻塞合并的 DeepSeek live suite。
 
-说明：VS Code RPC server 启动监管与 JSON-RPC request client 已提前完成，归入 Phase 4 前置项；Agent Core MVP 验收不依赖完整 VS Code UI。
+说明：VS Code RPC server 启动监管与 JSON-RPC request client 已提前完成，归入 Phase 3 前置项；Agent Core MVP 验收不依赖完整 VS Code UI。
 
 细任务维护规则：高层阶段条目完成时，同步检查并更新 `docs/phase-tasks.md` 中对应的详细任务状态；详细设计文档新增后续任务时，也先在该索引里确定阶段。
 
@@ -620,6 +620,7 @@ extension.ts
 - [x] Phase 2b：TokenEstimator 与稳定前缀。已建立 `TokenEstimator` trait、默认 `utf8_bytes` 估算器和 `CalibratedEstimator`，并在 `context.built` 中输出 `stablePrefixHash`、稳定前缀预算和校准 metadata；修改 `TurnSuffix` 不改变 `StablePrefix` 已有离线测试覆盖。
 - [x] Phase 2c：Attachments、provider summary 和 cache 实验。已让 `agent.sendTurn.attachments` 接入 file/selection/explicit_content/diagnostic 等来源，并加入数量、大小、路径和重复来源校验；Turn Loop 会写入 `provider.completed`，记录模型、duration、usage、cache hit/miss 和 streaming 摘要；DeepSeek streaming usage/cache 解析已有离线和 live 基础。
 - [x] Phase 2d：大仓库验收、超预算解释、Run Log 体积控制和 JSON Schema 校验层。已新增 200K、500K、900K ignored/manual Context Capsule benchmark；Context Builder 继续对 required context 超预算显式失败、optional context 写入 omitted reason；Run Log 写入入口统一执行脱敏和字符串/数组截断，并用 `runLogTruncation` 记录边界；tool call arguments 会先按工具注册表 JSON Schema 校验，再进入 typed deserialization、审批和执行。
+- [ ] Phase 2e：合并主线前展示型 demo 扩展。补齐 context、truncation、schema、context-visual、attachment 和 `demo-live` provider summary 展示；完成后 Phase 2 才视为可合并主线。详细清单见 `docs/demos.md` 和 `docs/phase-tasks.md`。
 
 验收标准：
 
@@ -629,34 +630,44 @@ extension.ts
 - 能记录 provider usage、cache hit/miss 和 token estimator 元数据。
 - 工具、验证和 provider 相关事件共享 Run Log 脱敏/截断边界，超大输出可通过 `runLogTruncation` 与空输出、缺失字段区分。
 - 模型 tool call 参数必须先通过 JSON Schema 校验，未知字段和错误类型不得进入 typed deserialization。
+- 合并主线前必须能用展示型 demo 直接观察 Context Capsule、Run Log 截断、tool schema 校验、attachments 和 provider summary。
 
-### Phase 3：TUI
+### Phase 3：VS Code 插件核心与共享 RPC 交互管线
 
-- [ ] RPC 全双工 reader/writer 与事件发送队列：作为 TUI/VS Code 共享前置，支持 `agent.sendTurn` 早返回、后台持续事件推送和长 provider request 的断连取消。
-- [ ] RPC 入口和事件流消费。
-- [ ] Chat/Plan/Diff/Tools/Context/Settings 页面。
-- [ ] hunk 级审批。
-- [ ] run resume。
-- [ ] 配置文件。
-- [ ] release binary。
-
-### Phase 4：VS Code 插件
-
+- [ ] RPC 全双工 reader/writer 与事件发送队列：作为 VS Code/TUI 共享前置，支持 `agent.sendTurn` 早返回、后台持续事件推送和长 provider request 的断连取消。
+- [ ] 长 provider request 期间的 client 断连取消。
 - [x] TypeScript extension scaffold：建立 VS Code 插件 TypeScript 工程、激活入口、基础命令和测试骨架。
 - [x] RPC server 管理：插件可启动 `deepseek-coder rpc`，发送 `agent.initialize`，转发 `agent.event`，并在退出或错误时更新状态和提示。
 - [x] JSON-RPC request client：统一 request id、pending response、error response 和进程退出时的 pending request 清理。
-- [ ] Sidebar Chat。
-- [ ] Native diff editor。
-- [ ] Problems 面板集成。
+- [ ] Sidebar Chat 与 `agent.event` 渲染。
+- [ ] 文本输入发送 turn，并通过 `agent.sendTurn` 驱动真实 Agent 回合。
+- [ ] VS Code 审批 UI 接入真实 RPC pending queue。
+- [ ] Native diff editor 展示 patch，并为 hunk 级审批预留交互边界。
+- [ ] Run List / resume。
+- [ ] Context Capsule 可视化。
+
+### Phase 4：VS Code 深度集成
+
+- [ ] Problems 面板 diagnostics 进入 Context Builder。
 - [ ] Terminal command approval。
+- [ ] provider、model、预算、审批策略和 RPC 命令配置界面。
 - [ ] FIM completion preview。
+- [ ] VSIX alpha / pre-release 打包与插件安装说明。
 
 验收标准：
 
 - 插件不需要用户手动打开终端即可完成一次“诊断 -> 修改 -> 测试 -> 报告”。
 - 插件和 CLI 对同一任务产生一致的 run log。
 
-### Phase 5：自由软件发布
+### Phase 5：TUI 与生态扩展
+
+- [ ] TUI RPC 入口和事件流消费。
+- [ ] Chat/Plan/Diff/Tools/Context/Settings 页面。
+- [ ] TUI hunk 级审批、run resume 和配置文件。
+- [ ] TUI release binary。
+- [ ] MCP client、本地模型/私有推理服务 adapter、包管理器工具、issue/PR 工具和审计包导出。
+
+### Phase 6：自由软件发布
 
 - [x] 确定许可证：AGPL-3.0-or-later 已作为项目许可证策略写入 README，后续发布阶段补齐正式 `LICENSE` 文件和源码提供说明。
 - [ ] 发布 `LICENSE`、源码获取说明和网络服务源码提供说明。

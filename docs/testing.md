@@ -169,4 +169,6 @@ rg -n "sk-[A-Za-z0-9_-]+|C:\\User[s]\\|/Users/[^/]+/|/home/[^/]+/|DEEPSEEK_(CODE
 
 ## 展示型 Demo
 
-展示型 demo 的完整清单、运行命令和预期输出见 `demos.md`。`cargo demo` 与 `cargo demo-live` 来自 `.cargo/config.toml`；新增或调整展示命令时，应同时更新 Cargo alias 和 `demos.md`。
+展示型 demo 的完整清单、运行命令和预期输出见 `demos.md`。`cargo demo` 与 `cargo demo-live` 来自 `.cargo/config.toml`；新增或调整展示命令时，应先更新 `demos.md`，并且只在 demo 已实现、可运行后再加入 Cargo alias。
+
+Phase 2 合并主线前，展示型 demo 扩展是验收项之一：需要补齐 context、truncation、schema、context-visual、attachment，并增强 `demo-live` 的 provider summary 展示。它们仍应默认 ignored，不进入普通 CI 自动执行。

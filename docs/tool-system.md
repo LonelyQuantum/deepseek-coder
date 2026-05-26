@@ -276,7 +276,7 @@ pub struct ToolDefinition {
 - TypeScript 协议类型：`packages/protocol/src/index.ts`。
 - 共享协议 fixture：`docs/protocol/tool-registry.v1.json`。
 
-`crates/agent-rpc` 已实现 Run Log 事件到 `agent.event` notification 的基础桥接，并已分发 `agent.approve` / `agent.reject`。真实 RPC handler 已能把工具请求、审批请求、审批决定和工具结果暴露给 CLI/TUI/VS Code；TUI/VS Code 仍需要把已有 UI 原语接入该 pending 队列。
+`crates/agent-rpc` 已实现 Run Log 事件到 `agent.event` notification 的基础桥接，并已分发 `agent.approve` / `agent.reject`。真实 RPC handler 已能把工具请求、审批请求、审批决定和工具结果暴露给 CLI/VS Code/TUI；VS Code/TUI 仍需要把已有 UI 原语接入该 pending 队列，其中 VS Code 接入优先推进。
 
 ## 协议一致性测试
 
@@ -316,7 +316,7 @@ fixture 中的 `tools` 被当作无序集合校验；测试会按工具名规整
 
 当前实现暂不包含 LSP diagnostics 和 plan update 的执行逻辑；它们仍只有 schema 和静态风险定义。
 
-当前执行层已接入基础 Agent Turn Loop、审批策略、取消信号和 run log。写入与命令执行会触发审批请求，并记录 `tool.approvalResolved`；CLI 二进制可以通过 stdin/stderr 做真实 y/n 审批，测试可使用显式 auto-approve 策略验证已批准路径。Run Log 事件已能通过基础 RPC 桥接发送给前端；`AgentTurnLoopRpcHandler` 已能通过 `agent.sendTurn` 真实驱动 Core，并在 `tool.approvalRequired` 处等待 `agent.approve` / `agent.reject` / `agent.cancel` 或审批超时。`shell`、`search`、`git_status` 和 `git_diff` 会在子进程轮询循环中检查 `CancellationToken`，取消时 kill child 并让 Turn Loop 写入 `run.canceled`。TUI/VS Code 接入真实 RPC 队列的完整 UI、网络/破坏性风险升级和更强进程树清理仍需要后续实现。
+当前执行层已接入基础 Agent Turn Loop、审批策略、取消信号和 run log。写入与命令执行会触发审批请求，并记录 `tool.approvalResolved`；CLI 二进制可以通过 stdin/stderr 做真实 y/n 审批，测试可使用显式 auto-approve 策略验证已批准路径。Run Log 事件已能通过基础 RPC 桥接发送给前端；`AgentTurnLoopRpcHandler` 已能通过 `agent.sendTurn` 真实驱动 Core，并在 `tool.approvalRequired` 处等待 `agent.approve` / `agent.reject` / `agent.cancel` 或审批超时。`shell`、`search`、`git_status` 和 `git_diff` 会在子进程轮询循环中检查 `CancellationToken`，取消时 kill child 并让 Turn Loop 写入 `run.canceled`。VS Code/TUI 接入真实 RPC 队列的完整 UI、网络/破坏性风险升级和更强进程树清理仍需要后续实现，其中 VS Code UI 接入归入 Phase 3。
 
 ## 后续增强
 
