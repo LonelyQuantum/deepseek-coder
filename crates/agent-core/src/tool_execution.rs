@@ -15,7 +15,7 @@ use crate::workspace_manifest::{
     DEFAULT_WORKSPACE_MANIFEST_MAX_ENTRIES, WorkspaceManifest, WorkspaceManifestConfig,
     WorkspaceManifestError, build_workspace_manifest,
 };
-use crate::{cancellation::CancellationToken, hashing::sha256_hex, run_log::redact_value};
+use crate::{cancellation::CancellationToken, hashing::sha256_hex, run_log::sanitize_payload};
 
 const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
 const DEFAULT_SEARCH_MAX_RESULTS: usize = 100;
@@ -737,7 +737,7 @@ pub struct GitDiffResult {
 pub fn redacted_tool_result_value<T: Serialize>(result: &T) -> Result<Value, ToolExecutionError> {
     let value = serde_json::to_value(result)
         .map_err(|source| ToolExecutionError::Serialization { source })?;
-    Ok(redact_value(value))
+    Ok(sanitize_payload(value))
 }
 
 #[derive(Debug, Error)]
@@ -1346,7 +1346,7 @@ mod tests {
     };
     use crate::cancellation::CancellationToken;
     use crate::hashing::sha256_hex;
-    use crate::run_log::REDACTED_VALUE;
+    use crate::run_log::{REDACTED_VALUE, RUN_LOG_MAX_STRING_BYTES};
     use crate::test_helpers::TestWorkspace;
 
     #[test]
@@ -1659,6 +1659,31 @@ mod tests {
         assert_eq!(value["stdout"], format!("stdout contains {REDACTED_VALUE}"));
         assert_eq!(value["stderr"], format!("stderr contains {REDACTED_VALUE}"));
         assert!(!value.to_string().contains(&secret));
+    }
+
+    #[test]
+    fn redacted_tool_result_value_truncates_large_shell_output_for_logs() {
+        let result = ShellResult {
+            status: ToolStatus::Ok,
+            summary: "Command completed.".to_owned(),
+            error_code: None,
+            exit_code: Some(0),
+            stdout: "x".repeat(RUN_LOG_MAX_STRING_BYTES + 1),
+            stderr: String::new(),
+            duration_ms: 1,
+        };
+
+        let value =
+            redacted_tool_result_value(&result).expect("tool result should serialize and sanitize");
+
+        assert_eq!(
+            value["stdout"]
+                .as_str()
+                .expect("stdout should be string")
+                .len(),
+            RUN_LOG_MAX_STRING_BYTES
+        );
+        assert_eq!(value["runLogTruncation"][0]["reason"], "max_string_bytes");
     }
 
     #[test]
