@@ -566,7 +566,7 @@ extension.ts
 
 ## 开发计划
 
-当前进度：Phase 1 Agent Core MVP 功能闭环和 Phase 2 的 1M Context Capsule 核心收敛均已完成。DeepSeek provider、基础工具执行、Context Builder、Run Log、Turn Loop、CLI、RPC、审批、取消、真实 DeepSeek streaming/tool-call 验收、本地 fixture smoke、进程级 CLI smoke、小型真实仓库 CLI 联网验收、合并前测试收敛、Context Capsule、manifest、token estimator、attachments、provider summary、Run Log 体积控制、tool call JSON Schema 校验和 200K/500K/900K 离线大上下文验收入口均已完成；VS Code RPC server 启动监管与 JSON-RPC request client 已作为 Phase 3 前置项提前完成，不作为 Agent Core MVP 的必需验收条件。下一步先完成 Phase 2e 的展示型 demo 扩展并作为合并主线前验收，再进入 Phase 3 的 VS Code 插件核心与共享 RPC 事件队列。
+当前进度：Phase 1 Agent Core MVP 功能闭环和 Phase 2 的 1M Context Capsule 核心收敛均已完成。DeepSeek provider、基础工具执行、Context Builder、Run Log、Turn Loop、CLI、RPC、审批、取消、真实 DeepSeek streaming/tool-call 验收、本地 fixture smoke、进程级 CLI smoke、小型真实仓库 CLI 联网验收、合并前测试收敛、Context Capsule、manifest、token estimator、attachments、provider summary、Run Log 体积控制、tool call JSON Schema 校验、200K/500K/900K 离线大上下文验收入口和 Phase 2e 展示型 demo 扩展均已完成；VS Code RPC server 启动监管与 JSON-RPC request client 已作为 Phase 3 前置项提前完成，不作为 Agent Core MVP 的必需验收条件。下一步进入 Phase 3 的 VS Code 插件核心与共享 RPC 事件队列。
 
 ### Phase 0：项目章程
 
@@ -620,7 +620,7 @@ extension.ts
 - [x] Phase 2b：TokenEstimator 与稳定前缀。已建立 `TokenEstimator` trait、默认 `utf8_bytes` 估算器和 `CalibratedEstimator`，并在 `context.built` 中输出 `stablePrefixHash`、稳定前缀预算和校准 metadata；修改 `TurnSuffix` 不改变 `StablePrefix` 已有离线测试覆盖。
 - [x] Phase 2c：Attachments、provider summary 和 cache 实验。已让 `agent.sendTurn.attachments` 接入 file/selection/explicit_content/diagnostic 等来源，并加入数量、大小、路径和重复来源校验；Turn Loop 会写入 `provider.completed`，记录模型、duration、usage、cache hit/miss 和 streaming 摘要；DeepSeek streaming usage/cache 解析已有离线和 live 基础。
 - [x] Phase 2d：大仓库验收、超预算解释、Run Log 体积控制和 JSON Schema 校验层。已新增 200K、500K、900K ignored/manual Context Capsule benchmark；Context Builder 继续对 required context 超预算显式失败、optional context 写入 omitted reason；Run Log 写入入口统一执行脱敏和字符串/数组截断，并用 `runLogTruncation` 记录边界；tool call arguments 会先按工具注册表 JSON Schema 校验，再进入 typed deserialization、审批和执行。
-- [ ] Phase 2e：合并主线前展示型 demo 扩展。补齐 context、truncation、schema、context-visual、attachment 和 `demo-live` provider summary 展示；完成后 Phase 2 才视为可合并主线。详细清单见 `docs/demos.md` 和 `docs/phase-tasks.md`。
+- [x] Phase 2e：合并主线前展示型 demo 扩展。已补齐 `demo-context`、`demo-truncation`、`demo-schema`、`demo-context-visual`、`demo-attachment` 和 `demo-live` provider summary 展示；这些入口默认 ignored，不进入普通 CI，作为人工观察和合并前验收使用。详细清单见 `docs/demos.md` 和 `docs/phase-tasks.md`。
 
 验收标准：
 

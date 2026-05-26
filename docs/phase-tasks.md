@@ -61,13 +61,13 @@
 | [x] | Phase 2c-2：`provider.completed` 事件和 DeepSeek cache hit/miss 实验 | `README.md`、`docs/roadmap.md`、`docs/deepseek-api-adapter.md`、`docs/testing.md` | 已完成基础闭环：Turn Loop 独立记录模型、duration、usage、cache hit/miss 和 stream 摘要，DeepSeek streaming wrapper 会从 usage chunk 填充字段；更大 cache hit/miss 手动实验留作 Phase 2d 前增强样本。 |
 | [x] | Phase 2d-1：200K、500K、900K 样例仓库 token 预算与 Context Capsule 验收 | `README.md`、`docs/testing.md`、`docs/context-capsule.md` | 已完成：新增 `context_capsule_large_repository_budget_benchmark` ignored/manual 测试，本地跑通 200K、500K、900K 三档样例 Context Capsule，默认 CI 只编译不自动执行。 |
 | [x] | Phase 2d-2：超预算解释、Run Log 体积/截断/脱敏边界和 tool call JSON Schema 校验层 | `docs/run-log.md`、`docs/security-model.md`、`docs/agent-core.md`、`docs/tool-system.md` | 已完成：required context 超预算失败和 optional omitted reason 继续由 Context Builder 测试覆盖；Run Log 写入入口统一脱敏和字符串/数组截断并记录 `runLogTruncation`；tool call arguments 在 typed deserialization 前执行注册表 JSON Schema 校验。 |
-| [ ] | Phase 2e-1：展示型 demo 基础收敛 | `README.md`、`docs/demos.md`、`docs/testing.md` | 合并主线前完成：统一 ignored 测试约定、输出格式、登记规则和 `.cargo/config.toml` 短命令添加条件。 |
-| [ ] | Phase 2e-2：`cargo demo-context` | `README.md`、`docs/demos.md`、`docs/context-capsule.md` | 合并主线前完成：展示 manifest summary、Context Capsule sections、included/omitted sources 和 `context.built` payload。 |
-| [ ] | Phase 2e-3：`cargo demo-truncation` | `README.md`、`docs/demos.md`、`docs/run-log.md` | 合并主线前完成：展示 Run Log 脱敏、截断、`runLogTruncation`，并区分截断、空输出和缺失字段。 |
-| [ ] | Phase 2e-4：`cargo demo-schema` | `README.md`、`docs/demos.md`、`docs/tool-system.md` | 合并主线前完成：展示 tool call arguments 在 typed deserialization 前被 JSON Schema 拒绝，并输出稳定错误。 |
-| [ ] | Phase 2e-5：`cargo demo-context-visual` | `README.md`、`docs/demos.md`、`docs/context-capsule.md`、`docs/vscode-extension.md` | 合并主线前完成：用 ASCII 视图展示 StablePrefix、DynamicPrelude、TurnSuffix 的 token 分布，并并排输出原始 JSON。 |
-| [ ] | Phase 2e-6：`cargo demo-attachment` | `README.md`、`docs/demos.md`、`docs/json-rpc-protocol.md`、`docs/context-capsule.md` | 合并主线前完成：展示 file、selection、explicit_content、diagnostic attachments 如何进入 Context Builder。 |
-| [ ] | Phase 2e-7：`cargo demo-live` provider summary 增强 | `README.md`、`docs/demos.md`、`docs/deepseek-api-adapter.md`、`docs/roadmap.md` | 合并主线前完成：在现有 live demo 中展示 `provider.completed` 的模型、duration、usage、cache hit/miss 和 stream 摘要。 |
+| [x] | Phase 2e-1：展示型 demo 基础收敛 | `README.md`、`docs/demos.md`、`docs/testing.md` | 已完成：新增 demo 短命令均登记在 `.cargo/config.toml`，测试默认 ignored；`docs/demos.md` 作为统一清单记录用途、运行命令和预期输出。 |
+| [x] | Phase 2e-2：`cargo demo-context` | `README.md`、`docs/demos.md`、`docs/context-capsule.md` | 已完成：展示 manifest summary、Context Capsule sections、included/omitted sources 和 `context.built` payload；已运行 `cargo demo-context`。 |
+| [x] | Phase 2e-3：`cargo demo-truncation` | `README.md`、`docs/demos.md`、`docs/run-log.md` | 已完成：展示 Run Log 脱敏、截断、`runLogTruncation`，并区分截断、空输出和缺失字段；已运行 `cargo demo-truncation`。 |
+| [x] | Phase 2e-4：`cargo demo-schema` | `README.md`、`docs/demos.md`、`docs/tool-system.md` | 已完成：展示 tool call arguments 在 typed deserialization 前被 JSON Schema 拒绝，并输出稳定 `E_INVALID_TOOL_ARGUMENTS`；已运行 `cargo demo-schema`。 |
+| [x] | Phase 2e-5：`cargo demo-context-visual` | `README.md`、`docs/demos.md`、`docs/context-capsule.md`、`docs/vscode-extension.md` | 已完成：用 ASCII 视图展示 StablePrefix、DynamicPrelude、TurnSuffix 的 token 分布，并输出原始 JSON；已运行 `cargo demo-context-visual`。 |
+| [x] | Phase 2e-6：`cargo demo-attachment` | `README.md`、`docs/demos.md`、`docs/json-rpc-protocol.md`、`docs/context-capsule.md` | 已完成：展示 file、selection、explicit_content、diagnostic attachments 如何进入 Context Builder 和 provider prompt；已运行 `cargo demo-attachment`。 |
+| [x] | Phase 2e-7：`cargo demo-live` provider summary 增强 | `README.md`、`docs/demos.md`、`docs/deepseek-api-adapter.md`、`docs/roadmap.md` | 已完成：现有 live demo 的人类可读事件摘要会展示 `provider.completed` 的模型、duration、usage、cache hit/miss 和 stream 字段；离线 fixture 已运行，联网入口仍按 `DEEPSEEK_CODER_LIVE_TESTS=1 cargo demo-live` 手动执行。 |
 
 ## Phase 3：VS Code 插件核心与共享 RPC 交互管线
 

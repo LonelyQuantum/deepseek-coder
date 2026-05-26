@@ -5,17 +5,34 @@
 // leaving protocol-level streaming events unchanged.
 
 use std::{
+    collections::VecDeque,
     env,
     error::Error,
     fs,
+    future::Future,
     process::{Command, Output},
+    sync::{Arc, Mutex},
 };
 
 use deepseek_coder_agent_core::{
+    cancellation::CancellationToken,
+    context::{
+        CachePlacement, ContextBuilder, ContextBuilderConfig, ContextCapsule, ContextItem,
+        ContextItemKind, ContextManifestOmitted, ContextManifestReport,
+    },
+    provider::deepseek_api::ChatToolCall,
     provider::deepseek_api::{DEFAULT_API_BASE_URL, DEFAULT_MODEL},
+    run_log::{RUN_LOG_MAX_ARRAY_ITEMS, RUN_LOG_MAX_STRING_BYTES, RunLogEvent, RunLogStore},
     test_helpers::{LIVE_TEST_FLAG, TestWorkspace, live_api_key, repo_root_from_crate_manifest},
+    tool::{ToolName, find_builtin_tool, validate_tool_arguments},
+    turn_loop::{
+        AgentTurnInput, AgentTurnLoop, AgentTurnLoopError, TextRange, TurnAttachment, TurnProvider,
+        TurnProviderFuture, TurnProviderRequest, TurnProviderResponse,
+        turn_provider_response_stream,
+    },
+    workspace_manifest::{WorkspaceManifest, WorkspaceManifestConfig, build_workspace_manifest},
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 
 #[test]
 #[ignore = "result display test; run `cargo demo`"]
@@ -165,6 +182,7 @@ mod tests {
     );
 
     assert_event(&demo_output.notifications, "tool.completed");
+    assert_event(&demo_output.notifications, "provider.completed");
     assert_event(&demo_output.notifications, "verification.completed");
     assert_event(&demo_output.notifications, "run.completed");
     assert_final_text_contains(&demo_output.notifications, "OK_AGENT_DEMO");
@@ -177,10 +195,396 @@ mod tests {
     Ok(())
 }
 
+#[test]
+#[ignore = "result display test; run `cargo demo-context`"]
+fn context_capsule_structure_demo() -> Result<(), Box<dyn Error>> {
+    let workspace = context_demo_workspace("context-capsule-demo");
+    let (manifest, capsule) = build_demo_context_capsule(&workspace)?;
+
+    print_context_capsule_demo(
+        "Context Capsule Structure Demo",
+        &workspace,
+        &manifest,
+        &capsule,
+        false,
+    );
+
+    let payload = capsule.context_built_payload();
+    assert!(payload["stablePrefixHash"].as_str().is_some());
+    assert!(payload["manifest"]["manifestHash"].as_str().is_some());
+    assert!(
+        payload["includedSources"]
+            .as_array()
+            .is_some_and(|sources| sources.iter().any(|source| source["kind"] == "file"))
+    );
+    assert!(
+        payload["omittedSources"]
+            .as_array()
+            .is_some_and(|sources| !sources.is_empty())
+    );
+
+    Ok(())
+}
+
+#[test]
+#[ignore = "result display test; run `cargo demo-context-visual`"]
+fn context_capsule_visualization_demo() -> Result<(), Box<dyn Error>> {
+    let workspace = context_demo_workspace("context-visual-demo");
+    let (manifest, capsule) = build_demo_context_capsule(&workspace)?;
+
+    print_context_capsule_demo(
+        "Context Capsule Visualization Demo",
+        &workspace,
+        &manifest,
+        &capsule,
+        true,
+    );
+
+    let visualization = context_visualization(&capsule);
+    assert!(visualization.contains("stable_prefix"));
+    assert!(visualization.contains("dynamic_prelude"));
+    assert!(visualization.contains("turn_suffix"));
+
+    Ok(())
+}
+
+#[test]
+#[ignore = "result display test; run `cargo demo-truncation`"]
+fn run_log_truncation_demo() -> Result<(), Box<dyn Error>> {
+    let workspace = TestWorkspace::with_preserve("run-log-truncation-demo");
+    let store = RunLogStore::new(workspace.path())?;
+    let mut run = store.create_run("demo_run_log_truncation")?;
+    let long_stdout = "A".repeat(RUN_LOG_MAX_STRING_BYTES + 128);
+    let many_matches = (0..RUN_LOG_MAX_ARRAY_ITEMS + 4)
+        .map(|index| json!({ "line": index + 1, "text": format!("match {index}") }))
+        .collect::<Vec<_>>();
+
+    run.append(
+        "tool.completed",
+        Some("demo_truncation_turn".to_owned()),
+        json!({
+            "name": "search",
+            "status": "ok",
+            "stdout": long_stdout,
+            "stderr": "",
+            "matches": many_matches,
+            "summary": "This payload intentionally contains a huge stdout and too many matches."
+        }),
+    )?;
+
+    let events = store.load_run("demo_run_log_truncation")?;
+    print_run_log_truncation_demo(
+        "Run Log Truncation Demo",
+        &workspace,
+        "demo_run_log_truncation",
+        &events,
+    );
+
+    let payload = &events[0].payload;
+    assert_eq!(
+        payload["stdout"]
+            .as_str()
+            .expect("stdout should stay a string")
+            .len(),
+        RUN_LOG_MAX_STRING_BYTES
+    );
+    assert_eq!(payload["stderr"], "");
+    assert!(payload.get("missingField").is_none());
+    assert!(
+        payload["runLogTruncation"]
+            .as_array()
+            .is_some_and(|truncation| truncation.iter().any(|entry| {
+                entry["path"] == "$.stdout" && entry["reason"] == "max_string_bytes"
+            }))
+    );
+    assert!(
+        payload["runLogTruncation"]
+            .as_array()
+            .is_some_and(|truncation| truncation.iter().any(|entry| {
+                entry["path"] == "$.matches" && entry["reason"] == "max_array_items"
+            }))
+    );
+
+    Ok(())
+}
+
+#[test]
+#[ignore = "result display test; run `cargo demo-schema`"]
+fn tool_schema_validation_demo() -> Result<(), Box<dyn Error>> {
+    let workspace = TestWorkspace::with_preserve("tool-schema-demo");
+    workspace.write("README.md", "schema demo\n");
+    let store = RunLogStore::new(workspace.path())?;
+    let mut run = store.create_run("demo_tool_schema")?;
+    let provider = ScriptedProvider::new(vec![TurnProviderResponse::tool_calls(
+        None,
+        Some("I should read README.md, but my tool arguments contain an extra field.".to_owned()),
+        vec![ChatToolCall::function(
+            "call_schema_invalid",
+            "read_file",
+            r#"{"path":"README.md","unexpected":true}"#,
+        )],
+    )]);
+    let mut loop_runner = AgentTurnLoop::new(workspace.path(), provider)?;
+
+    let error = block_on_turn(loop_runner.run_turn(
+        AgentTurnInput::new("demo_schema_turn", "Show tool schema validation"),
+        &mut run,
+    ))
+    .expect_err("schema demo should fail before typed deserialization");
+
+    print_expected_error("Tool Schema Validation Demo", &error);
+    let events = store.load_run("demo_tool_schema")?;
+    print_run_log_event_demo(
+        "Tool Schema Validation Demo Events",
+        &workspace,
+        "demo_tool_schema",
+        &events,
+    );
+
+    let read_file = find_builtin_tool(ToolName::ReadFile.as_str()).expect("read_file should exist");
+    let schema_error = validate_tool_arguments(
+        read_file,
+        &json!({ "path": "README.md", "unexpected": true }),
+    )
+    .expect_err("extra property should fail schema validation");
+    println!();
+    println!("--- Direct schema validator result ---");
+    println!("path: {}", schema_error.path());
+    println!("detail: {}", schema_error.detail());
+
+    assert!(matches!(
+        error,
+        AgentTurnLoopError::InvalidToolArgumentSchema { .. }
+    ));
+    assert!(events.iter().any(|event| event.event_type == "run.failed"
+        && event.payload["code"] == "E_INVALID_TOOL_ARGUMENTS"));
+    assert!(
+        !events
+            .iter()
+            .any(|event| event.event_type == "tool.requested")
+    );
+
+    Ok(())
+}
+
+#[test]
+#[ignore = "result display test; run `cargo demo-attachment`"]
+fn attachment_context_demo() -> Result<(), Box<dyn Error>> {
+    let workspace = TestWorkspace::with_preserve("attachment-context-demo");
+    workspace.write("README.md", "attached README\nsecond line\n");
+    workspace.write("src/lib.rs", "pub fn demo() {}\n");
+    workspace.write("docs/notes.md", "manual note\n");
+    let store = RunLogStore::new(workspace.path())?;
+    let mut run = store.create_run("demo_attachment_context")?;
+    let (provider, requests) =
+        ScriptedProvider::with_request_recorder(vec![TurnProviderResponse::final_text(
+            "attachments received.",
+        )]);
+    let mut loop_runner = AgentTurnLoop::new(workspace.path(), provider)?;
+    let range = TextRange::new(1, 1, 1, 18);
+
+    block_on_turn(
+        loop_runner.run_turn(
+            AgentTurnInput::new("demo_attachment_turn", "Use all attachment kinds")
+                .with_attachment(TurnAttachment::file("README.md"))
+                .with_attachment(TurnAttachment::selection(
+                    "src/lib.rs",
+                    range,
+                    "pub fn demo() {}",
+                ))
+                .with_attachment(TurnAttachment::explicit_content(
+                    "acceptance: mention every attachment kind",
+                ))
+                .with_attachment(TurnAttachment::diagnostic(
+                    "src/lib.rs",
+                    range,
+                    "warning: demo is unused",
+                )),
+            &mut run,
+        ),
+    )?;
+
+    let events = store.load_run("demo_attachment_context")?;
+    print_run_log_event_demo(
+        "Attachment Context Demo",
+        &workspace,
+        "demo_attachment_context",
+        &events,
+    );
+
+    let prompt = recorded_prompt(&requests);
+    println!();
+    println!("--- Provider prompt excerpt ---");
+    println!("{}", truncate(&prompt, 1600));
+
+    let context_built = events
+        .iter()
+        .find(|event| event.event_type == "context.built")
+        .expect("context.built should be emitted");
+    for kind in ["file", "selection", "explicit_content", "diagnostic"] {
+        assert!(
+            context_built.payload["includedSources"]
+                .as_array()
+                .is_some_and(|sources| sources.iter().any(|source| source["kind"] == kind)),
+            "context should include {kind} attachment source"
+        );
+        assert!(
+            prompt.contains(&format!("Attachment-Kind: {kind}")),
+            "prompt should show attachment kind {kind}"
+        );
+    }
+
+    Ok(())
+}
+
 struct AgentDemoOutput {
     notifications: Vec<Value>,
     stdout: String,
     stderr: String,
+}
+
+type RequestRecorder = Arc<Mutex<Vec<TurnProviderRequest>>>;
+
+#[derive(Debug)]
+struct ScriptedProvider {
+    responses: VecDeque<TurnProviderResponse>,
+    requests: Option<RequestRecorder>,
+}
+
+impl ScriptedProvider {
+    fn new(responses: Vec<TurnProviderResponse>) -> Self {
+        Self {
+            responses: responses.into(),
+            requests: None,
+        }
+    }
+
+    fn with_request_recorder(responses: Vec<TurnProviderResponse>) -> (Self, RequestRecorder) {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        (
+            Self {
+                responses: responses.into(),
+                requests: Some(Arc::clone(&requests)),
+            },
+            requests,
+        )
+    }
+}
+
+impl TurnProvider for ScriptedProvider {
+    fn complete_stream(&mut self, request: TurnProviderRequest) -> TurnProviderFuture<'_> {
+        Box::pin(async move {
+            if let Some(requests) = &self.requests {
+                requests
+                    .lock()
+                    .expect("request recorder lock should not be poisoned")
+                    .push(request);
+            }
+            let response = self.responses.pop_front().ok_or_else(|| {
+                deepseek_coder_agent_core::turn_loop::TurnProviderError::new(
+                    "scripted provider has no response",
+                )
+            })?;
+            Ok(turn_provider_response_stream(response))
+        })
+    }
+}
+
+fn block_on_turn<F>(future: F) -> F::Output
+where
+    F: Future,
+{
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("demo runtime should build")
+        .block_on(future)
+}
+
+fn context_demo_workspace(name: &str) -> TestWorkspace {
+    let workspace = TestWorkspace::with_preserve(name);
+    workspace.write(
+        "README.md",
+        "# Demo crate\n\nSmall workspace for Context Capsule demos.\n",
+    );
+    workspace.write(
+        "Cargo.toml",
+        "[package]\nname = \"context-demo\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+    );
+    workspace.write("src/lib.rs", "pub fn answer() -> u32 {\n    42\n}\n");
+    workspace.write("src/main.rs", "fn main() {\n    println!(\"demo\");\n}\n");
+    workspace.write(
+        "tests/smoke.rs",
+        "#[test]\nfn smoke() {\n    assert_eq!(2 + 2, 4);\n}\n",
+    );
+    workspace.write("docs/design.md", "Context notes for the demo.\n");
+    workspace.write("config/settings.json", "{\"mode\":\"demo\"}\n");
+    workspace.write(
+        ".secrets/deepseek-api-key",
+        "demo secret value that must not appear",
+    );
+    workspace
+}
+
+fn build_demo_context_capsule(
+    workspace: &TestWorkspace,
+) -> Result<(WorkspaceManifest, ContextCapsule), Box<dyn Error>> {
+    let manifest = build_workspace_manifest(
+        workspace.path(),
+        None,
+        WorkspaceManifestConfig::new(4),
+        &CancellationToken::new(),
+    )?;
+    let manifest_summary = manifest.summary_markdown();
+    let capsule = ContextBuilder::new(
+        ContextBuilderConfig::new(2_400).with_stable_prefix_budget_ratio_ppm(800_000),
+    )
+    .with_manifest_report(context_manifest_report(&manifest))
+    .with_item(ContextItem::project_rules(
+        "Keep demos deterministic and never include local secrets.",
+        "project demo rules",
+    ))
+    .with_item(ContextItem::workspace_manifest(
+        manifest_summary,
+        "stable workspace manifest summary",
+    ))
+    .with_item(ContextItem::required(
+        ContextItemKind::Diagnostic,
+        "src/lib.rs:1:1 warning: demo function has no caller",
+        "current diagnostics",
+    ))
+    .with_item(ContextItem::file(
+        "src/lib.rs",
+        workspace.read("src/lib.rs"),
+        "selected implementation file",
+    ))
+    .with_item(ContextItem::optional(
+        ContextItemKind::Other,
+        "optional scratch note\n".repeat(260),
+        "large optional note used to demonstrate omittedSources",
+    ))
+    .with_item(ContextItem::user_task(
+        "Explain the workspace shape and why the selected Rust file is relevant.",
+    ))
+    .build()?;
+
+    Ok((manifest, capsule))
+}
+
+fn context_manifest_report(manifest: &WorkspaceManifest) -> ContextManifestReport {
+    ContextManifestReport {
+        manifest_hash: manifest.manifest_hash.clone(),
+        max_entries: manifest.max_entries,
+        total_discovered_files: manifest.total_discovered_files,
+        included_files: manifest.included_files,
+        omitted: manifest
+            .omitted
+            .iter()
+            .map(|omitted| ContextManifestOmitted {
+                reason: omitted.reason.as_str().to_owned(),
+                count: omitted.count,
+            })
+            .collect(),
+    }
 }
 
 fn successful_agent_events(
@@ -281,6 +685,245 @@ fn run_completed_summary(notifications: &[Value]) -> Option<&str> {
         .iter()
         .filter(|notification| event_type(notification) == Some("run.completed"))
         .find_map(|notification| notification["params"]["payload"]["summary"].as_str())
+}
+
+fn print_context_capsule_demo(
+    title: &str,
+    workspace: &TestWorkspace,
+    manifest: &WorkspaceManifest,
+    capsule: &ContextCapsule,
+    include_visualization: bool,
+) {
+    println!();
+    println!("=== {title} ===");
+    println!("workspace: {}", workspace.path_str());
+    println!();
+    println!("--- Workspace manifest summary ---");
+    println!("{}", manifest.summary_markdown().trim_end());
+    println!();
+    println!("--- Context sections ---");
+    for section in &capsule.sections {
+        println!(
+            "{}: tokens={} items={}",
+            placement_name(section.placement),
+            section.tokens,
+            section.items.len()
+        );
+        for item in &section.items {
+            println!(
+                "  - kind={:?} path={} tokens={} required={} reason={}",
+                item.source.kind,
+                item.source.path.as_deref().unwrap_or("-"),
+                item.tokens,
+                item.source.required,
+                item.reason
+            );
+        }
+    }
+    println!();
+    println!("--- Included sources ---");
+    for source in &capsule.token_report.included_sources {
+        println!(
+            "- kind={:?} path={} tokens={} reason={}",
+            source.source.kind,
+            source.source.path.as_deref().unwrap_or("-"),
+            source.tokens,
+            source.reason
+        );
+    }
+    println!();
+    println!("--- Omitted sources ---");
+    for source in &capsule.token_report.omitted_sources {
+        println!(
+            "- kind={:?} tokens={} reason={:?}",
+            source.source.kind, source.estimated_tokens, source.omission_reason
+        );
+    }
+    if include_visualization {
+        println!();
+        println!("--- Context Capsule Visualization ---");
+        println!("{}", context_visualization(capsule));
+    }
+    println!();
+    println!("--- Raw context.built ---");
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&capsule.context_built_payload())
+            .expect("context payload should serialize")
+    );
+}
+
+fn context_visualization(capsule: &ContextCapsule) -> String {
+    let total = capsule
+        .sections
+        .iter()
+        .map(|section| section.tokens)
+        .sum::<u64>()
+        .max(1);
+    let width = 36_u64;
+    let mut output = String::new();
+    output.push_str(&format!(
+        "inputTokens={} maxInputTokens={} stablePrefixHash={}\n",
+        capsule.token_report.input_tokens,
+        capsule.token_report.max_input_tokens,
+        capsule.stable_prefix_hash()
+    ));
+    for section in &capsule.sections {
+        let bar_len = usize::try_from((section.tokens * width).div_ceil(total))
+            .expect("visualization bar width should fit usize");
+        let empty_len = usize::try_from(width)
+            .expect("visualization width should fit usize")
+            .saturating_sub(bar_len);
+        output.push_str(&format!(
+            "{:<16} {:>6} |{}{}| items={}\n",
+            placement_name(section.placement),
+            section.tokens,
+            "#".repeat(bar_len),
+            ".".repeat(empty_len),
+            section.items.len()
+        ));
+    }
+    output
+}
+
+fn placement_name(placement: CachePlacement) -> &'static str {
+    match placement {
+        CachePlacement::StablePrefix => "stable_prefix",
+        CachePlacement::DynamicPrelude => "dynamic_prelude",
+        CachePlacement::TurnSuffix => "turn_suffix",
+    }
+}
+
+fn print_run_log_event_demo(
+    title: &str,
+    workspace: &TestWorkspace,
+    run_id: &str,
+    events: &[RunLogEvent],
+) {
+    println!();
+    println!("=== {title} ===");
+    println!("workspace: {}", workspace.path_str());
+    println!();
+    println!("--- Run log events ---");
+    let notifications = run_log_events_to_notifications(events);
+    print_agent_events(&notifications);
+    println!();
+    println!("--- Raw events ---");
+    for event in events {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(event).expect("event should serialize")
+        );
+    }
+    let summary_path = workspace
+        .path()
+        .join(".deepseek-coder")
+        .join("runs")
+        .join(run_id)
+        .join("summary.json");
+    if let Ok(summary) = fs::read_to_string(summary_path) {
+        println!();
+        println!("--- Run summary ---");
+        println!("{}", summary.trim_end());
+    }
+}
+
+fn print_run_log_truncation_demo(
+    title: &str,
+    workspace: &TestWorkspace,
+    run_id: &str,
+    events: &[RunLogEvent],
+) {
+    println!();
+    println!("=== {title} ===");
+    println!("workspace: {}", workspace.path_str());
+    println!();
+    println!("--- Run log events ---");
+    let notifications = run_log_events_to_notifications(events);
+    print_agent_events(&notifications);
+
+    let Some(event) = events.first() else {
+        println!("no events recorded");
+        return;
+    };
+    let payload = &event.payload;
+    let stdout = payload["stdout"].as_str().unwrap_or("");
+    let matches = payload["matches"].as_array().cloned().unwrap_or_default();
+    let matches_preview = matches.into_iter().take(3).collect::<Vec<_>>();
+    let stdout_preview = stdout.chars().take(80).collect::<String>();
+    let snapshot = json!({
+        "name": payload["name"],
+        "status": payload["status"],
+        "stdoutPreview": stdout_preview,
+        "stdoutStoredBytes": stdout.len(),
+        "stderr": payload["stderr"],
+        "matchesStored": payload["matches"].as_array().map_or(0, Vec::len),
+        "matchesPreview": matches_preview,
+        "missingFieldPresent": payload.get("missingField").is_some(),
+        "runLogTruncation": payload["runLogTruncation"],
+    });
+
+    println!();
+    println!("--- Truncation snapshot ---");
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&snapshot).expect("snapshot should serialize")
+    );
+
+    print_run_summary(workspace, run_id);
+}
+
+fn print_run_summary(workspace: &TestWorkspace, run_id: &str) {
+    let summary_path = workspace
+        .path()
+        .join(".deepseek-coder")
+        .join("runs")
+        .join(run_id)
+        .join("summary.json");
+    if let Ok(summary) = fs::read_to_string(summary_path) {
+        println!();
+        println!("--- Run summary ---");
+        println!("{}", summary.trim_end());
+    }
+}
+
+fn run_log_events_to_notifications(events: &[RunLogEvent]) -> Vec<Value> {
+    events
+        .iter()
+        .map(|event| {
+            json!({
+                "jsonrpc": "2.0",
+                "method": "agent.event",
+                "params": {
+                    "seq": event.seq,
+                    "timeUnixMs": event.time_unix_ms,
+                    "type": event.event_type,
+                    "runId": event.run_id,
+                    "turnId": event.turn_id,
+                    "payload": event.payload,
+                }
+            })
+        })
+        .collect()
+}
+
+fn print_expected_error(title: &str, error: &AgentTurnLoopError) {
+    println!();
+    println!("=== {title} ===");
+    println!("expected error code: {}", error.code());
+    println!("expected error: {error}");
+}
+
+fn recorded_prompt(requests: &RequestRecorder) -> String {
+    let requests = requests
+        .lock()
+        .expect("request recorder lock should not be poisoned");
+    requests
+        .first()
+        .and_then(|request| request.messages.first())
+        .and_then(|message| message.content.as_deref())
+        .unwrap_or_default()
+        .to_owned()
 }
 
 fn print_agent_transcript(
@@ -387,6 +1030,20 @@ fn event_summary(notification: &Value) -> String {
             field(payload, "iteration"),
             field(payload, "messageCount"),
             field(payload, "reasoningState")
+        ),
+        "provider.completed" => format!(
+            "iteration={} model={} finish={} durationMs={} prompt={} completion={} total={} cacheHit={} cacheMiss={} chunks={} toolDeltas={}",
+            field(payload, "iteration"),
+            field(payload, "model"),
+            field(payload, "finishReason"),
+            field(payload, "durationMs"),
+            nested_field(payload, "usage", "promptTokens"),
+            nested_field(payload, "usage", "completionTokens"),
+            nested_field(payload, "usage", "totalTokens"),
+            nested_field(payload, "usage", "promptCacheHitTokens"),
+            nested_field(payload, "usage", "promptCacheMissTokens"),
+            nested_field(payload, "streaming", "chunkCount"),
+            nested_field(payload, "streaming", "toolCallDeltaCount")
         ),
         "tool.requested" | "tool.started" => {
             format!(

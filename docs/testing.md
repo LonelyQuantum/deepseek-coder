@@ -42,7 +42,7 @@
 | --- | --- | --- | --- |
 | 默认 CI | `push`、`pull_request` | fmt、clippy、离线 Rust/TypeScript 测试、确定性 fixture | API key、真实网络、长耗时、人工观察 |
 | 本地开发检查 | `pnpm run check` | 与默认 CI 尽量一致 | 私有路径、隐式依赖 `.secrets/` |
-| 本地展示 | `cargo demo`、`cargo demo-live` | 人类可读 transcript、临时工作区输出 | 作为普通 CI 必跑项 |
+| 本地展示 | `cargo demo`、`cargo demo-live` 以及 `docs/demos.md` 中登记的离线展示命令 | 人类可读 transcript、临时工作区输出 | 作为普通 CI 必跑项 |
 | 真实验收 | ignored live test 或 manual workflow | DeepSeek API、真实 streaming、真实模型工具调用 | 无开关自动运行 |
 | 压力/长上下文 | ignored test、manual/nightly | 大上下文、大仓库、长时间任务 | PR 默认阻塞 |
 
@@ -169,6 +169,6 @@ rg -n "sk-[A-Za-z0-9_-]+|C:\\User[s]\\|/Users/[^/]+/|/home/[^/]+/|DEEPSEEK_(CODE
 
 ## 展示型 Demo
 
-展示型 demo 的完整清单、运行命令和预期输出见 `demos.md`。`cargo demo` 与 `cargo demo-live` 来自 `.cargo/config.toml`；新增或调整展示命令时，应先更新 `demos.md`，并且只在 demo 已实现、可运行后再加入 Cargo alias。
+展示型 demo 的完整清单、运行命令和预期输出见 `demos.md`。`cargo demo`、`cargo demo-live`、`cargo demo-context`、`cargo demo-context-visual`、`cargo demo-truncation`、`cargo demo-schema` 和 `cargo demo-attachment` 均来自 `.cargo/config.toml`；新增或调整展示命令时，应先更新 `demos.md`，并且只在 demo 已实现、可运行后再加入 Cargo alias。
 
-Phase 2 合并主线前，展示型 demo 扩展是验收项之一：需要补齐 context、truncation、schema、context-visual、attachment，并增强 `demo-live` 的 provider summary 展示。它们仍应默认 ignored，不进入普通 CI 自动执行。
+Phase 2e 已补齐 context、truncation、schema、context-visual、attachment，并增强 `demo-live` 的 provider summary 展示。它们仍应默认 ignored，不进入普通 CI 自动执行，作为人工观察和阶段合并前验收入口。
