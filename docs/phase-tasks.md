@@ -59,8 +59,8 @@
 | [x] | Phase 2b-2：稳定前缀和缓存友好 prompt 布局 | `README.md`、`docs/context-capsule.md`、`docs/deepseek-api-adapter.md` | 已完成：`ContextBuilderConfig` 增加 30% 默认稳定前缀预算，`context.built` 输出 `stablePrefixHash` 和预算字段；修改 `TurnSuffix` 不改变 `StablePrefix`、可选稳定前缀超预算省略均有测试。 |
 | [x] | Phase 2c-1：Context Builder 接入 attachments 和 diagnostics | `docs/json-rpc-protocol.md`、`docs/context-capsule.md`、`docs/vscode-extension.md` | 已完成：`agent.sendTurn.attachments` 从拒绝改为消费，支持 file、selection、explicit_content、diagnostic；Core/RPC 已覆盖路径、重复和大小限制测试。 |
 | [x] | Phase 2c-2：`provider.completed` 事件和 DeepSeek cache hit/miss 实验 | `README.md`、`docs/roadmap.md`、`docs/deepseek-api-adapter.md`、`docs/testing.md` | 已完成基础闭环：Turn Loop 独立记录模型、duration、usage、cache hit/miss 和 stream 摘要，DeepSeek streaming wrapper 会从 usage chunk 填充字段；更大 cache hit/miss 手动实验留作 Phase 2d 前增强样本。 |
-| [ ] | Phase 2d-1：200K、500K、900K 样例仓库 token 预算与 Context Capsule 验收 | `README.md`、`docs/testing.md`、`docs/context-capsule.md` | 需要 ignored/manual benchmark，不能默认进入 CI。 |
-| [ ] | Phase 2d-2：超预算解释、Run Log 体积/截断/脱敏边界和 tool call JSON Schema 校验层 | `docs/run-log.md`、`docs/security-model.md`、`docs/agent-core.md`、`docs/tool-system.md` | required context 超预算失败；optional context 给出 omitted reason；统一工具/provider/verification 输出大小限制；schema validation 在 typed deserialization 前执行。 |
+| [x] | Phase 2d-1：200K、500K、900K 样例仓库 token 预算与 Context Capsule 验收 | `README.md`、`docs/testing.md`、`docs/context-capsule.md` | 已完成：新增 `context_capsule_large_repository_budget_benchmark` ignored/manual 测试，本地跑通 200K、500K、900K 三档样例 Context Capsule，默认 CI 只编译不自动执行。 |
+| [x] | Phase 2d-2：超预算解释、Run Log 体积/截断/脱敏边界和 tool call JSON Schema 校验层 | `docs/run-log.md`、`docs/security-model.md`、`docs/agent-core.md`、`docs/tool-system.md` | 已完成：required context 超预算失败和 optional omitted reason 继续由 Context Builder 测试覆盖；Run Log 写入入口统一脱敏和字符串/数组截断并记录 `runLogTruncation`；tool call arguments 在 typed deserialization 前执行注册表 JSON Schema 校验。 |
 
 ## Phase 3：TUI 与共享 RPC 交互管线
 

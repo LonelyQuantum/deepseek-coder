@@ -566,7 +566,7 @@ extension.ts
 
 ## 开发计划
 
-当前进度：Phase 1 Agent Core MVP 功能闭环和合并主线前最终验收已完成。DeepSeek provider、基础工具执行、Context Builder、Run Log、Turn Loop、CLI、RPC、审批、取消、真实 DeepSeek streaming/tool-call 验收、本地 fixture smoke、进程级 CLI smoke、小型真实仓库 CLI 联网验收、合并前第一轮测试增强、测试基础设施收敛、live 测试配置收敛、RPC/CLI/protocol 验收补齐和离线最终验收均已完成；VS Code RPC server 启动监管与 JSON-RPC request client 已作为 Phase 4 前置项提前完成，不作为 Agent Core MVP 的必需验收条件。下一步进入 Phase 2 的 1M Context Capsule 收敛。
+当前进度：Phase 1 Agent Core MVP 功能闭环和 Phase 2 的 1M Context Capsule 收敛均已完成。DeepSeek provider、基础工具执行、Context Builder、Run Log、Turn Loop、CLI、RPC、审批、取消、真实 DeepSeek streaming/tool-call 验收、本地 fixture smoke、进程级 CLI smoke、小型真实仓库 CLI 联网验收、合并前测试收敛、Context Capsule、manifest、token estimator、attachments、provider summary、Run Log 体积控制、tool call JSON Schema 校验和 200K/500K/900K 离线大上下文验收入口均已完成；VS Code RPC server 启动监管与 JSON-RPC request client 已作为 Phase 4 前置项提前完成，不作为 Agent Core MVP 的必需验收条件。下一步进入 Phase 3 的 TUI 与全双工 RPC 事件队列。
 
 ### Phase 0：项目章程
 
@@ -618,8 +618,8 @@ extension.ts
 - [x] Phase 2a-3：Workspace Manifest v0。已实现结构化 JSON、canonical `manifestHash`、默认 `maxEntries=500`、硬安全排除、默认工程排除、`.gitignore` + `.deepseek-coderignore`，并把 `workspace_manifest` 工具切换为可执行。
 - [x] Phase 2a-4：Context Builder manifest 接入。已在 Turn Loop 中自动生成 manifest summary 并放入 `StablePrefix`，同时扩展 `context.built` 事件输出 section token、manifest hash 和截断原因。
 - [x] Phase 2b：TokenEstimator 与稳定前缀。已建立 `TokenEstimator` trait、默认 `utf8_bytes` 估算器和 `CalibratedEstimator`，并在 `context.built` 中输出 `stablePrefixHash`、稳定前缀预算和校准 metadata；修改 `TurnSuffix` 不改变 `StablePrefix` 已有离线测试覆盖。
-- [x] Phase 2c：Attachments、provider summary 和 cache 实验。已让 `agent.sendTurn.attachments` 接入 file/selection/explicit_content/diagnostic 等来源，并加入数量、大小、路径和重复来源校验；Turn Loop 会写入 `provider.completed`，记录模型、duration、usage、cache hit/miss 和 streaming 摘要；DeepSeek streaming usage/cache 解析已有离线和 live 基础，后续 Phase 2d 前可继续扩展 cache hit/miss 手动实验样本。
-- [ ] Phase 2d：大仓库验收、超预算解释、Run Log 体积控制和 JSON Schema 校验层。覆盖 200K、500K、900K 样例仓库，统一输出截断/脱敏边界，并在 typed deserialization 前执行 tool call JSON Schema 校验。
+- [x] Phase 2c：Attachments、provider summary 和 cache 实验。已让 `agent.sendTurn.attachments` 接入 file/selection/explicit_content/diagnostic 等来源，并加入数量、大小、路径和重复来源校验；Turn Loop 会写入 `provider.completed`，记录模型、duration、usage、cache hit/miss 和 streaming 摘要；DeepSeek streaming usage/cache 解析已有离线和 live 基础。
+- [x] Phase 2d：大仓库验收、超预算解释、Run Log 体积控制和 JSON Schema 校验层。已新增 200K、500K、900K ignored/manual Context Capsule benchmark；Context Builder 继续对 required context 超预算显式失败、optional context 写入 omitted reason；Run Log 写入入口统一执行脱敏和字符串/数组截断，并用 `runLogTruncation` 记录边界；tool call arguments 会先按工具注册表 JSON Schema 校验，再进入 typed deserialization、审批和执行。
 
 验收标准：
 
@@ -627,6 +627,8 @@ extension.ts
 - 能展示哪些文件进入上下文、哪些没有进入，以及原因。
 - 同一 workspace 的稳定前缀可重复渲染，修改 `TurnSuffix` 不改变 `StablePrefix`。
 - 能记录 provider usage、cache hit/miss 和 token estimator 元数据。
+- 工具、验证和 provider 相关事件共享 Run Log 脱敏/截断边界，超大输出可通过 `runLogTruncation` 与空输出、缺失字段区分。
+- 模型 tool call 参数必须先通过 JSON Schema 校验，未知字段和错误类型不得进入 typed deserialization。
 
 ### Phase 3：TUI
 

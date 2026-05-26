@@ -118,7 +118,8 @@ Phase 2 的默认 CI 应优先覆盖离线、确定性测试：
 - token estimator metadata：`utf8_bytes` 和校准估算器都必须明确 `exact=false`，不能误报为真实 tokenizer；校准 fixture 覆盖系数、误差和不保存 prompt 原文的边界。
 - attachment fixture：file、selection、explicit_content、diagnostic 都能进入 Context Capsule；路径越界、重复 attachment、超大小 selection / explicit content 和 diagnostic 形状错误均有稳定错误。
 - provider summary：`provider.completed` 独立记录模型、duration、usage、cache hit/miss 和 streaming 摘要；DeepSeek streaming wrapper 从 include_usage chunk 填充这些字段。
-- JSON Schema validation：tool call arguments 在 typed deserialization 前通过 schema validator。
+- JSON Schema validation：tool call arguments 在 typed deserialization 前通过 schema validator，未知字段、错误类型、空字符串/空数组等会稳定失败。
+- Run Log 体积边界：工具结果、verification 输出和 Run Log payload 共用脱敏/截断函数，并记录 `runLogTruncation`。
 
 以下验收必须保持 ignored/manual，不进入普通 CI：
 
@@ -126,7 +127,15 @@ Phase 2 的默认 CI 应优先覆盖离线、确定性测试：
 - 200K、500K、900K 样例仓库 Context Capsule 生成和 token 预算报告。
 - 真实多文件任务展示 manifest、选中文件/诊断、token 预算、provider usage/cache 和最终验证结果。
 
-Phase 2c 的 cache usage 手动入口：
+Phase 2d 的大上下文手动入口：
+
+```powershell
+cargo test -p deepseek-coder-agent-core --test context_capsule_benchmark context_capsule_large_repository_budget_benchmark -- --ignored --exact --nocapture
+```
+
+该测试生成 200K、500K、900K 三档确定性样例 Context Capsule，输出 `inputTokens`、section tokens 和 omitted source 数量；默认 CI 只编译 ignored test，不自动执行。
+
+Phase 2c/2d 的 cache usage 手动入口：
 
 ```powershell
 cargo test -p deepseek-coder-agent-core --test deepseek_api_live live_cache_usage_summary_smoke_test -- --ignored --exact --nocapture

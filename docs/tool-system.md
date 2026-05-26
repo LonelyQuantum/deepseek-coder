@@ -294,7 +294,7 @@ fixture 中的 `tools` 被当作无序集合校验；测试会按工具名规整
 
 `WorkspaceToolExecutor` 返回的结果对象保留原始工具输出，便于调用方做精确展示、错误诊断和后续验证。工具结果写入 run log、进入 prompt 或发送给前端历史回放前，应先调用 `redacted_tool_result_value` 转换为已脱敏 JSON。
 
-该函数复用 Run Log 的基础脱敏规则，当前覆盖敏感字段名和明显的 `sk-...` 形态密钥片段。它不是完整的安全边界；更丰富的环境变量、云服务 key、证书和大输出截断策略仍属于后续统一脱敏层。
+该函数复用 Run Log 的统一脱敏/截断规则，当前覆盖敏感字段名、明显的 `sk-...` 形态密钥片段、单字符串 16 KiB 截断和单数组 256 项截断。截断信息通过 `runLogTruncation` 写入 payload，工具结果、verification 输出和 Run Log 事件共享同一套边界。
 
 ## Phase 1 实现范围
 
@@ -330,7 +330,7 @@ fixture 中的 `tools` 被当作无序集合校验；测试会按工具名规整
 ### 路径与敏感信息
 
 - 将当前静态敏感路径拒绝规则扩展为可配置规则，合并 `.gitignore`、用户 ignore 配置、常见密钥文件名和平台密钥目录。
-- 扩展 `redacted_tool_result_value` 背后的统一脱敏层，覆盖更多密钥形态、环境变量、stdout、stderr、diff、搜索结果和读取文件内容，并记录截断原因。
+- 继续扩展 `redacted_tool_result_value` 背后的统一脱敏层，覆盖更多密钥形态、环境变量、证书和云服务凭据。
 - 对大文件、二进制文件和非 UTF-8 文件给出结构化错误或专门的 metadata 结果，而不是把它们交给文本工具处理。
 
 ### `read_file`
@@ -342,9 +342,11 @@ fixture 中的 `tools` 被当作无序集合校验；测试会按工具名规整
 
 ### Tool call JSON Schema 校验
 
-- Phase 2d 增加通用 `ToolCallValidator`，优先使用工具注册表中的 JSON Schema 校验模型参数。
-- 校验顺序为：解析 arguments 字符串为 `serde_json::Value` -> schema validation -> typed deserialization -> 执行工具。
-- Schema 校验不能只作为 typed deserialization 失败后的补救，因为 Rust 结构体反序列化可能忽略未知字段，而 schema 才能稳定表达 `additionalProperties`、枚举、范围和互斥字段。
+Phase 2d 已增加通用 tool argument validator，优先使用工具注册表中的 JSON Schema 校验模型参数。
+
+校验顺序为：解析 arguments 字符串为 `serde_json::Value` -> schema validation -> typed deserialization -> 审批 -> 执行工具。
+
+Schema 校验不能只作为 typed deserialization 失败后的补救，因为 Rust 结构体反序列化可能忽略未知字段，而 schema 才能稳定表达 `additionalProperties`、枚举、范围和互斥字段。当前 validator 覆盖本仓库工具 schema 使用到的 JSON Schema 子集：`type`、`required`、`properties`、`additionalProperties: false`、`items`、`enum`、`minLength`、`minItems` 和 `minimum`。
 
 ### `search`
 
@@ -363,7 +365,7 @@ fixture 中的 `tools` 被当作无序集合校验；测试会按工具名规整
 ### `shell`
 
 - 在执行前加入命令风险分类：网络、破坏性、依赖安装、发布、远程 git 操作等必须升级审批。
-- 限制输出大小并记录截断原因，避免 stdout/stderr 把密钥或超大日志直接带入 run log。
+- 已通过 Run Log 统一脱敏/截断限制输出大小并记录截断原因；后续继续增强命令风险分类和进程树清理。
 - 记录环境变量差异，但默认隐藏或脱敏敏感变量。
 - 后续按平台分别实现更强的 sandbox 策略；Windows、Linux 和 macOS 不能假设具备相同隔离能力。
 

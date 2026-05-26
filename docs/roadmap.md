@@ -1,6 +1,6 @@
 # 路线图
 
-状态：草案，Phase 1 Agent Core MVP 与合并主线前离线最终验收已完成，后续随 Phase 2 实现持续更新。
+状态：草案，Phase 1 Agent Core MVP、合并主线前离线最终验收和 Phase 2 的 1M Context Capsule 收敛已完成，后续随 Phase 3 TUI 与共享 RPC 事件队列实现持续更新。
 
 本文档把 README 中的大阶段拆成更可执行的优先级。README 保留项目入口和高层计划；这里记录跨模块的落地顺序、取舍和验收重点。具体任务的阶段、状态和来源统一登记在 `docs/phase-tasks.md`，阶段条目标记完成前应同步检查并更新该索引。
 
@@ -142,9 +142,9 @@ Phase 2 的 1M Context Capsule 按 4 个增量轮次推进：
    - [x] 建立 DeepSeek cache hit/miss ignored live experiment 的基础解析路径；更大重复前缀样本归入 Phase 2d 前增强。
 
 4. **Phase 2d：大仓库验收与体积控制**
-   - 200K、500K、900K 样例仓库 token 预算和 Context Capsule 验收。
-   - 超预算解释、Run Log 输出截断和脱敏包边界。
-   - tool call JSON Schema 通用校验层，且在 typed deserialization 前执行。
+   - [x] 200K、500K、900K 样例仓库 token 预算和 Context Capsule ignored/manual 验收。
+   - [x] 超预算解释、Run Log 输出截断和脱敏包边界。
+   - [x] tool call JSON Schema 通用校验层，且在 typed deserialization 前执行。
 
 后续 DeepSeek 差异化事项：
 

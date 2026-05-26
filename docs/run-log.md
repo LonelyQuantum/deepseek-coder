@@ -1,6 +1,6 @@
 # 运行日志（Run Log）
 
-状态：Phase 1 基础存储层和写入串行化已实现，并已接入基础 Agent Turn Loop、CLI `run` 和 RPC Turn Loop handler。
+状态：Phase 1 基础存储层和写入串行化已实现，并已接入基础 Agent Turn Loop、CLI `run` 和 RPC Turn Loop handler；Phase 2d 已加入统一脱敏/截断边界。
 
 Run Log 是 Agent Core 的本地审计记录。它记录一次 run 中发生的事件，使 CLI、TUI、VS Code 和后续调试工具能够读取同一份事实来源。Run Log 不等同于模型上下文；进入上下文前仍需要 Context Capsule 做筛选、摘要、脱敏和 token 预算。
 
@@ -91,15 +91,17 @@ crates/agent-core/src/run_log.rs
 - `runId` 和 `turnId` 只能包含 ASCII 字母、数字、`_` 和 `-`。
 - event type 只能包含 ASCII 字母、数字、`.`、`_` 和 `-`。
 
-## 脱敏规则
+## 脱敏与截断规则
 
 写入事件前，Run Log 会递归处理 `payload`：
 
 - 以下字段名会整体替换为 `<redacted>`：`apiKey`、`authorization`、`password`、`secret`、`token`、`accessToken`、`refreshToken`、`credential`、`privateKey` 等。
 - 字符串中的明显 `sk-...` 形态密钥片段会替换为 `<redacted>`。
 - 非敏感统计字段不会因为包含 `Tokens` 后缀而被误删，例如 `cacheHitTokens`。
+- 单个字符串默认最多保留 16 KiB，单个数组默认最多保留 256 项。超出后保留确定性前缀，并在 payload 顶层写入 `runLogTruncation`。
+- `runLogTruncation` 是数组，每项包含 `path`、`reason`、`original` 和 `stored`。因此前端能区分字段不存在、字段为空字符串/空数组，以及字段因大小限制被截断。
 
-这只是基础保护层。工具输出进入 prompt 或长期审计包前，仍需要更完整的统一脱敏层。
+工具结果进入模型消息和 Run Log 前都会复用同一套脱敏/截断函数；CLI verification 输出也通过工具结果结构写入，因此与 `shell`、`git_diff`、`read_file` 等工具共享边界。后续导出长期审计包前仍应再做一次独立敏感信息扫描。
 
 ## 当前测试覆盖
 
@@ -108,14 +110,14 @@ crates/agent-core/src/run_log.rs
 - 拒绝不安全的 run id 和 state dir。
 - 读取时发现序列缺口会失败。
 - 写入前脱敏敏感字段和明显密钥片段。
+- 超长字符串和数组会被截断，并记录 `runLogTruncation` 元数据。
 - `SerializedRunLog` 多线程 clone 并发追加时，仍生成连续 `seq`，并可被重新打开为正确的下一条序号。
 - summary metadata 随事件追加更新，并可按最近更新时间列出。
 
 ## 后续增强
 
-- Phase 2c 已增加独立 `provider.completed` 事件，记录 provider usage、cache hit/miss、duration 和 streaming 摘要；后续应补事件 payload 强类型 fixture 和日志体积控制。
+- Phase 2c 已增加独立 `provider.completed` 事件，记录 provider usage、cache hit/miss、duration 和 streaming 摘要；Phase 2d 已补统一日志体积控制。
 - 扩展 Agent Turn Loop 接入，自动记录 patch proposal、验证命令、取消和恢复事件。
 - 增加事件 payload 的强类型 schema，并与 `docs/json-rpc-protocol.md` 和 `packages/protocol` 做兼容性测试。
 - 增加日志轮转或分片策略，防止长时间运行和高频 streaming 事件让单个 `events.jsonl` 过大。
-- Phase 2d 增加统一输出截断信息，区分“字段不存在”“输出为空”和“输出因安全或大小限制被截断”；工具输出、verification 输出和 provider 摘要必须使用同一套大小限制与脱敏边界。
 - 增加 run export 审计包，导出前再次做敏感信息扫描。

@@ -369,7 +369,20 @@ interface AgentEventEnvelope<TPayload> {
   turnId?: string;
   payload: TPayload;
 }
+
+interface RunLogTruncation {
+  path: string;
+  reason: "max_string_bytes" | "max_array_items";
+  original: number;
+  stored: number;
+}
+
+interface RunLogPayloadMetadata {
+  runLogTruncation?: RunLogTruncation[];
+}
 ```
+
+Phase 2d 起，所有 Run Log payload 写入前都会经过统一脱敏/截断。任意事件 payload 都可能带有 `runLogTruncation`；前端应把它视为元数据，用来区分“字段不存在”“字段为空”和“字段因大小限制被截断”。当前默认边界是单字符串 16 KiB、单数组 256 项。
 
 规则：
 
@@ -639,7 +652,7 @@ interface ToolStarted {
 ### `tool.completed`
 
 ```ts
-interface ToolCompleted {
+interface ToolCompleted extends RunLogPayloadMetadata {
   toolCallId: string;
   name: string;
   status: "ok" | "failed";
@@ -688,7 +701,7 @@ interface VerificationStarted {
 ### `verification.completed`
 
 ```ts
-interface VerificationCompleted {
+interface VerificationCompleted extends RunLogPayloadMetadata {
   verificationId: string;
   status: "passed" | "failed";
   exitCode: number;
@@ -855,6 +868,7 @@ Server 必须能够通过以下信息重建 run：
 Run log 持久化前必须脱敏密钥。
 
 当前 `crates/agent-core/src/run_log.rs` 已实现内部 JSONL 存储层。内部事件使用 `timeUnixMs`，`crates/agent-rpc` 已实现基础 stdio 事件桥接，会在转换成 JSON-RPC notification 时生成协议 envelope 中的 `time` 字符串。
+Run Log 写入入口会先脱敏，再执行字符串/数组大小限制；截断记录进入 payload 顶层 `runLogTruncation`。
 
 ## 实现说明
 
@@ -871,5 +885,4 @@ Run log 持久化前必须脱敏密钥。
 - 将 `provider.completed` 的 usage/cache/streaming 字段纳入更完整的 Rust/TypeScript 事件 payload fixture，避免文档、core 和前端类型漂移。
 - 建立 `assistant.delta` 高频事件的批量发送、节流或合并策略，并用 benchmark 验证 stdio JSON-RPC 在 VS Code 扩展中的流畅度。
 - 明确事件重放规则：run resume 时哪些事件原样回放，哪些事件需要标记为历史事件。
-- 增加输出截断和脱敏字段约定，使前端能区分“没有输出”和“输出被安全策略截断”。
 - 在协议层表达 workspace trust、审批持久化能力和禁用工具原因，避免 UI 自行推断。

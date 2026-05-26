@@ -25,15 +25,15 @@
 ## 初始缓解措施
 
 - 显式审批模型。
-- 结构化工具 schema。
-- 带基础脱敏策略的本地 run log。
-- 工具结果进入 run log 或 prompt 前可通过统一入口转为已脱敏 JSON。
+- 结构化工具 schema；Phase 2d 起，模型 tool call arguments 会在 typed deserialization 前按 JSON Schema 校验。
+- 带基础脱敏和大小截断策略的本地 run log。
+- 工具结果进入 run log 或 prompt 前可通过统一入口转为已脱敏、已截断 JSON；截断边界通过 `runLogTruncation` 记录。
 - 写入前检查 workspace 路径。
 - CI 检查格式、lint、测试和类型。
 
 ## 后续增强
 
-- 扩展统一脱敏层，覆盖更多 API Key 形态、环境变量、shell 输出、搜索结果、diff、run log、前端历史回放和 provider 错误正文。
+- 扩展统一脱敏层，覆盖更多 API Key 形态、环境变量、证书、前端历史回放和 provider 错误正文。
 - 为敏感路径建立三层拒绝/忽略规则：硬安全排除默认覆盖 `.env`、`.secrets/`、`.secret/`、`.git/`、`.agents/`、证书、token 文件和常见云服务凭据，不能被用户 ignore 规则重新纳入；默认工程排除覆盖 `target/`、`node_modules/`、`dist/`、`build/`；用户上下文排除使用 `.gitignore` 和 `.deepseek-coderignore`。
 - 增加命令风险分类器，在执行前识别网络访问、依赖安装、发布、远程 git 操作、删除和 reset 等高风险行为。
 - 按平台实现并测试 sandbox 边界；Windows、Linux 和 macOS 的能力差异需要在文档和测试中分别说明。
