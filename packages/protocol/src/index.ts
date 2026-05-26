@@ -564,6 +564,17 @@ export interface AgentEventEnvelope<TPayload = unknown> {
   readonly payload: TPayload;
 }
 
+export interface RunLogTruncation {
+  readonly path: string;
+  readonly reason: "max_string_bytes" | "max_array_items";
+  readonly original: number;
+  readonly stored: number;
+}
+
+export interface RunLogPayloadMetadata {
+  readonly runLogTruncation?: readonly RunLogTruncation[];
+}
+
 export interface AssistantDeltaPayload {
   readonly text: string;
   readonly iteration?: number;
@@ -584,7 +595,7 @@ export interface ProviderStreamingPayload {
   readonly toolCallDeltaCount: number;
 }
 
-export interface ProviderCompletedPayload {
+export interface ProviderCompletedPayload extends RunLogPayloadMetadata {
   readonly iteration: number;
   readonly model: string;
   readonly durationMs: number;

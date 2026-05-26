@@ -19,6 +19,7 @@ import {
   type ListRunsParams,
   type ListRunsResult,
   type ProviderCompletedPayload,
+  type RunLogPayloadMetadata,
   type RunSummary,
   type RejectParams,
   type RejectResult,
@@ -225,7 +226,7 @@ test("run summary params and results use stable protocol fields", () => {
   assert.equal(result.runs[0]?.lastSeq, 8);
 });
 
-test("attachments and provider completed payload use phase 2c fields", () => {
+test("attachments and provider completed payload use phase 2c and 2d fields", () => {
   const attachments = [
     {
       kind: "file",
@@ -275,11 +276,23 @@ test("attachments and provider completed payload use phase 2c fields", () => {
       chunkCount: 3,
       toolCallDeltaCount: 1,
     },
+    runLogTruncation: [
+      {
+        path: "$.usage.raw",
+        reason: "max_string_bytes",
+        original: 20000,
+        stored: 16384,
+      },
+    ],
   } satisfies ProviderCompletedPayload;
+  const metadata = {
+    runLogTruncation: providerCompleted.runLogTruncation,
+  } satisfies RunLogPayloadMetadata;
 
   assert.equal(attachments[2]?.kind, "explicit_content");
   assert.equal(providerCompleted.usage.promptCacheHitTokens, 64);
   assert.equal(providerCompleted.streaming.toolCallDeltaCount, 1);
+  assert.equal(metadata.runLogTruncation?.[0]?.reason, "max_string_bytes");
 });
 
 test("tool registry contains every declared tool exactly once", () => {
