@@ -17,6 +17,9 @@ const EVENTS_FILE: &str = "events.jsonl";
 const SUMMARY_FILE: &str = "summary.json";
 
 pub const REDACTED_VALUE: &str = "<redacted>";
+pub const RUN_LOG_MAX_STRING_BYTES: usize = 16 * 1024;
+pub const RUN_LOG_MAX_ARRAY_ITEMS: usize = 256;
+const RUN_LOG_TRUNCATION_FIELD: &str = "runLogTruncation";
 
 #[derive(Debug, Clone)]
 pub struct RunLogStore {
@@ -264,7 +267,7 @@ impl RunLog {
             event_type,
             run_id: self.run_id.clone(),
             turn_id,
-            payload: redact_value(payload),
+            payload: sanitize_payload(payload),
         };
 
         append_event(&self.events_path, &event)?;
@@ -775,6 +778,131 @@ pub fn redact_text(text: &str) -> String {
     redact_secret_like_tokens(text)
 }
 
+pub fn sanitize_payload(value: Value) -> Value {
+    let redacted = redact_value(value);
+    let mut truncations = Vec::new();
+    let mut truncated = truncate_value(redacted, "$", &mut truncations);
+    if !truncations.is_empty() {
+        match &mut truncated {
+            Value::Object(map) => {
+                map.insert(
+                    RUN_LOG_TRUNCATION_FIELD.to_owned(),
+                    Value::Array(
+                        truncations
+                            .into_iter()
+                            .map(RunLogTruncation::into_value)
+                            .collect(),
+                    ),
+                );
+                truncated
+            }
+            other => {
+                let mut map = Map::new();
+                map.insert("value".to_owned(), std::mem::take(other));
+                map.insert(
+                    RUN_LOG_TRUNCATION_FIELD.to_owned(),
+                    Value::Array(
+                        truncations
+                            .into_iter()
+                            .map(RunLogTruncation::into_value)
+                            .collect(),
+                    ),
+                );
+                Value::Object(map)
+            }
+        }
+    } else {
+        truncated
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RunLogTruncation {
+    path: String,
+    reason: &'static str,
+    original: usize,
+    stored: usize,
+}
+
+impl RunLogTruncation {
+    fn into_value(self) -> Value {
+        let mut map = Map::new();
+        map.insert("path".to_owned(), Value::String(self.path));
+        map.insert("reason".to_owned(), Value::String(self.reason.to_owned()));
+        map.insert("original".to_owned(), Value::from(self.original));
+        map.insert("stored".to_owned(), Value::from(self.stored));
+        Value::Object(map)
+    }
+}
+
+fn truncate_value(value: Value, path: &str, truncations: &mut Vec<RunLogTruncation>) -> Value {
+    match value {
+        Value::Object(map) => Value::Object(truncate_object(map, path, truncations)),
+        Value::Array(values) => Value::Array(truncate_array(values, path, truncations)),
+        Value::String(text) => truncate_string(text, path, truncations),
+        other => other,
+    }
+}
+
+fn truncate_object(
+    map: Map<String, Value>,
+    path: &str,
+    truncations: &mut Vec<RunLogTruncation>,
+) -> Map<String, Value> {
+    map.into_iter()
+        .map(|(key, value)| {
+            let child_path = format!("{path}.{key}");
+            (key, truncate_value(value, &child_path, truncations))
+        })
+        .collect()
+}
+
+fn truncate_array(
+    values: Vec<Value>,
+    path: &str,
+    truncations: &mut Vec<RunLogTruncation>,
+) -> Vec<Value> {
+    let original = values.len();
+    let mut truncated = values
+        .into_iter()
+        .take(RUN_LOG_MAX_ARRAY_ITEMS)
+        .enumerate()
+        .map(|(index, value)| truncate_value(value, &format!("{path}[{index}]"), truncations))
+        .collect::<Vec<_>>();
+
+    if original > RUN_LOG_MAX_ARRAY_ITEMS {
+        truncations.push(RunLogTruncation {
+            path: path.to_owned(),
+            reason: "max_array_items",
+            original,
+            stored: RUN_LOG_MAX_ARRAY_ITEMS,
+        });
+    }
+
+    truncated.shrink_to_fit();
+    truncated
+}
+
+fn truncate_string(text: String, path: &str, truncations: &mut Vec<RunLogTruncation>) -> Value {
+    let original = text.len();
+    if original <= RUN_LOG_MAX_STRING_BYTES {
+        return Value::String(text);
+    }
+
+    let mut end = RUN_LOG_MAX_STRING_BYTES;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let stored = end;
+    truncations.push(RunLogTruncation {
+        path: path.to_owned(),
+        reason: "max_string_bytes",
+        original,
+        stored,
+    });
+    Value::String(text[..end].to_owned())
+}
+
 fn redact_object(map: Map<String, Value>) -> Map<String, Value> {
     map.into_iter()
         .map(|(key, value)| {
@@ -848,8 +976,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        REDACTED_VALUE, RUNS_DIR, RunLogError, RunLogStore, RunLogWriter, RunSummaryStatus,
-        SerializedRunLog,
+        REDACTED_VALUE, RUN_LOG_MAX_ARRAY_ITEMS, RUN_LOG_MAX_STRING_BYTES, RUNS_DIR, RunLogError,
+        RunLogStore, RunLogWriter, RunSummaryStatus, SerializedRunLog,
     };
     use crate::test_helpers::TestWorkspace;
 
@@ -934,6 +1062,64 @@ mod tests {
         assert_eq!(payload["cacheHitTokens"], 42);
         assert_eq!(payload["nested"]["refresh_token"], REDACTED_VALUE);
         assert_eq!(payload["stdout"], format!("visible {REDACTED_VALUE}"));
+    }
+
+    #[test]
+    fn run_log_truncates_large_payloads_and_records_boundaries() {
+        let workspace = TestWorkspace::new("run-log");
+        let store = RunLogStore::new(workspace.path()).expect("store should open");
+        let mut run = store
+            .create_run("run_truncation")
+            .expect("run should be created");
+        let long_stdout = "a".repeat(RUN_LOG_MAX_STRING_BYTES + 32);
+        let many_matches = (0..RUN_LOG_MAX_ARRAY_ITEMS + 3)
+            .map(|index| json!({ "line": index }))
+            .collect::<Vec<_>>();
+
+        run.append_at(
+            10,
+            "tool.completed",
+            Some("turn_1".to_owned()),
+            json!({
+                "stdout": long_stdout,
+                "stderr": "",
+                "matches": many_matches
+            }),
+        )
+        .expect("event should append");
+
+        let loaded = store
+            .load_run("run_truncation")
+            .expect("events should load");
+        let payload = &loaded[0].payload;
+        assert_eq!(
+            payload["stdout"]
+                .as_str()
+                .expect("stdout should be string")
+                .len(),
+            RUN_LOG_MAX_STRING_BYTES
+        );
+        assert_eq!(payload["stderr"], "");
+        assert_eq!(
+            payload["matches"]
+                .as_array()
+                .expect("matches should stay an array")
+                .len(),
+            RUN_LOG_MAX_ARRAY_ITEMS
+        );
+        let truncation = payload["runLogTruncation"]
+            .as_array()
+            .expect("truncation metadata should be recorded");
+        assert!(
+            truncation.iter().any(|entry| {
+                entry["path"] == "$.stdout" && entry["reason"] == "max_string_bytes"
+            })
+        );
+        assert!(
+            truncation.iter().any(|entry| {
+                entry["path"] == "$.matches" && entry["reason"] == "max_array_items"
+            })
+        );
     }
 
     #[test]
