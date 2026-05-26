@@ -833,7 +833,8 @@ fn turn_loop_error_json_rpc_code(error: &AgentTurnLoopError) -> i64 {
         | AgentTurnLoopError::UnknownTool { .. }
         | AgentTurnLoopError::UnsupportedTool { .. }
         | AgentTurnLoopError::Serialization(_) => RPC_TOOL_EXECUTION_FAILED,
-        AgentTurnLoopError::InvalidToolArguments { .. } => RPC_INVALID_TOOL_ARGUMENTS,
+        AgentTurnLoopError::InvalidToolArguments { .. }
+        | AgentTurnLoopError::InvalidToolArgumentSchema { .. } => RPC_INVALID_TOOL_ARGUMENTS,
         AgentTurnLoopError::Canceled { .. }
         | AgentTurnLoopError::ApprovalCanceled { .. }
         | AgentTurnLoopError::ApprovalExpired { .. } => RPC_RUN_CANCELED,

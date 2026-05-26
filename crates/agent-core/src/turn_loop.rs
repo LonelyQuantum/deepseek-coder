@@ -18,7 +18,10 @@ use crate::{
         ReasoningContentStateMachine,
     },
     run_log::{RunLogError, RunLogEvent, RunLogWriter},
-    tool::{ToolDefinition, ToolName, find_builtin_tool},
+    tool::{
+        ToolArgumentSchemaError, ToolDefinition, ToolName, find_builtin_tool,
+        validate_tool_arguments,
+    },
     tool_execution::{
         ApplyPatchArgs, ReadFileArgs, ShellArgs, ToolExecutionError, ToolStatus,
         WorkspaceManifestArgs, WorkspaceToolExecutor, redacted_tool_result_value,
@@ -601,6 +604,7 @@ where
                 name: tool_name.to_owned(),
             })?;
         let arguments_preview = parse_tool_arguments_value(tool_call)?;
+        validate_tool_call_arguments(definition, tool_call, &arguments_preview)?;
 
         append_turn_event(
             run_log,
@@ -617,7 +621,7 @@ where
 
         match definition.name {
             ToolName::WorkspaceManifest => {
-                let args = parse_tool_arguments(tool_call)?;
+                let args = parse_tool_arguments(tool_call, &arguments_preview)?;
                 self.execute_without_approval(
                     tool_call,
                     context,
@@ -632,7 +636,7 @@ where
                 )
             }
             ToolName::ReadFile => {
-                let args = parse_tool_arguments(tool_call)?;
+                let args = parse_tool_arguments(tool_call, &arguments_preview)?;
                 self.execute_without_approval(
                     tool_call,
                     context,
@@ -646,7 +650,7 @@ where
                 )
             }
             ToolName::Search => {
-                let args = parse_tool_arguments(tool_call)?;
+                let args = parse_tool_arguments(tool_call, &arguments_preview)?;
                 self.execute_without_approval(
                     tool_call,
                     context,
@@ -660,7 +664,7 @@ where
                 )
             }
             ToolName::ApplyPatch => {
-                let args: ApplyPatchArgs = parse_tool_arguments(tool_call)?;
+                let args: ApplyPatchArgs = parse_tool_arguments(tool_call, &arguments_preview)?;
                 self.ensure_approval(
                     definition,
                     tool_call,
@@ -691,7 +695,7 @@ where
                 )
             }
             ToolName::Shell => {
-                let args: ShellArgs = parse_tool_arguments(tool_call)?;
+                let args: ShellArgs = parse_tool_arguments(tool_call, &arguments_preview)?;
                 self.ensure_approval(
                     definition,
                     tool_call,
@@ -716,7 +720,7 @@ where
                 )
             }
             ToolName::GitStatus => {
-                let args = parse_tool_arguments(tool_call)?;
+                let args = parse_tool_arguments(tool_call, &arguments_preview)?;
                 self.execute_without_approval(
                     tool_call,
                     context,
@@ -731,7 +735,7 @@ where
                 )
             }
             ToolName::GitDiff => {
-                let args = parse_tool_arguments(tool_call)?;
+                let args = parse_tool_arguments(tool_call, &arguments_preview)?;
                 self.execute_without_approval(
                     tool_call,
                     context,
@@ -1554,6 +1558,12 @@ pub enum AgentTurnLoopError {
         name: String,
         source: serde_json::Error,
     },
+    #[error("tool call `{tool_call_id}` for `{name}` failed JSON Schema validation: {source}")]
+    InvalidToolArgumentSchema {
+        tool_call_id: String,
+        name: String,
+        source: ToolArgumentSchemaError,
+    },
     #[error("tool result serialization failed: {0}")]
     Serialization(#[from] serde_json::Error),
     #[error("too many attachments: got {count}, max {max_attachments}")]
@@ -1613,7 +1623,9 @@ impl AgentTurnLoopError {
             Self::Canceled { .. } => "E_RUN_CANCELED",
             Self::UnknownTool { .. } => "E_UNKNOWN_TOOL",
             Self::UnsupportedTool { .. } => "E_UNSUPPORTED_TOOL",
-            Self::InvalidToolArguments { .. } => "E_INVALID_TOOL_ARGUMENTS",
+            Self::InvalidToolArguments { .. } | Self::InvalidToolArgumentSchema { .. } => {
+                "E_INVALID_TOOL_ARGUMENTS"
+            }
             Self::Serialization(_) => "E_SERIALIZATION",
             Self::TooManyAttachments { .. }
             | Self::DuplicateAttachment { .. }
@@ -1681,10 +1693,25 @@ fn parse_tool_arguments_value(tool_call: &ChatToolCall) -> Result<Value, AgentTu
     })
 }
 
+fn validate_tool_call_arguments(
+    definition: &ToolDefinition,
+    tool_call: &ChatToolCall,
+    arguments: &Value,
+) -> Result<(), AgentTurnLoopError> {
+    validate_tool_arguments(definition, arguments).map_err(|source| {
+        AgentTurnLoopError::InvalidToolArgumentSchema {
+            tool_call_id: tool_call.id.clone(),
+            name: tool_call.function.name.clone(),
+            source,
+        }
+    })
+}
+
 fn parse_tool_arguments<T: DeserializeOwned>(
     tool_call: &ChatToolCall,
+    arguments: &Value,
 ) -> Result<T, AgentTurnLoopError> {
-    serde_json::from_str(&tool_call.function.arguments).map_err(|source| {
+    serde_json::from_value(arguments.clone()).map_err(|source| {
         AgentTurnLoopError::InvalidToolArguments {
             tool_call_id: tool_call.id.clone(),
             name: tool_call.function.name.clone(),
@@ -2241,6 +2268,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn turn_loop_rejects_tool_arguments_before_typed_deserialization() {
+        let workspace = TestWorkspace::new("turn-loop");
+        workspace.write("README.md", "hello\n");
+        let store = RunLogStore::new(workspace.path()).expect("run log store should open");
+        let mut run = store
+            .create_run("run_turn_schema_reject")
+            .expect("run should be created");
+        let provider = ScriptedProvider::new(vec![TurnProviderResponse::tool_calls(
+            None,
+            Some("I should read the README.".to_owned()),
+            vec![ChatToolCall::function(
+                "call_1",
+                "read_file",
+                r#"{"path":"README.md","unexpected":true}"#,
+            )],
+        )]);
+        let mut loop_runner =
+            AgentTurnLoop::new(workspace.path(), provider).expect("turn loop should initialize");
+
+        let error = loop_runner
+            .run_turn(AgentTurnInput::new("turn_1", "Read README"), &mut run)
+            .await
+            .expect_err("schema validation should reject unexpected properties");
+
+        assert!(matches!(
+            error,
+            AgentTurnLoopError::InvalidToolArgumentSchema { .. }
+        ));
+        let events = store
+            .load_run("run_turn_schema_reject")
+            .expect("events should load");
+        assert!(
+            !events
+                .iter()
+                .any(|event| event.event_type == "tool.requested")
+        );
+        assert!(events.iter().any(|event| {
+            event.event_type == "run.failed" && event.payload["code"] == "E_INVALID_TOOL_ARGUMENTS"
+        }));
+    }
+
+    #[tokio::test]
     async fn turn_loop_executes_approved_patch_and_tracks_changed_files() {
         let workspace = TestWorkspace::new("turn-loop");
         workspace.write("README.md", "old\n");
@@ -2483,7 +2552,6 @@ mod tests {
                 "shell",
                 json!({
                     "command": command,
-                    "cwd": null,
                     "timeoutMs": 10_000
                 })
                 .to_string(),
