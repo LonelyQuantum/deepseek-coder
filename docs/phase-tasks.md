@@ -78,7 +78,7 @@
 | [x] | TypeScript extension scaffold | `README.md`、`docs/vscode-extension.md` | 已完成基础命令和测试骨架。 |
 | [x] | RPC server 启动监管 | `README.md`、`docs/vscode-extension.md` | 已能启动 `prole rpc`、发送 initialize、转发事件并处理退出。 |
 | [x] | JSON-RPC request client | `README.md`、`docs/vscode-extension.md` | 已管理 request id、pending response、error response 和进程退出清理。 |
-| [ ] | VS Code/protocol TypeScript 类型共享收敛 | `packages/protocol`、`docs/json-rpc-protocol.md`、`docs/vscode-extension.md` | 建立 extension 可消费的 protocol 类型导出或 project reference，逐步删除 `rpcServer.ts` 本地重复 envelope 定义；本轮已先修正 `AgentEventEnvelope.runId` 必填和 runtime guard。 |
+| [x] | VS Code/protocol TypeScript 类型共享收敛 | `packages/protocol`、`docs/json-rpc-protocol.md`、`docs/vscode-extension.md` | 已完成：extension 通过 workspace devDependency 消费 `@prole-coder/protocol`，`rpcServer.ts` re-export protocol `AgentEventEnvelope` 类型 alias，删除本地重复 envelope 定义；extension build/typecheck/test/lint 会先构建 protocol 声明。 |
 | [ ] | VS Code RPC/commands 边界测试补齐 | `docs/vscode-extension.md`、`.agents/communication/daily/2026-05-28/code_review.md` | 补齐 `RpcServerManager` spawn/stdio/invalid JSON/stop/onEvent/stderrPreview 等边界，以及 `requestApproval` 的 `persistable: false`、openChat 错误降级和消息格式化分支。 |
 | [ ] | Sidebar Chat 和 `agent.event` 渲染 | `README.md`、`docs/vscode-extension.md` | 当前 manager 能转发事件，但 UI 尚未消费。 |
 | [ ] | 文本输入发送 turn 并接收真实 Agent 响应 | `README.md`、`docs/vscode-extension.md`、`docs/json-rpc-protocol.md` | UI 层调用 `agent.sendTurn`，通过事件流渲染进度和最终结果。 |

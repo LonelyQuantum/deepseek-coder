@@ -639,7 +639,7 @@ extension.ts
 - [x] TypeScript extension scaffold：建立 VS Code 插件 TypeScript 工程、激活入口、基础命令和测试骨架。
 - [x] RPC server 管理：插件可启动 `prole rpc`，发送 `agent.initialize`，转发 `agent.event`，并在退出或错误时更新状态和提示。
 - [x] JSON-RPC request client：统一 request id、pending response、error response 和进程退出时的 pending request 清理。
-- [ ] VS Code/protocol TypeScript 类型共享收敛：建立 extension 可消费的 protocol 类型导出或 project reference，逐步删除 `rpcServer.ts` 本地重复 envelope 定义。
+- [x] VS Code/protocol TypeScript 类型共享收敛：extension 已通过 workspace 依赖消费 `@prole-coder/protocol`，`rpcServer.ts` 的 `AgentEventEnvelope` 改为 protocol 类型 alias，并由 extension build/typecheck/test 脚本先构建 protocol 声明。
 - [ ] VS Code RPC/commands 边界测试补齐：覆盖 `RpcServerManager` 启动、stdio、无效 JSON、停止/订阅释放等路径，以及审批和 openChat 命令边界。
 - [ ] Sidebar Chat 与 `agent.event` 渲染。
 - [ ] 文本输入发送 turn，并通过 `agent.sendTurn` 驱动真实 Agent 回合。

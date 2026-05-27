@@ -1,6 +1,6 @@
 # 编辑器插件（VS Code Extension）
 
-状态：Phase 3 优先开发项。基础命令、审批弹窗 adapter、RPC server 启动监管、初始化握手、JSON-RPC request client 和共享 RPC 全双工事件管线已实现；尚未实现完整 Chat UI、事件渲染、真实审批回传和 diff editor 集成。
+状态：Phase 3 优先开发项。基础命令、审批弹窗 adapter、RPC server 启动监管、初始化握手、JSON-RPC request client、VS Code/protocol TypeScript 类型共享和共享 RPC 全双工事件管线已实现；尚未实现完整 Chat UI、事件渲染、真实审批回传和 diff editor 集成。
 
 VS Code 插件是 `ProleCoder` 的一等前端。它必须通过 JSON-RPC server 复用 Rust Agent Core，而不是在 TypeScript 侧重新实现 agent loop、context builder、provider 调用或 tool execution。
 
@@ -30,6 +30,7 @@ VS Code 插件是 `ProleCoder` 的一等前端。它必须通过 JSON-RPC server
 - 把 JSON-RPC error response 转换为 `RpcRequestError`，保留 `code` 和 `data`。
 - server 停止、退出或出错时，会拒绝尚未完成的 pending request。
 - 记录 stderr 尾部，供后续错误提示和诊断使用。
+- 从 `@prole-coder/protocol` 复用 `AgentEventEnvelope` 类型，避免 extension 本地重复定义事件 envelope。
 - 如果 server 在 ready 后意外退出，状态进入 `failed` 并提示用户。
 - 插件 dispose 时关闭 stdin 并 kill 子进程。
 - 未受信任 workspace 不会启动 server。

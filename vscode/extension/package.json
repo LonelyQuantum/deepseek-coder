@@ -46,13 +46,14 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "lint": "tsc -p tsconfig.test.json --noEmit",
+    "build": "pnpm --filter @prole-coder/protocol build && tsc -p tsconfig.json",
+    "lint": "pnpm --filter @prole-coder/protocol build && tsc -p tsconfig.test.json --noEmit",
     "package": "vsce package",
-    "test": "tsc -p tsconfig.test.json && node --test \"out-test/**/*.test.js\"",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "test": "pnpm --filter @prole-coder/protocol build && tsc -p tsconfig.test.json && node --test \"out-test/**/*.test.js\"",
+    "typecheck": "pnpm --filter @prole-coder/protocol build && tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
+    "@prole-coder/protocol": "workspace:*",
     "@types/node": "^24.0.0",
     "@types/vscode": "^1.100.0",
     "@vscode/test-electron": "^2.4.0",

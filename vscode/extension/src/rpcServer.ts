@@ -1,5 +1,9 @@
 import { spawn } from "node:child_process";
 
+import type { AgentEventEnvelope as ProtocolAgentEventEnvelope } from "@prole-coder/protocol" with {
+  "resolution-mode": "import",
+};
+
 export const RPC_PROTOCOL_VERSION = "0.1.0";
 export const RPC_INITIALIZE_METHOD = "agent.initialize";
 export const RPC_EVENT_METHOD = "agent.event";
@@ -64,14 +68,7 @@ export interface RpcProcessFactory {
   spawn(command: string, args: readonly string[], options: RpcSpawnOptions): RpcChildProcess;
 }
 
-export interface AgentEventEnvelope {
-  readonly seq: number;
-  readonly time: string;
-  readonly type: string;
-  readonly runId: string;
-  readonly turnId?: string;
-  readonly payload: unknown;
-}
+export type AgentEventEnvelope = ProtocolAgentEventEnvelope;
 
 export interface DisposableLike {
   dispose(): unknown;
