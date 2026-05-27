@@ -87,6 +87,31 @@ test("RPC server manager forwards agent.event notifications", async () => {
   ]);
 });
 
+test("RPC server manager ignores malformed agent.event notifications", async () => {
+  const factory = new FakeProcessFactory();
+  const manager = rpcManagerWithFactory(factory);
+  const received: unknown[] = [];
+  manager.onEvent((event) => received.push(event));
+
+  const readyPromise = manager.start();
+  const child = factory.lastChild();
+  child.stdout.pushJson(initializeResponse(child.initializeRequest().id));
+  await readyPromise;
+
+  child.stdout.pushJson({
+    jsonrpc: "2.0",
+    method: "agent.event",
+    params: {
+      seq: 1,
+      time: "1970-01-01T00:00:00.000Z",
+      type: "run.started",
+      payload: { mode: "ask" },
+    },
+  });
+
+  assert.deepEqual(received, []);
+});
+
 test("RPC server manager sends JSON-RPC requests and resolves matching responses", async () => {
   const factory = new FakeProcessFactory();
   const manager = rpcManagerWithFactory(factory);

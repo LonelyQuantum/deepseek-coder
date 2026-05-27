@@ -68,7 +68,7 @@ export interface AgentEventEnvelope {
   readonly seq: number;
   readonly time: string;
   readonly type: string;
-  readonly runId?: string;
+  readonly runId: string;
   readonly turnId?: string;
   readonly payload: unknown;
 }
@@ -521,6 +521,7 @@ function isAgentEventEnvelope(value: unknown): value is AgentEventEnvelope {
     typeof value["seq"] === "number" &&
     typeof value["time"] === "string" &&
     typeof value["type"] === "string" &&
+    typeof value["runId"] === "string" &&
     typeof value["payload"] !== "undefined"
   );
 }
