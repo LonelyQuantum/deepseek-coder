@@ -2,7 +2,7 @@
 
 状态：草案，Phase 1 Agent Core MVP 已完成。
 
-`deepseek-coder` 分为 Rust 核心和 TypeScript 前端/共享包。
+`ProleCoder` 分为 Rust 核心和 TypeScript 前端/共享包。
 
 ```text
 CLI/TUI                 VS Code Extension
@@ -43,7 +43,7 @@ TypeScript workspace：
 
 ## 本地状态
 
-运行时状态默认保存在 `.deepseek-coder/`：
+运行时状态默认保存在 `.prole-coder/`：
 
 - 配置快照
 - workspace manifest
@@ -64,5 +64,5 @@ TypeScript workspace：
 
 - 补齐 RPC 全双工异步 run 执行队列、client 断连取消，并优先把 VS Code 审批原语接入真实 UI；TUI 后续复用同一管线。
 - 扩展 `crates/agent-rpc`，让 CLI/TUI/VS Code 通过同一套 JSON-RPC 协议调用 Agent Core。
-- 明确 `.deepseek-coder/` 本地状态的目录结构、版本迁移策略和脱敏规则。
+- 明确 `.prole-coder/` 本地状态的目录结构、版本迁移策略和脱敏规则。
 - 增加端到端测试，覆盖 CLI/TUI/VS Code 对同一任务产生一致 run log 的能力。

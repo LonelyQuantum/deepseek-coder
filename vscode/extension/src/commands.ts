@@ -1,6 +1,6 @@
-export const OPEN_CHAT_COMMAND = "deepseek-coder.openChat";
+export const OPEN_CHAT_COMMAND = "prole-coder.openChat";
 export const OPEN_CHAT_NO_WORKSPACE_MESSAGE =
-  "Open a trusted workspace before starting the deepseek-coder RPC server.";
+  "Open a trusted workspace before starting the prole-coder RPC server.";
 export const APPROVAL_APPROVE_LABEL = "Approve";
 export const APPROVAL_APPROVE_ONCE_LABEL = "Approve Once";
 export const APPROVAL_APPROVE_SESSION_LABEL = "Approve For Session";
@@ -79,11 +79,11 @@ export function registerOpenChatCommand(
       .start()
       .then((ready) =>
         window.showInformationMessage(
-          `deepseek-coder RPC server ready: ${ready.server.name} ${ready.server.version}`,
+          `prole-coder RPC server ready: ${ready.server.name} ${ready.server.version}`,
         ),
       )
       .catch((error: unknown) => {
-        const message = `deepseek-coder RPC server failed to start: ${errorMessage(error)}`;
+        const message = `prole-coder RPC server failed to start: ${errorMessage(error)}`;
         if (window.showWarningMessage !== undefined) {
           return window.showWarningMessage(message);
         }

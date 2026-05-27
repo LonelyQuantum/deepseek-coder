@@ -87,7 +87,7 @@ test("open chat command starts the RPC server and reports readiness", async () =
     async start() {
       return {
         server: {
-          name: "deepseek-coder-agent-rpc",
+          name: "prole-coder-agent-rpc",
           version: "0.1.0",
         },
       };
@@ -98,7 +98,7 @@ test("open chat command starts the RPC server and reports readiness", async () =
   await callback();
 
   assert.ok(message?.includes("RPC server ready"));
-  assert.ok(message?.includes("deepseek-coder-agent-rpc"));
+  assert.ok(message?.includes("prole-coder-agent-rpc"));
 });
 
 test("requestApproval maps VS Code approve choices to approval params", async () => {

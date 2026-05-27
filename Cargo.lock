@@ -149,53 +149,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "deepseek-coder-agent-core"
-version = "0.1.0"
-dependencies = [
- "async-stream",
- "futures-util",
- "ignore",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "thiserror",
- "tokio",
- "url",
-]
-
-[[package]]
-name = "deepseek-coder-agent-rpc"
-version = "0.1.0"
-dependencies = [
- "deepseek-coder-agent-core",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
-]
-
-[[package]]
-name = "deepseek-coder-cli"
-version = "0.1.0"
-dependencies = [
- "async-stream",
- "deepseek-coder-agent-core",
- "deepseek-coder-agent-rpc",
- "futures-util",
- "serde_json",
- "thiserror",
- "tokio",
-]
-
-[[package]]
-name = "deepseek-coder-tui"
-version = "0.1.0"
-dependencies = [
- "deepseek-coder-agent-core",
-]
-
-[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -666,6 +619,53 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "prole-coder-agent-core"
+version = "0.1.0"
+dependencies = [
+ "async-stream",
+ "futures-util",
+ "ignore",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "prole-coder-agent-rpc"
+version = "0.1.0"
+dependencies = [
+ "prole-coder-agent-core",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "prole-coder-cli"
+version = "0.1.0"
+dependencies = [
+ "async-stream",
+ "futures-util",
+ "prole-coder-agent-core",
+ "prole-coder-agent-rpc",
+ "serde_json",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "prole-coder-tui"
+version = "0.1.0"
+dependencies = [
+ "prole-coder-agent-core",
 ]
 
 [[package]]

@@ -8,7 +8,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use deepseek_coder_agent_core::{
+use futures_util::StreamExt;
+use prole_coder_agent_core::{
     AGENT_METADATA,
     cancellation::CancellationToken,
     context::ContextBuildError,
@@ -34,7 +35,7 @@ use deepseek_coder_agent_core::{
         turn_provider_response_stream,
     },
 };
-use deepseek_coder_agent_rpc::{
+use prole_coder_agent_rpc::{
     AgentRpcError, AgentRpcHandlerError, AgentTurnLoopRpcHandler, JSON_RPC_INTERNAL_ERROR,
     JSON_RPC_INVALID_PARAMS, JsonRpcErrorObject, JsonRpcErrorResponse, RPC_APPROVAL_DENIED,
     RPC_CONTEXT_BUDGET_EXCEEDED, RPC_INTERNAL_INVARIANT, RPC_INVALID_TOOL_ARGUMENTS,
@@ -42,7 +43,6 @@ use deepseek_coder_agent_rpc::{
     RPC_TOOL_EXECUTION_FAILED, RpcTurnProviderFactory, SendTurnParams, StdioEventBridge,
     run_stdio_request_loop,
 };
-use futures_util::StreamExt;
 use serde_json::{Value, json};
 use thiserror::Error;
 
@@ -378,7 +378,7 @@ where
         AgentTurnInput::new(command.turn_id.clone(), command.task.clone()).with_mode(command.mode);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
-        .thread_name("deepseek-coder-cli")
+        .thread_name("prole-coder-cli")
         .build()?;
 
     let (turn_result, verification_result) = if command.json_events {
@@ -1304,7 +1304,7 @@ pub enum CliError {
     #[error("I/O error at {path}: {source}")]
     Io { path: PathBuf, source: io::Error },
     #[error("DeepSeek provider configuration failed: {0}")]
-    DeepSeek(#[from] deepseek_coder_agent_core::provider::deepseek_api::DeepSeekApiError),
+    DeepSeek(#[from] prole_coder_agent_core::provider::deepseek_api::DeepSeekApiError),
     #[error("run log failed: {0}")]
     RunLog(#[from] RunLogError),
     #[error("agent turn failed: {0}")]
@@ -1404,7 +1404,7 @@ fn generate_id(prefix: &str) -> Result<String, CliError> {
 
 fn help_text() -> String {
     format!(
-        "{name}\n\nUsage:\n  deepseek-coder run [options] <task>\n  deepseek-coder rpc [options]\n\n{}\n\n{}",
+        "{name}\n\nUsage:\n  prole run [options] <task>\n  prole rpc [options]\n\n{}\n\n{}",
         run_help_text(),
         rpc_help_text(),
         name = AGENT_METADATA.name
@@ -1446,7 +1446,8 @@ fn rpc_help_text() -> String {
 
 #[cfg(test)]
 mod tests {
-    use deepseek_coder_agent_core::{
+    use futures_util::{StreamExt, stream};
+    use prole_coder_agent_core::{
         cancellation::CancellationToken,
         provider::deepseek_api::{
             ChatCompletionChunk, ChatCompletionChunkChoice, ChatCompletionDelta,
@@ -1457,10 +1458,7 @@ mod tests {
         test_helpers::TestWorkspace,
         turn_loop::TurnProviderEvent,
     };
-    use deepseek_coder_agent_rpc::{
-        PROTOCOL_VERSION, RPC_APPROVAL_DENIED, RPC_TOOL_EXECUTION_FAILED,
-    };
-    use futures_util::{StreamExt, stream};
+    use prole_coder_agent_rpc::{PROTOCOL_VERSION, RPC_APPROVAL_DENIED, RPC_TOOL_EXECUTION_FAILED};
     use serde_json::{Value, json};
 
     use super::{
@@ -1471,7 +1469,7 @@ mod tests {
     #[test]
     fn parses_run_command_options() {
         let args = vec![
-            "deepseek-coder".to_owned(),
+            "prole".to_owned(),
             "run".to_owned(),
             "--provider".to_owned(),
             "fixture".to_owned(),
@@ -1509,7 +1507,7 @@ mod tests {
     #[test]
     fn parses_rpc_command_options() {
         let args = vec![
-            "deepseek-coder".to_owned(),
+            "prole".to_owned(),
             "rpc".to_owned(),
             "--provider".to_owned(),
             "fixture".to_owned(),
@@ -1543,7 +1541,7 @@ mod tests {
 
         run_cli(
             [
-                "deepseek-coder",
+                "prole",
                 "run",
                 "--provider",
                 "fixture",
@@ -1593,7 +1591,7 @@ mod tests {
 
         run_cli(
             [
-                "deepseek-coder",
+                "prole",
                 "run",
                 "--provider",
                 "fixture",
@@ -1665,7 +1663,7 @@ mod tests {
 
         let error = run_cli_with_input(
             [
-                "deepseek-coder",
+                "prole",
                 "run",
                 "--provider",
                 "fixture",
@@ -1734,7 +1732,7 @@ mod tests {
 
         let error = run_cli(
             [
-                "deepseek-coder",
+                "prole",
                 "run",
                 "--provider",
                 "fixture",
@@ -1795,7 +1793,7 @@ mod tests {
 
         run_cli_with_input(
             [
-                "deepseek-coder",
+                "prole",
                 "run",
                 "--provider",
                 "fixture",
@@ -1838,7 +1836,7 @@ mod tests {
 
         let error = run_cli_with_input(
             [
-                "deepseek-coder",
+                "prole",
                 "run",
                 "--provider",
                 "fixture",
@@ -1913,7 +1911,7 @@ mod tests {
 
         run_cli_with_input(
             [
-                "deepseek-coder",
+                "prole",
                 "rpc",
                 "--provider",
                 "fixture",
@@ -2028,7 +2026,7 @@ mod tests {
         assert_eq!(response.completion.model, "deepseek-v4-pro");
         assert_eq!(
             response.completion.finish_reason,
-            deepseek_coder_agent_core::turn_loop::TurnProviderFinishReason::Stop
+            prole_coder_agent_core::turn_loop::TurnProviderFinishReason::Stop
         );
         let usage = response
             .completion

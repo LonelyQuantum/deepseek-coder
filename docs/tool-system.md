@@ -111,7 +111,7 @@ pub struct ToolDefinition {
 参数：
 
 - `root`：workspace-relative 扫描根目录，省略时使用初始化时的 `workspaceRoot`。
-- `respectGitignore`：是否遵守 `.gitignore` 和 `.deepseek-coderignore`。
+- `respectGitignore`：是否遵守 `.gitignore` 和 `.prole-coderignore`。
 - `maxEntries`：最多返回的 manifest 条目数量，省略时使用默认值 500。
 
 结果：
@@ -300,7 +300,7 @@ fixture 中的 `tools` 被当作无序集合校验；测试会按工具名规整
 
 `WorkspaceToolExecutor` 当前提供：
 
-- `workspace_manifest`：生成 workspace manifest v0，默认遵守 `.gitignore` 和 `.deepseek-coderignore`，硬排除 `.git/`、`.secrets/`、`.secret/`、`.agents/`、`.codex/` 和 `.deepseek-coder/`，并返回稳定排序条目、manifest hash、git 状态和截断原因。
+- `workspace_manifest`：生成 workspace manifest v0，默认遵守 `.gitignore` 和 `.prole-coderignore`，硬排除 `.git/`、`.secrets/`、`.secret/`、`.agents/`、`.codex/` 和 `.prole-coder/`，并返回稳定排序条目、manifest hash、git 状态和截断原因。
 - `read_file`：只读取 workspace 内 UTF-8 文本文件，支持 1-based 行范围，并返回完整文件的 `sha256` 和 `sizeBytes`。
 - `search`：通过 `rg --json --fixed-strings` 搜索，默认排除 `.git/`、`.secrets/`、`.secret/`、`.env*`、`node_modules/` 和 `target/`。
 - `apply_patch`：应用受限 unified diff，要求 patch 实际文件集合与 `expectedFiles` 完全一致；执行时会先在内存中完成全部文件的 hunk 校验和 staging，再统一写盘，因此解析或 hunk mismatch 不会留下部分文件已修改的状态；成功后返回 reverse patch。

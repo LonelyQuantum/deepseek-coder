@@ -7,7 +7,7 @@
 .env.*
 !.env.example
 .secrets/
-.deepseek-coder/
+.prole-coder/
 
 # Rust
 /target/

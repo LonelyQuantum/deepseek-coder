@@ -88,10 +88,10 @@ crates/agent-core/tests/deepseek_api_live.rs
 该测试用于验证本地状态机准备出的消息确实能被 DeepSeek API 接受。它比基础 smoke test 多一次请求，并启用 thinking，因此只建议手动单独运行：
 
 ```powershell
-$env:DEEPSEEK_CODER_LIVE_TESTS = "1"
+$env:PROLE_CODER_LIVE_TESTS = "1"
 $env:DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 $env:DEEPSEEK_MODEL = "deepseek-v4-flash"
-cargo test -p deepseek-coder-agent-core --test deepseek_api_live live_reasoning_content_tool_replay_smoke_test -- --ignored --exact --nocapture
+cargo test -p prole-coder-agent-core --test deepseek_api_live live_reasoning_content_tool_replay_smoke_test -- --ignored --exact --nocapture
 ```
 
 测试将第一轮 `max_tokens` 控制为 256，第二轮控制为 128。不要把它加入默认 CI。

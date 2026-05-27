@@ -12,8 +12,7 @@ fn main() -> ExitCode {
     let stdin = io::stdin();
     let mut stdin = stdin.lock();
 
-    match deepseek_coder_cli::run_cli_with_input(env::args(), &mut stdin, &mut stdout, &mut stderr)
-    {
+    match prole_coder_cli::run_cli_with_input(env::args(), &mut stdin, &mut stdout, &mut stderr) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             if !error.is_reported() {

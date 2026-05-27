@@ -168,7 +168,7 @@ mod tests {
                 Some("The user asked about a file, so I should read it.".to_owned()),
                 vec![tool_call()],
             ),
-            ChatMessage::tool_result("call_1", "# deepseek-coder"),
+            ChatMessage::tool_result("call_1", "# prole-coder"),
             ChatMessage::user("continue"),
         ];
 
@@ -249,7 +249,7 @@ mod tests {
                 Some("I need the README before answering.".to_owned()),
                 vec![tool_call()],
             ),
-            ChatMessage::tool_result("call_1", "# deepseek-coder"),
+            ChatMessage::tool_result("call_1", "# prole-coder"),
             assistant_with_reasoning("done", "I can now answer normally."),
             ChatMessage::user("ask another question"),
         ];

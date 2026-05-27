@@ -1,5 +1,5 @@
 [package]
-name = "deepseek-coder-agent-core"
+name = "prole-coder-agent-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

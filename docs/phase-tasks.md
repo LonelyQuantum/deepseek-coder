@@ -53,7 +53,7 @@
 | --- | --- | --- | --- |
 | [x] | Phase 2a-1：`read_file` 增加 `sha256` / `sizeBytes` | `docs/tool-system.md`、`docs/context-capsule.md` | 已完成：`read_file` 返回完整文件的 `sha256` 和 `sizeBytes`，Rust/TypeScript result schema 与单元测试已同步。 |
 | [x] | Phase 2a-2：定义 `ContextCapsule` / `ContextSection` / `CachePlacement` 和稳定 renderer | `README.md`、`docs/context-capsule.md`、`docs/agent-core.md` | 已完成：三层布局与 kind priority 解耦，`context_capsule.v1` renderer 可稳定生成 provider 输入，`content` 兼容别名与 `rendered` 保持一致。 |
-| [x] | Phase 2a-3：workspace manifest v0 自动构建 | `README.md`、`docs/context-capsule.md`、`docs/tool-system.md` | 已完成：结构化 JSON、canonical `manifestHash`、默认 `maxEntries=500`、硬安全排除、默认工程排除、`.gitignore` + `.deepseek-coderignore`，并提供可执行 `workspace_manifest` 工具。 |
+| [x] | Phase 2a-3：workspace manifest v0 自动构建 | `README.md`、`docs/context-capsule.md`、`docs/tool-system.md` | 已完成：结构化 JSON、canonical `manifestHash`、默认 `maxEntries=500`、硬安全排除、默认工程排除、`.gitignore` + `.prole-coderignore`，并提供可执行 `workspace_manifest` 工具。 |
 | [x] | Phase 2a-4：Context Builder 接入 manifest summary 和扩展 `context.built` payload | `docs/context-capsule.md`、`docs/json-rpc-protocol.md` | 已完成：Turn Loop 自动生成 manifest summary 进入 `StablePrefix`，`context.built` 输出 stable/dynamic/suffix token、sections、manifest hash 和 `max_entries_exceeded` 截断原因。 |
 | [x] | Phase 2b-1：TokenEstimator trait 与 `CalibratedEstimator` | `docs/roadmap.md`、`docs/context-capsule.md`、`docs/deepseek-api-adapter.md` | 已完成：新增 `token_estimator` 模块，默认保持 `utf8_bytes`；`CalibratedEstimator` 只保存字节数/实际 token 数和聚合误差，报告 `exact=false`，并有离线 fixture 测试。 |
 | [x] | Phase 2b-2：稳定前缀和缓存友好 prompt 布局 | `README.md`、`docs/context-capsule.md`、`docs/deepseek-api-adapter.md` | 已完成：`ContextBuilderConfig` 增加 30% 默认稳定前缀预算，`context.built` 输出 `stablePrefixHash` 和预算字段；修改 `TurnSuffix` 不改变 `StablePrefix`、可选稳定前缀超预算省略均有测试。 |
@@ -67,7 +67,7 @@
 | [x] | Phase 2e-4：`cargo demo-schema` | `README.md`、`docs/demos.md`、`docs/tool-system.md` | 已完成：展示 tool call arguments 在 typed deserialization 前被 JSON Schema 拒绝，并输出稳定 `E_INVALID_TOOL_ARGUMENTS`；已运行 `cargo demo-schema`。 |
 | [x] | Phase 2e-5：`cargo demo-context-visual` | `README.md`、`docs/demos.md`、`docs/context-capsule.md`、`docs/vscode-extension.md` | 已完成：用 ASCII 视图展示 StablePrefix、DynamicPrelude、TurnSuffix 的 token 分布，并输出原始 JSON；已运行 `cargo demo-context-visual`。 |
 | [x] | Phase 2e-6：`cargo demo-attachment` | `README.md`、`docs/demos.md`、`docs/json-rpc-protocol.md`、`docs/context-capsule.md` | 已完成：展示 file、selection、explicit_content、diagnostic attachments 如何进入 Context Builder 和 provider prompt；已运行 `cargo demo-attachment`。 |
-| [x] | Phase 2e-7：`cargo demo-live` provider summary 增强 | `README.md`、`docs/demos.md`、`docs/deepseek-api-adapter.md`、`docs/roadmap.md` | 已完成：现有 live demo 的人类可读事件摘要会展示 `provider.completed` 的模型、duration、usage、cache hit/miss 和 stream 字段；离线 fixture 已运行，联网入口仍按 `DEEPSEEK_CODER_LIVE_TESTS=1 cargo demo-live` 手动执行。 |
+| [x] | Phase 2e-7：`cargo demo-live` provider summary 增强 | `README.md`、`docs/demos.md`、`docs/deepseek-api-adapter.md`、`docs/roadmap.md` | 已完成：现有 live demo 的人类可读事件摘要会展示 `provider.completed` 的模型、duration、usage、cache hit/miss 和 stream 字段；离线 fixture 已运行，联网入口仍按 `PROLE_CODER_LIVE_TESTS=1 cargo demo-live` 手动执行。 |
 
 ## Phase 3：VS Code 插件核心与共享 RPC 交互管线
 
@@ -76,7 +76,7 @@
 | [ ] | RPC 全双工 reader/writer 与独立事件 writer 队列 | `docs/rpc-server.md`、`docs/turn-loop.md`、`docs/run-log.md`、`docs/roadmap.md` | 让 `agent.sendTurn` 更早返回 accepted，后台持续推送事件，并保证同一 run notification 按 `seq` 串行。 |
 | [ ] | 长 provider request 期间的 client 断连取消 | `docs/rpc-server.md`、`docs/json-rpc-protocol.md`、`docs/approval-model.md` | Phase 1 已支持 pending approval EOF shutdown；这里扩展到全双工运行中的断连感知。 |
 | [x] | TypeScript extension scaffold | `README.md`、`docs/vscode-extension.md` | 已完成基础命令和测试骨架。 |
-| [x] | RPC server 启动监管 | `README.md`、`docs/vscode-extension.md` | 已能启动 `deepseek-coder rpc`、发送 initialize、转发事件并处理退出。 |
+| [x] | RPC server 启动监管 | `README.md`、`docs/vscode-extension.md` | 已能启动 `prole rpc`、发送 initialize、转发事件并处理退出。 |
 | [x] | JSON-RPC request client | `README.md`、`docs/vscode-extension.md` | 已管理 request id、pending response、error response 和进程退出清理。 |
 | [ ] | Sidebar Chat 和 `agent.event` 渲染 | `README.md`、`docs/vscode-extension.md` | 当前 manager 能转发事件，但 UI 尚未消费。 |
 | [ ] | 文本输入发送 turn 并接收真实 Agent 响应 | `README.md`、`docs/vscode-extension.md`、`docs/json-rpc-protocol.md` | UI 层调用 `agent.sendTurn`，通过事件流渲染进度和最终结果。 |

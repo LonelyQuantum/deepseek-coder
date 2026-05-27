@@ -21,7 +21,7 @@ test("RPC server manager spawns the configured command and initializes the works
   const factory = new FakeProcessFactory();
   const manager = new RpcServerManager({
     launch: {
-      command: "deepseek-coder",
+      command: "prole",
       args: ["rpc", "--provider", "fixture"],
       autoStart: true,
     },
@@ -37,7 +37,7 @@ test("RPC server manager spawns the configured command and initializes the works
   const child = factory.lastChild();
   const request = child.initializeRequest();
 
-  assert.equal(factory.lastCommand, "deepseek-coder");
+  assert.equal(factory.lastCommand, "prole");
   assert.deepEqual(factory.lastArgs, ["rpc", "--provider", "fixture"]);
   assert.equal(factory.lastOptions?.cwd, "C:/workspace/project");
   assert.equal(request.method, RPC_INITIALIZE_METHOD);
@@ -50,7 +50,7 @@ test("RPC server manager spawns the configured command and initializes the works
   const ready = await readyPromise;
 
   assert.equal(manager.status, "ready");
-  assert.equal(ready.server.name, "deepseek-coder-agent-rpc");
+  assert.equal(ready.server.name, "prole-coder-agent-rpc");
 });
 
 test("RPC server manager forwards agent.event notifications", async () => {
@@ -165,7 +165,7 @@ test("RPC server manager rejects untrusted workspaces without spawning", async (
   const factory = new FakeProcessFactory();
   const manager = new RpcServerManager({
     launch: {
-      command: "deepseek-coder",
+      command: "prole",
       args: ["rpc"],
       autoStart: true,
     },
@@ -188,7 +188,7 @@ test("RPC server manager warns when a ready server exits unexpectedly", async ()
   const warnings: string[] = [];
   const manager = new RpcServerManager({
     launch: {
-      command: "deepseek-coder",
+      command: "prole",
       args: ["rpc"],
       autoStart: true,
     },
@@ -242,12 +242,12 @@ test("RPC launch configuration reads defaults and rejects an empty command", () 
   const custom = readRpcServerLaunchConfig(
     new FakeConfiguration({
       command: "cargo",
-      args: ["run", "-p", "deepseek-coder-cli", "--", "rpc"],
+      args: ["run", "-p", "prole-coder-cli", "--", "rpc"],
       autoStart: false,
     }),
   );
   assert.equal(custom.command, "cargo");
-  assert.deepEqual(custom.args, ["run", "-p", "deepseek-coder-cli", "--", "rpc"]);
+  assert.deepEqual(custom.args, ["run", "-p", "prole-coder-cli", "--", "rpc"]);
   assert.equal(custom.autoStart, false);
 
   assert.throws(() => readRpcServerLaunchConfig(new FakeConfiguration({ command: " " })));
@@ -256,7 +256,7 @@ test("RPC launch configuration reads defaults and rejects an empty command", () 
 function rpcManagerWithFactory(factory: FakeProcessFactory): RpcServerManager {
   return new RpcServerManager({
     launch: {
-      command: "deepseek-coder",
+      command: "prole",
       args: ["rpc"],
       autoStart: true,
     },
@@ -276,7 +276,7 @@ function initializeResponse(id: unknown): unknown {
     result: {
       protocolVersion: RPC_PROTOCOL_VERSION,
       server: {
-        name: "deepseek-coder-agent-rpc",
+        name: "prole-coder-agent-rpc",
         version: "0.1.0",
       },
       capabilities: {
@@ -286,7 +286,7 @@ function initializeResponse(id: unknown): unknown {
         supportsPersistentApprovals: false,
         supportedRiskLevels: ["read", "write", "exec", "network", "destructive"],
       },
-      stateDir: ".deepseek-coder",
+      stateDir: ".prole-coder",
     },
   };
 }

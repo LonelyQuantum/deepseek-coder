@@ -2,7 +2,7 @@
 
 状态：Phase 3 优先开发项。基础命令、审批弹窗 adapter、RPC server 启动监管、初始化握手和 JSON-RPC request client 已实现；尚未实现完整 Chat UI、事件渲染、真实审批回传和 diff editor 集成。
 
-VS Code 插件是 `deepseek-coder` 的一等前端。它必须通过 JSON-RPC server 复用 Rust Agent Core，而不是在 TypeScript 侧重新实现 agent loop、context builder、provider 调用或 tool execution。
+VS Code 插件是 `ProleCoder` 的一等前端。它必须通过 JSON-RPC server 复用 Rust Agent Core，而不是在 TypeScript 侧重新实现 agent loop、context builder、provider 调用或 tool execution。
 
 ## 职责
 
@@ -22,7 +22,7 @@ VS Code 插件是 `deepseek-coder` 的一等前端。它必须通过 JSON-RPC se
 
 `vscode/extension/src/rpcServer.ts` 提供 `RpcServerManager`：
 
-- 通过可配置命令启动 Rust RPC server，默认命令为 `deepseek-coder`，默认参数为 `rpc`。
+- 通过可配置命令启动 Rust RPC server，默认命令为 `prole`，默认参数为 `rpc`。
 - 启动后立即发送 `agent.initialize`，携带 `protocolVersion`、`client.frontend = "vscode"`、`workspaceRoot` 和 `workspaceTrusted`。
 - 按行解析 stdout 上的 JSON-RPC response / notification。
 - 把 `agent.event` notification 转发给注册的事件 handler。
@@ -34,7 +34,7 @@ VS Code 插件是 `deepseek-coder` 的一等前端。它必须通过 JSON-RPC se
 - 插件 dispose 时关闭 stdin 并 kill 子进程。
 - 未受信任 workspace 不会启动 server。
 
-`vscode/extension/src/commands.ts` 当前注册 `deepseek-coder.openChat`：
+`vscode/extension/src/commands.ts` 当前注册 `prole-coder.openChat`：
 
 - 如果没有 workspace，则提示先打开 trusted workspace。
 - 如果有 RPC manager，则尝试启动或复用 RPC server，并提示 server ready 或启动失败。
@@ -49,18 +49,18 @@ VS Code 插件是 `deepseek-coder` 的一等前端。它必须通过 JSON-RPC se
 
 ```json
 {
-  "deepseek-coder.rpc.autoStart": true,
-  "deepseek-coder.rpc.command": "deepseek-coder",
-  "deepseek-coder.rpc.args": ["rpc"]
+  "prole-coder.rpc.autoStart": true,
+  "prole-coder.rpc.command": "prole",
+  "prole-coder.rpc.args": ["rpc"]
 }
 ```
 
-开发时如果本机尚未安装 `deepseek-coder` 可执行文件，可以把命令设置为 `cargo`，参数设置为：
+开发时如果本机尚未安装 `prole` 可执行文件，可以把命令设置为 `cargo`，参数设置为：
 
 ```json
 {
-  "deepseek-coder.rpc.command": "cargo",
-  "deepseek-coder.rpc.args": ["run", "-p", "deepseek-coder-cli", "--", "rpc"]
+  "prole-coder.rpc.command": "cargo",
+  "prole-coder.rpc.args": ["run", "-p", "prole-coder-cli", "--", "rpc"]
 }
 ```
 

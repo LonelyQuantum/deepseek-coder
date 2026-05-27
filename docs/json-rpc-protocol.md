@@ -2,7 +2,7 @@
 
 状态：`0.1.0` 协议版本的已接受草案。
 
-本文档定义 `deepseek-coder` 前端与 Rust Agent RPC Server 之间的内部协议。它不是 DeepSeek API 协议。
+本文档定义 `ProleCoder` 前端与 Rust Agent RPC Server 之间的内部协议。它不是 DeepSeek API 协议。
 
 ## 位置
 
@@ -138,11 +138,11 @@ Request：
   "params": {
     "protocolVersion": "0.1.0",
     "client": {
-      "name": "deepseek-coder-vscode",
+      "name": "prole-coder-vscode",
       "version": "0.1.0",
       "frontend": "vscode"
     },
-    "workspaceRoot": "C:/workspace/deepseek-coder",
+    "workspaceRoot": "C:/workspace/prole-coder",
     "workspaceTrusted": true
   }
 }
@@ -154,7 +154,7 @@ Result：
 {
   "protocolVersion": "0.1.0",
   "server": {
-    "name": "deepseek-coder-agent-rpc",
+    "name": "prole-coder-agent-rpc",
     "version": "0.1.0"
   },
   "capabilities": {
@@ -164,7 +164,7 @@ Result：
     "supportsPersistentApprovals": false,
     "supportedRiskLevels": ["read", "write", "exec", "network", "destructive"]
   },
-  "stateDir": ".deepseek-coder"
+  "stateDir": ".prole-coder"
 }
 ```
 
@@ -830,7 +830,7 @@ Server 请求命令审批：
       "risk": "exec",
       "title": "Run tests",
       "detail": "Execute cargo test --workspace",
-      "cwd": "C:/workspace/deepseek-coder",
+      "cwd": "C:/workspace/prole-coder",
       "command": "cargo test --workspace",
       "persistable": false
     }

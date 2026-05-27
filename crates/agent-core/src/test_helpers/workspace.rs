@@ -6,7 +6,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-const KEEP_DEMO_WORKSPACE_FLAG: &str = "DEEPSEEK_CODER_KEEP_DEMO_WORKSPACE";
+const KEEP_DEMO_WORKSPACE_FLAG: &str = "PROLE_CODER_KEEP_DEMO_WORKSPACE";
 
 static NEXT_WORKSPACE_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -61,7 +61,7 @@ impl TestWorkspace {
     pub fn git_init(&self) {
         self.run_git(["init"]);
         self.run_git(["config", "user.email", "test@example.invalid"]);
-        self.run_git(["config", "user.name", "DeepSeek Coder Test"]);
+        self.run_git(["config", "user.name", "ProleCoder Test"]);
     }
 
     pub fn git_add(&self, path: &str) {
@@ -94,7 +94,7 @@ impl TestWorkspace {
     fn new_impl(label: &str, preserve: bool) -> Self {
         let id = NEXT_WORKSPACE_ID.fetch_add(1, Ordering::Relaxed);
         let unique = format!(
-            "deepseek-coder-{}-{}-{}-{}",
+            "prole-coder-{}-{}-{}-{}",
             sanitize_label(label),
             std::process::id(),
             id,

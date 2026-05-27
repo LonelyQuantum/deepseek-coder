@@ -13,7 +13,7 @@ export function activate(context: vscode.ExtensionContext): void {
     if (rpcServer.autoStart) {
       void rpcServer.start().catch((error: unknown) => {
         void vscode.window.showWarningMessage(
-          `deepseek-coder RPC server failed to start: ${errorMessage(error)}`,
+          `prole-coder RPC server failed to start: ${errorMessage(error)}`,
         );
       });
     }
@@ -31,7 +31,7 @@ function createRpcServerManager(context: vscode.ExtensionContext): RpcServerMana
   }
 
   return new RpcServerManager({
-    launch: readRpcServerLaunchConfig(vscode.workspace.getConfiguration("deepseek-coder.rpc")),
+    launch: readRpcServerLaunchConfig(vscode.workspace.getConfiguration("prole-coder.rpc")),
     workspace: {
       root: workspaceRoot,
       trusted: vscode.workspace.isTrusted,

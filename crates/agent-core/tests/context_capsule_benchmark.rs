@@ -1,4 +1,4 @@
-use deepseek_coder_agent_core::{
+use prole_coder_agent_core::{
     context::{ContextBuilder, ContextBuilderConfig, ContextItem, ContextItemKind},
     test_helpers::TestWorkspace,
 };

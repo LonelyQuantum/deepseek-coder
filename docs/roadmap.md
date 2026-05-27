@@ -6,7 +6,7 @@
 
 ## 定位
 
-`deepseek-coder` 不以第一阶段覆盖通用 AI 编程工具的全部功能为目标。项目的核心差异是：
+`ProleCoder` 不以第一阶段覆盖通用 AI 编程工具的全部功能为目标。项目的核心差异是：
 
 - DeepSeek V4 1M 上下文优先。
 - `reasoning_content`、上下文缓存和长输出能力一等支持。
@@ -34,7 +34,7 @@
 - CLI `run` 最小闭环，支持 DeepSeek provider、fixture provider、run log 摘要、JSON event 重放和显式 verification command。
 - 本地 fixture 端到端 smoke test，覆盖 CLI、Turn Loop、工具执行、Run Log 和 JSON-RPC event 输出。
 - CLI 审查修复：DeepSeek provider 改为专用 current-thread runtime，fixture provider 改为响应队列，verification 输出在写入 run log 前脱敏。
-- 进程级 CLI fixture smoke test：从编译出的 `deepseek-coder` 二进制启动，验证 CLI、Turn Loop、Run Log、JSON-RPC event 输出、事件序号连续性和关键事件顺序的最小闭环。
+- 进程级 CLI fixture smoke test：从编译出的 `prole` 二进制启动，验证 CLI、Turn Loop、Run Log、JSON-RPC event 输出、事件序号连续性和关键事件顺序的最小闭环。
 - TurnProvider async / streaming 边界：`TurnProvider::complete_stream` 返回异步事件流，支持 `assistant.delta` 与最终 `Completed` 响应。
 - CLI DeepSeek provider streaming wrapper：CLI provider 通过 `create_chat_completion_stream` 聚合 content、`reasoning_content` 和 tool calls，并把 content delta 写入 run log。
 - 真实 provider streaming 联网验收：`deepseek_cli_live` 从编译出的 CLI 二进制启动真实 DeepSeek provider，验证 `stream: true` 的 `assistant.delta` 和最终 `run.completed`。
@@ -60,7 +60,7 @@
 - `CancellationToken` 并发语义：已覆盖 clone 共享状态、首次取消原因保持和并发取消。
 - CLI event stream 顺序：进程级 smoke test 已验证 event `seq` 连续递增和关键事件子序列。
 - 共享 `TestWorkspace`：`agent-core::test_helpers::TestWorkspace` 已统一 agent-core、agent-rpc、cli、demo/live 测试的临时工作区创建、保留、git 初始化和读写 helper。
-- live API key 测试 helper：真实联网测试已统一通过 `DEEPSEEK_CODER_API_KEY -> DEEPSEEK_API_KEY -> .secrets/deepseek-api-key` 读取本地密钥；运行时 provider 配置保持不变。
+- live API key 测试 helper：真实联网测试已统一通过 `PROLE_CODER_DEEPSEEK_API_KEY -> DEEPSEEK_API_KEY -> .secrets/deepseek-api-key` 读取本地密钥；运行时 provider 配置保持不变。
 - RPC/CLI/protocol 合并前验收：`agent-rpc` 新增 pending approval 并发拒绝与 EOF shutdown 取消测试，`cli` 新增真实二进制 `rpc` stdio smoke，`packages/protocol` 与 `agent-rpc` 共同校验错误码表和协议文档一致。
 
 合并主线前最终验收：
@@ -98,7 +98,7 @@ P0 不追求：
 
 这些工作已提前实现，用于压低后续前端集成风险，但不作为 Phase 1 / Agent Core MVP 的阻塞验收条件：
 
-- VS Code RPC server 管理：插件激活后可按配置启动 `deepseek-coder rpc`，发送 `agent.initialize`，转发 `agent.event`，并在进程退出或启动失败时提示用户；停止插件会关闭子进程。
+- VS Code RPC server 管理：插件激活后可按配置启动 `prole rpc`，发送 `agent.initialize`，转发 `agent.event`，并在进程退出或启动失败时提示用户；停止插件会关闭子进程。
 - VS Code JSON-RPC request client：`RpcServerManager.sendRequest()` 统一管理 request id、pending response、error response 和进程退出时的 pending request 清理。
 
 ## P1：编辑器核心体验
@@ -131,7 +131,7 @@ Phase 2 的 1M Context Capsule 按 4 个增量轮次推进：
 1. **Phase 2a：Context Capsule 数据模型与 Manifest v0**
    - [x] `read_file` 增加 `sha256` / `sizeBytes`。
    - [x] 定义 `ContextCapsule`、`ContextSection`、`CachePlacement` 和稳定 renderer。
-   - [x] 实现 workspace manifest v0：结构化 JSON、canonical `manifestHash`、默认 `maxEntries=500`、硬安全排除、默认工程排除、`.gitignore` + `.deepseek-coderignore`。
+   - [x] 实现 workspace manifest v0：结构化 JSON、canonical `manifestHash`、默认 `maxEntries=500`、硬安全排除、默认工程排除、`.gitignore` + `.prole-coderignore`。
    - [x] Context Builder 接入 manifest summary，并扩展 `context.built` payload。
 
 2. **Phase 2b：TokenEstimator 与稳定前缀**

@@ -3,11 +3,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub const LIVE_TEST_FLAG: &str = "DEEPSEEK_CODER_LIVE_TESTS";
+pub const LIVE_TEST_FLAG: &str = "PROLE_CODER_LIVE_TESTS";
 pub const LIVE_API_KEY_FILE: &str = ".secrets/deepseek-api-key";
 pub const API_KEY_PLACEHOLDER: &str = "<put-your-deepseek-api-key-here>";
 
-const API_KEY_ENV_VARS: [&str; 2] = ["DEEPSEEK_CODER_API_KEY", "DEEPSEEK_API_KEY"];
+const API_KEY_ENV_VARS: [&str; 2] = ["PROLE_CODER_DEEPSEEK_API_KEY", "DEEPSEEK_API_KEY"];
 
 pub fn repo_root_from_crate_manifest(manifest_dir: impl AsRef<Path>) -> PathBuf {
     manifest_dir

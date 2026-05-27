@@ -72,7 +72,7 @@ Phase 1 已实现 `WorkspaceToolExecutor`，作为 workspace_manifest/read/searc
 
 ## Run Log
 
-Phase 1 已实现基础 Run Log 存储层，详见 `docs/run-log.md`。它提供 workspace 内 `.deepseek-coder/runs/<runId>/events.jsonl` 追加写入、按序读取、序列校验和基础脱敏。
+Phase 1 已实现基础 Run Log 存储层，详见 `docs/run-log.md`。它提供 workspace 内 `.prole-coder/runs/<runId>/events.jsonl` 追加写入、按序读取、序列校验和基础脱敏。
 
 当前 Run Log 已接入基础 Agent Turn Loop，会记录 user turn、context、provider 请求摘要、工具请求、审批请求、审批决定、工具结果和 run 完成/失败事件。CLI `run` 已在回合成功后写入 `verification.started` / `verification.completed` 事件，并对验证输出做脱敏和截断；工具结果、verification 输出和 provider 相关 payload 都经过 Run Log 的统一 `sanitize_payload` 入口，超长字符串/数组会在 `runLogTruncation` 中记录边界。`RunLog` 是单 writer 句柄；Agent Core 另外提供 `RunLogWriter` trait 和 `SerializedRunLog`，RPC active run 使用同步包装串行化同一 run 的 append/load。每个 run 还会维护 `summary.json`，供 `agent.listRuns` 在不扫描完整 JSONL 的情况下读取标题、状态、时间、事件数、最终摘要、变更文件和验证状态。
 
@@ -90,7 +90,7 @@ Phase 1 已通过以下闭环验收：
 2. 进程级 CLI fixture smoke test。
 3. 真实 DeepSeek provider streaming 联网验收。
 4. 真实 streaming tool call delta 拼装验收。
-5. 小型真实仓库 CLI 验收：通过 `deepseek-coder run` 在临时 Rust 仓库上跑通读取、修改、验证和报告。
+5. 小型真实仓库 CLI 验收：通过 `prole run` 在临时 Rust 仓库上跑通读取、修改、验证和报告。
 
 ## 后续增强
 

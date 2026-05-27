@@ -1,6 +1,7 @@
 use std::{env, error::Error, time::Duration};
 
-use deepseek_coder_agent_core::{
+use futures_util::StreamExt;
+use prole_coder_agent_core::{
     provider::deepseek_api::{
         ChatFunctionDefinition, ChatMessage, ChatTool, ChatToolCallAccumulator,
         DEFAULT_API_BASE_URL, DEFAULT_MODEL, DeepSeekApiAdapter, DeepSeekApiConfig, StreamEvent,
@@ -9,7 +10,6 @@ use deepseek_coder_agent_core::{
     reasoning::{ReasoningContentState, ReasoningContentStateMachine},
     test_helpers::{LIVE_TEST_FLAG, live_api_key, repo_root_from_crate_manifest},
 };
-use futures_util::StreamExt;
 
 fn live_config() -> Result<DeepSeekApiConfig, Box<dyn Error>> {
     let api_key = live_api_key(repo_root_from_crate_manifest(env!("CARGO_MANIFEST_DIR")))?;
@@ -44,7 +44,7 @@ fn live_reasoning_probe_tool() -> ChatTool {
 }
 
 #[tokio::test]
-#[ignore = "requires DEEPSEEK_CODER_LIVE_TESTS=1, API key, and network access"]
+#[ignore = "requires PROLE_CODER_LIVE_TESTS=1, API key, and network access"]
 async fn live_chat_completion_smoke_test() -> Result<(), Box<dyn Error>> {
     let Some(adapter) = live_adapter()? else {
         return Ok(());
@@ -81,7 +81,7 @@ async fn live_chat_completion_smoke_test() -> Result<(), Box<dyn Error>> {
 }
 
 #[tokio::test]
-#[ignore = "requires DEEPSEEK_CODER_LIVE_TESTS=1, API key, and network access"]
+#[ignore = "requires PROLE_CODER_LIVE_TESTS=1, API key, and network access"]
 async fn live_reasoning_content_tool_replay_smoke_test() -> Result<(), Box<dyn Error>> {
     let Some(adapter) = live_adapter()? else {
         return Ok(());
@@ -173,7 +173,7 @@ async fn live_reasoning_content_tool_replay_smoke_test() -> Result<(), Box<dyn E
 }
 
 #[tokio::test]
-#[ignore = "requires DEEPSEEK_CODER_LIVE_TESTS=1, API key, and network access"]
+#[ignore = "requires PROLE_CODER_LIVE_TESTS=1, API key, and network access"]
 async fn live_chat_completion_stream_smoke_test() -> Result<(), Box<dyn Error>> {
     let Some(adapter) = live_adapter()? else {
         return Ok(());
@@ -228,7 +228,7 @@ async fn live_chat_completion_stream_smoke_test() -> Result<(), Box<dyn Error>> 
 }
 
 #[tokio::test]
-#[ignore = "requires DEEPSEEK_CODER_LIVE_TESTS=1, API key, and network access"]
+#[ignore = "requires PROLE_CODER_LIVE_TESTS=1, API key, and network access"]
 async fn live_streaming_tool_call_accumulator_smoke_test() -> Result<(), Box<dyn Error>> {
     let Some(adapter) = live_adapter()? else {
         return Ok(());
@@ -306,13 +306,13 @@ async fn live_streaming_tool_call_accumulator_smoke_test() -> Result<(), Box<dyn
 }
 
 #[tokio::test]
-#[ignore = "requires DEEPSEEK_CODER_LIVE_TESTS=1, API key, network access, and manual cache observation"]
+#[ignore = "requires PROLE_CODER_LIVE_TESTS=1, API key, network access, and manual cache observation"]
 async fn live_cache_usage_summary_smoke_test() -> Result<(), Box<dyn Error>> {
     let Some(adapter) = live_adapter()? else {
         return Ok(());
     };
 
-    let stable_prefix = "Stable cache probe prefix for deepseek-coder. ".repeat(256);
+    let stable_prefix = "Stable cache probe prefix for prole-coder. ".repeat(256);
     let first_usage = collect_stream_usage(
         &adapter,
         stable_prefix.clone(),

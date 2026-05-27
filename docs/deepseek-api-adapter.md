@@ -2,7 +2,7 @@
 
 状态：草案，Phase 1 基础实现已完成。
 
-本文档定义 `deepseek-coder` 访问 DeepSeek API 的 Rust adapter。它属于 Agent Core 的 provider 边界，不直接处理 UI、审批、工具执行或 run log。
+本文档定义 `ProleCoder` 访问 DeepSeek API 的 Rust adapter。它属于 Agent Core 的 provider 边界，不直接处理 UI、审批、工具执行或 run log。
 
 ## 目标
 
@@ -119,7 +119,7 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-v4-pro
 ```
 
-运行时 adapter 仍然从 `DEEPSEEK_API_KEY` 读取密钥。真实联网测试额外支持测试专用的 `DEEPSEEK_CODER_API_KEY` 和 `.secrets/deepseek-api-key` 本地密钥文件；这个文件只放 API Key，不放 base URL 或模型名。测试侧读取优先级为 `DEEPSEEK_CODER_API_KEY`、`DEEPSEEK_API_KEY`、`.secrets/deepseek-api-key`。`DEEPSEEK_BASE_URL` 和 `DEEPSEEK_MODEL` 有项目默认值，也可以在外部测试配置或当前 shell 环境变量中选择。
+运行时 adapter 仍然从 `DEEPSEEK_API_KEY` 读取密钥。真实联网测试额外支持测试专用的 `PROLE_CODER_DEEPSEEK_API_KEY` 和 `.secrets/deepseek-api-key` 本地密钥文件；这个文件只放 API Key，不放 base URL 或模型名。测试侧读取优先级为 `PROLE_CODER_DEEPSEEK_API_KEY`、`DEEPSEEK_API_KEY`、`.secrets/deepseek-api-key`。`DEEPSEEK_BASE_URL` 和 `DEEPSEEK_MODEL` 有项目默认值，也可以在外部测试配置或当前 shell 环境变量中选择。
 
 ## 错误处理
 
@@ -173,8 +173,8 @@ crates/agent-core/tests/deepseek_api_live.rs
 这些测试默认不运行，必须同时满足：
 
 - 测试被显式以 ignored test 方式运行。
-- `DEEPSEEK_CODER_LIVE_TESTS=1`。
-- `DEEPSEEK_CODER_API_KEY`、`DEEPSEEK_API_KEY` 或 `.secrets/deepseek-api-key` 存在，且内容为真实 DeepSeek API Key。
+- `PROLE_CODER_LIVE_TESTS=1`。
+- `PROLE_CODER_DEEPSEEK_API_KEY`、`DEEPSEEK_API_KEY` 或 `.secrets/deepseek-api-key` 存在，且内容为真实 DeepSeek API Key。
 - 当前网络可以访问 DeepSeek API。
 
 当前 ignored live tests 包括：
@@ -189,10 +189,10 @@ crates/agent-core/tests/deepseek_api_live.rs
 Windows PowerShell 示例：
 
 ```powershell
-$env:DEEPSEEK_CODER_LIVE_TESTS = "1"
+$env:PROLE_CODER_LIVE_TESTS = "1"
 $env:DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 $env:DEEPSEEK_MODEL = "deepseek-v4-pro"
-cargo test -p deepseek-coder-agent-core --test deepseek_api_live -- --ignored --nocapture
+cargo test -p prole-coder-agent-core --test deepseek_api_live -- --ignored --nocapture
 ```
 
 不要把真实 API Key 写入 Git 跟踪文件。推荐只放在当前 shell 环境变量、系统密钥管理器，或被 `.gitignore` 忽略的 `.secrets/deepseek-api-key` 中。base URL 和模型名不属于密钥，可以通过 `DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL` 或外部测试配置选择。CI 默认不会运行这些 ignored live tests。

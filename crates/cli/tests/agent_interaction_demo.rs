@@ -14,7 +14,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use deepseek_coder_agent_core::{
+use prole_coder_agent_core::{
     cancellation::CancellationToken,
     context::{
         CachePlacement, ContextBuilder, ContextBuilderConfig, ContextCapsule, ContextItem,
@@ -41,7 +41,7 @@ fn fixture_agent_interaction_transcript_demo() -> Result<(), Box<dyn Error>> {
     workspace.write("CLI_SMOKE.txt", "old\n");
 
     let verify_command = verification_command();
-    let output = Command::new(env!("CARGO_BIN_EXE_deepseek-coder"))
+    let output = Command::new(env!("CARGO_BIN_EXE_prole"))
         .args([
             "run",
             "--provider",
@@ -85,7 +85,7 @@ fn fixture_agent_interaction_transcript_demo() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
-#[ignore = "requires DEEPSEEK_CODER_LIVE_TESTS=1, API key, network access, and local cargo"]
+#[ignore = "requires PROLE_CODER_LIVE_TESTS=1, API key, network access, and local cargo"]
 fn live_deepseek_agent_interaction_transcript_demo() -> Result<(), Box<dyn Error>> {
     if env::var(LIVE_TEST_FLAG).ok().as_deref() != Some("1") {
         eprintln!("skipping live DeepSeek agent demo: set {LIVE_TEST_FLAG}=1 to enable");
@@ -97,7 +97,7 @@ fn live_deepseek_agent_interaction_transcript_demo() -> Result<(), Box<dyn Error
     workspace.write(
         "Cargo.toml",
         r#"[package]
-name = "deepseek-coder-agent-demo"
+name = "prole-coder-agent-demo"
 version = "0.0.0"
 edition = "2024"
 
@@ -107,7 +107,7 @@ path = "src/lib.rs"
     );
     workspace.write(
         "README.md",
-        "Small repository used to demonstrate a real deepseek-coder agent turn.\n",
+        "Small repository used to demonstrate a real ProleCoder agent turn.\n",
     );
     workspace.write(
         "src/lib.rs",
@@ -119,7 +119,7 @@ path = "src/lib.rs"
 mod tests {
     #[test]
     fn greeting_is_updated() {
-        assert_eq!(super::greeting(), "hello from deepseek-coder demo");
+        assert_eq!(super::greeting(), "hello from ProleCoder demo");
     }
 }
 "#,
@@ -129,8 +129,8 @@ mod tests {
 
     let base_url =
         env::var("DEEPSEEK_BASE_URL").unwrap_or_else(|_| DEFAULT_API_BASE_URL.to_owned());
-    let model = env::var("DEEPSEEK_AGENT_DEMO_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_owned());
-    let output = Command::new(env!("CARGO_BIN_EXE_deepseek-coder"))
+    let model = env::var("PROLE_CODER_DEMO_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_owned());
+    let output = Command::new(env!("CARGO_BIN_EXE_prole"))
         .env("DEEPSEEK_API_KEY", &api_key)
         .env("DEEPSEEK_BASE_URL", base_url)
         .env("DEEPSEEK_MODEL", model)
@@ -160,10 +160,10 @@ mod tests {
             "120000",
             "--",
             concat!(
-                "This is a live deepseek-coder agent interaction demo. ",
+                "This is a live ProleCoder agent interaction demo. ",
                 "You MUST use tools before answering. First call read_file for README.md and src/lib.rs. ",
                 "Then use apply_patch to edit only src/lib.rs so greeting() returns exactly ",
-                "hello from deepseek-coder demo. When calling apply_patch, expectedFiles MUST be a JSON array ",
+                "hello from ProleCoder demo. When calling apply_patch, expectedFiles MUST be a JSON array ",
                 "exactly like [\"src/lib.rs\"], not a quoted string. Do not call shell; the harness will run cargo test. ",
                 "After the patch is applied, reply with a short final answer containing OK_AGENT_DEMO."
             ),
@@ -189,7 +189,7 @@ mod tests {
     assert!(
         workspace
             .read("src/lib.rs")
-            .contains("hello from deepseek-coder demo")
+            .contains("hello from ProleCoder demo")
     );
 
     Ok(())
@@ -481,7 +481,7 @@ impl TurnProvider for ScriptedProvider {
                     .push(request);
             }
             let response = self.responses.pop_front().ok_or_else(|| {
-                deepseek_coder_agent_core::turn_loop::TurnProviderError::new(
+                prole_coder_agent_core::turn_loop::TurnProviderError::new(
                     "scripted provider has no response",
                 )
             })?;
@@ -817,7 +817,7 @@ fn print_run_log_event_demo(
     }
     let summary_path = workspace
         .path()
-        .join(".deepseek-coder")
+        .join(".prole-coder")
         .join("runs")
         .join(run_id)
         .join("summary.json");
@@ -876,7 +876,7 @@ fn print_run_log_truncation_demo(
 fn print_run_summary(workspace: &TestWorkspace, run_id: &str) {
     let summary_path = workspace
         .path()
-        .join(".deepseek-coder")
+        .join(".prole-coder")
         .join("runs")
         .join(run_id)
         .join("summary.json");
@@ -941,7 +941,7 @@ fn print_agent_transcript(
         if workspace.is_preserved() {
             "preserved"
         } else {
-            "temporary; set DEEPSEEK_CODER_KEEP_DEMO_WORKSPACE=1 to keep it"
+            "temporary; set PROLE_CODER_KEEP_DEMO_WORKSPACE=1 to keep it"
         }
     );
     println!();
@@ -957,7 +957,7 @@ fn print_agent_transcript(
 
     let summary_path = workspace
         .path()
-        .join(".deepseek-coder")
+        .join(".prole-coder")
         .join("runs")
         .join(run_id)
         .join("summary.json");

@@ -1,40 +1,40 @@
 {
-  "name": "deepseek-coder-vscode",
-  "displayName": "deepseek-coder",
-  "description": "VS Code extension for deepseek-coder.",
+  "name": "prole-coder-vscode",
+  "displayName": "ProleCoder",
+  "description": "VS Code extension for ProleCoder.",
   "version": "0.1.0",
   "private": true,
   "license": "AGPL-3.0-or-later",
-  "publisher": "deepseek-coder",
+  "publisher": "prole-coder",
   "type": "commonjs",
   "engines": {
     "node": ">=24.0.0",
     "vscode": "^1.100.0"
   },
   "categories": ["Other"],
-  "activationEvents": ["onStartupFinished", "onCommand:deepseek-coder.openChat"],
+  "activationEvents": ["onStartupFinished", "onCommand:prole-coder.openChat"],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "deepseek-coder.openChat",
-        "title": "deepseek-coder: Open Chat"
+        "command": "prole-coder.openChat",
+        "title": "ProleCoder: Open Chat"
       }
     ],
     "configuration": {
-      "title": "deepseek-coder",
+      "title": "ProleCoder",
       "properties": {
-        "deepseek-coder.rpc.autoStart": {
+        "prole-coder.rpc.autoStart": {
           "type": "boolean",
           "default": true,
           "description": "Start the Rust Agent RPC server when the extension activates in a trusted workspace."
         },
-        "deepseek-coder.rpc.command": {
+        "prole-coder.rpc.command": {
           "type": "string",
-          "default": "deepseek-coder",
+          "default": "prole",
           "description": "Command used to launch the Rust Agent RPC server."
         },
-        "deepseek-coder.rpc.args": {
+        "prole-coder.rpc.args": {
           "type": "array",
           "default": ["rpc"],
           "items": {

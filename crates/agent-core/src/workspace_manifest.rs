@@ -17,14 +17,14 @@ pub const WORKSPACE_MANIFEST_VERSION: u32 = 1;
 pub const DEFAULT_WORKSPACE_MANIFEST_MAX_ENTRIES: usize = 500;
 
 const WORKSPACE_ROOT_PLACEHOLDER: &str = "<workspace>";
-const DEEPSEEK_CODER_IGNORE_FILE: &str = ".deepseek-coderignore";
+const PROLE_CODER_IGNORE_FILE: &str = ".prole-coderignore";
 const HARD_EXCLUDED_COMPONENTS: &[&str] = &[
     ".git",
     ".secrets",
     ".secret",
     ".agents",
     ".codex",
-    ".deepseek-coder",
+    ".prole-coder",
 ];
 const DEFAULT_EXCLUDED_COMPONENTS: &[&str] = &[
     "target",
@@ -314,7 +314,7 @@ pub fn build_workspace_manifest(
         .require_git(false)
         .git_ignore(config.respect_gitignore)
         .git_exclude(config.respect_gitignore)
-        .add_custom_ignore_filename(DEEPSEEK_CODER_IGNORE_FILE);
+        .add_custom_ignore_filename(PROLE_CODER_IGNORE_FILE);
 
     let root_for_filter = workspace_root.clone();
     let scan_root_for_filter = scan_root_relative.clone();
@@ -753,7 +753,7 @@ mod tests {
         workspace.write("ignored.md", "ignore me\n");
         workspace.write("target/generated.rs", "ignored target\n");
         workspace.write(".secrets/token.txt", "secret\n");
-        workspace.write(".deepseek-coderignore", "ignored.md\n");
+        workspace.write(".prole-coderignore", "ignored.md\n");
 
         let manifest = build_workspace_manifest(
             workspace.path(),
@@ -768,10 +768,7 @@ mod tests {
             .iter()
             .map(|entry| entry.path.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(
-            paths,
-            vec![".deepseek-coderignore", "README.md", "src/lib.rs"]
-        );
+        assert_eq!(paths, vec![".prole-coderignore", "README.md", "src/lib.rs"]);
         assert!(manifest.manifest_hash.starts_with("sha256:"));
         assert_eq!(manifest.manifest_hash.len(), "sha256:".len() + 64);
         assert_eq!(

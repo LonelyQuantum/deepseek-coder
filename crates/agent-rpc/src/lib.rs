@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use deepseek_coder_agent_core::{
+use prole_coder_agent_core::{
     AGENT_METADATA,
     approval::{ALL_RISK_LEVELS, RiskLevel},
     cancellation::CancellationToken,
@@ -215,7 +215,7 @@ impl Default for AgentInitializeResult {
         Self {
             protocol_version: PROTOCOL_VERSION.to_owned(),
             server: ServerInfo {
-                name: "deepseek-coder-agent-rpc".to_owned(),
+                name: "prole-coder-agent-rpc".to_owned(),
                 version: env!("CARGO_PKG_VERSION").to_owned(),
             },
             capabilities: ServerCapabilities::default(),
@@ -1251,7 +1251,7 @@ where
     let run_log = SerializedRunLog::new(run_log);
     let worker_run_log = run_log.clone();
     let (events_tx, events_rx) = mpsc::channel();
-    let thread_name = format!("deepseek-coder-rpc-{run_id}");
+    let thread_name = format!("prole-coder-rpc-{run_id}");
     let join = thread::Builder::new()
         .name(thread_name)
         .spawn(move || {
@@ -1290,7 +1290,7 @@ where
 {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
-        .thread_name("deepseek-coder-rpc-turn-loop-runtime")
+        .thread_name("prole-coder-rpc-turn-loop-runtime")
         .build()
         .map_err(map_io_error)?;
 
@@ -2070,7 +2070,7 @@ fn civil_from_unix_days(
 
 #[cfg(test)]
 mod tests {
-    use deepseek_coder_agent_core::{
+    use prole_coder_agent_core::{
         provider::deepseek_api::ChatToolCall,
         run_log::{RunLogEvent, RunLogStore},
         test_helpers::TestWorkspace,
@@ -3143,7 +3143,7 @@ mod tests {
         assert_eq!(request.tool_name, "apply_patch");
         assert_eq!(
             request.risk,
-            deepseek_coder_agent_core::approval::RiskLevel::Write
+            prole_coder_agent_core::approval::RiskLevel::Write
         );
         assert_eq!(request.paths, Some(vec!["README.md".to_owned()]));
         assert!(request.persistable);

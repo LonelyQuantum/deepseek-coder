@@ -6,11 +6,11 @@
 
 - 展示型 demo 默认使用 `#[ignore]`，避免被普通 `cargo test --workspace` 或 `pnpm run check` 自动执行。
 - 推荐优先使用短命令，只有排查测试 harness 时才直接运行底层测试名。
-- 真实联网 demo 必须显式设置 `DEEPSEEK_CODER_LIVE_TESTS=1`。
-- 如果要保留临时工作区查看文件和 run log，先设置 `DEEPSEEK_CODER_KEEP_DEMO_WORKSPACE=1`。
+- 真实联网 demo 必须显式设置 `PROLE_CODER_LIVE_TESTS=1`。
+- 如果要保留临时工作区查看文件和 run log，先设置 `PROLE_CODER_KEEP_DEMO_WORKSPACE=1`。
 
 ```powershell
-$env:DEEPSEEK_CODER_KEEP_DEMO_WORKSPACE = "1"
+$env:PROLE_CODER_KEEP_DEMO_WORKSPACE = "1"
 ```
 
 ## 当前可运行 Demo
@@ -32,7 +32,7 @@ $env:DEEPSEEK_CODER_KEEP_DEMO_WORKSPACE = "1"
 - JSON-RPC event 的人类可读转录。
 - 工具调用、审批结果、补丁执行和验证事件。
 - 最终文件内容。
-- `.deepseek-coder/runs/<run_id>/summary.json`。
+- `.prole-coder/runs/<run_id>/summary.json`。
 
 推荐命令：
 
@@ -43,7 +43,7 @@ cargo demo
 底层测试：
 
 ```powershell
-cargo test -p deepseek-coder-cli --test agent_interaction_demo fixture_agent_interaction_transcript_demo -- --ignored --exact --nocapture
+cargo test -p prole-coder-cli --test agent_interaction_demo fixture_agent_interaction_transcript_demo -- --ignored --exact --nocapture
 ```
 
 ## Context Capsule 结构展示
@@ -112,25 +112,25 @@ cargo demo-attachment
 
 ## Live DeepSeek Agent 交互转录
 
-该 demo 会调用真实 DeepSeek API。API key 来自当前环境变量 `DEEPSEEK_CODER_API_KEY`、`DEEPSEEK_API_KEY`，或被 git 忽略的 `.secrets/deepseek-api-key`。它会在临时 Rust 小仓库中读取 `README.md` 和 `src/lib.rs`，让模型调用 `apply_patch` 修改代码，再由 harness 运行 `cargo test --quiet`。
+该 demo 会调用真实 DeepSeek API。API key 来自当前环境变量 `PROLE_CODER_DEEPSEEK_API_KEY`、`DEEPSEEK_API_KEY`，或被 git 忽略的 `.secrets/deepseek-api-key`。它会在临时 Rust 小仓库中读取 `README.md` 和 `src/lib.rs`，让模型调用 `apply_patch` 修改代码，再由 harness 运行 `cargo test --quiet`。
 
 推荐命令：
 
 ```powershell
-$env:DEEPSEEK_CODER_LIVE_TESTS = "1"
+$env:PROLE_CODER_LIVE_TESTS = "1"
 cargo demo-live
 ```
 
 底层测试：
 
 ```powershell
-cargo test -p deepseek-coder-cli --test agent_interaction_demo live_deepseek_agent_interaction_transcript_demo -- --ignored --exact --nocapture
+cargo test -p prole-coder-cli --test agent_interaction_demo live_deepseek_agent_interaction_transcript_demo -- --ignored --exact --nocapture
 ```
 
 默认模型使用项目默认 DeepSeek 模型。需要临时改展示模型时，可以设置：
 
 ```powershell
-$env:DEEPSEEK_AGENT_DEMO_MODEL = "deepseek-v4-pro"
+$env:PROLE_CODER_DEMO_MODEL = "deepseek-v4-pro"
 ```
 
 输出摘要中应包含 `provider.completed`，展示模型、duration、usage、cache hit/miss 和 stream 统计字段；具体字段是否有数值取决于 provider 响应是否返回对应 usage/cache 数据。
