@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  APPROVAL_APPROVE_LABEL,
   APPROVAL_APPROVE_ONCE_LABEL,
   APPROVAL_APPROVE_SESSION_LABEL,
   APPROVAL_DISMISSED_REASON,
@@ -101,6 +102,69 @@ test("open chat command starts the RPC server and reports readiness", async () =
   assert.ok(message?.includes("prole-coder-agent-rpc"));
 });
 
+test("open chat command reports RPC startup failures with warning messages", async () => {
+  let callback: (() => unknown) | undefined;
+  let warning: string | undefined;
+
+  const commands: CommandRegistry = {
+    registerCommand(_command, registeredCallback) {
+      callback = registeredCallback;
+      return { dispose: () => undefined };
+    },
+  };
+
+  const window: WindowMessenger = {
+    showInformationMessage: () => undefined,
+    showWarningMessage(value) {
+      warning = value;
+    },
+  };
+
+  registerOpenChatCommand(commands, window, {
+    status: "failed",
+    start() {
+      return Promise.reject(new Error("spawn denied"));
+    },
+  });
+  assert.ok(callback);
+
+  await callback();
+
+  assert.ok(warning?.includes("failed to start"));
+  assert.ok(warning?.includes("spawn denied"));
+});
+
+test("open chat command falls back to information messages for non-Error startup failures", async () => {
+  let callback: (() => unknown) | undefined;
+  let info: string | undefined;
+
+  const commands: CommandRegistry = {
+    registerCommand(_command, registeredCallback) {
+      callback = registeredCallback;
+      return { dispose: () => undefined };
+    },
+  };
+
+  const window: WindowMessenger = {
+    showInformationMessage(value) {
+      info = value;
+    },
+  };
+
+  registerOpenChatCommand(commands, window, {
+    status: "failed",
+    start() {
+      return Promise.reject("plain failure");
+    },
+  });
+  assert.ok(callback);
+
+  await callback();
+
+  assert.ok(info?.includes("failed to start"));
+  assert.ok(info?.includes("plain failure"));
+});
+
 test("requestApproval maps VS Code approve choices to approval params", async () => {
   const approvals = [APPROVAL_APPROVE_ONCE_LABEL, APPROVAL_APPROVE_SESSION_LABEL] as const;
 
@@ -129,6 +193,46 @@ test("requestApproval maps VS Code approve choices to approval params", async ()
     assert.ok(message?.includes("Command: cargo test"));
     assert.ok(items.includes(APPROVAL_REJECT_LABEL));
   }
+});
+
+test("requestApproval maps non-persistable approve to one-shot approval", async () => {
+  let items: readonly string[] = [];
+  const window: ApprovalWindowMessenger = {
+    showWarningMessage(_message, _options, ...choices) {
+      items = choices;
+      return APPROVAL_APPROVE_LABEL;
+    },
+  };
+
+  const decision = await requestApproval(window, sampleApprovalRequest(false));
+
+  assert.deepEqual(decision, {
+    kind: "approve",
+    approvalId: "approval_1",
+    persist: "never",
+  });
+  assert.deepEqual(items, [APPROVAL_APPROVE_LABEL, APPROVAL_REJECT_LABEL]);
+});
+
+test("requestApproval includes command and joined paths in the modal message", async () => {
+  let message = "";
+  const window: ApprovalWindowMessenger = {
+    showWarningMessage(value) {
+      message = value;
+      return APPROVAL_REJECT_LABEL;
+    },
+  };
+
+  await requestApproval(window, {
+    ...sampleApprovalRequest(false),
+    command: "cargo test -p prole-coder-cli",
+    paths: ["crates/cli/src/lib.rs", "crates/cli/tests/run_smoke.rs"],
+  });
+
+  assert.ok(message.includes("Command: cargo test -p prole-coder-cli"));
+  assert.ok(
+    message.includes("Paths: crates/cli/src/lib.rs, crates/cli/tests/run_smoke.rs"),
+  );
 });
 
 test("requestApproval maps reject and dismiss to reject decisions", async () => {
