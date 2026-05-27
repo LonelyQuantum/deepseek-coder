@@ -566,7 +566,7 @@ extension.ts
 
 ## 开发计划
 
-当前进度：Phase 1 Agent Core MVP 功能闭环和 Phase 2 的 1M Context Capsule 核心收敛均已完成。DeepSeek provider、基础工具执行、Context Builder、Run Log、Turn Loop、CLI、RPC、审批、取消、真实 DeepSeek streaming/tool-call 验收、本地 fixture smoke、进程级 CLI smoke、小型真实仓库 CLI 联网验收、合并前测试收敛、Context Capsule、manifest、token estimator、attachments、provider summary、Run Log 体积控制、tool call JSON Schema 校验、200K/500K/900K 离线大上下文验收入口和 Phase 2e 展示型 demo 扩展均已完成；VS Code RPC server 启动监管与 JSON-RPC request client 已作为 Phase 3 前置项提前完成，不作为 Agent Core MVP 的必需验收条件。下一步进入 Phase 3 的 VS Code 插件核心与共享 RPC 事件队列。
+当前进度：Phase 1 Agent Core MVP 功能闭环和 Phase 2 的 1M Context Capsule 核心收敛均已完成。DeepSeek provider、基础工具执行、Context Builder、Run Log、Turn Loop、CLI、RPC、审批、取消、真实 DeepSeek streaming/tool-call 验收、本地 fixture smoke、进程级 CLI smoke、小型真实仓库 CLI 联网验收、合并前测试收敛、Context Capsule、manifest、token estimator、attachments、provider summary、Run Log 体积控制、tool call JSON Schema 校验、200K/500K/900K 离线大上下文验收入口和 Phase 2e 展示型 demo 扩展均已完成；VS Code RPC server 启动监管与 JSON-RPC request client 已作为 Phase 3 前置项提前完成，RPC 全双工 reader/writer 与事件发送队列已完成。下一步继续 Phase 3 的 VS Code 插件核心 UI 和真实 RPC 事件消费。
 
 ### Phase 0：项目章程
 
@@ -634,11 +634,13 @@ extension.ts
 
 ### Phase 3：VS Code 插件核心与共享 RPC 交互管线
 
-- [ ] RPC 全双工 reader/writer 与事件发送队列：作为 VS Code/TUI 共享前置，支持 `agent.sendTurn` 早返回、后台持续事件推送和长 provider request 的断连取消。
-- [ ] 长 provider request 期间的 client 断连取消。
+- [x] RPC 全双工 reader/writer 与事件发送队列：作为 VS Code/TUI 共享前置，已支持 `agent.sendTurn` 创建 run 后立即返回、后台有界队列持续事件推送和 active run 断连取消；已通过 `cargo test` 与 `cargo clippy --all-targets -- -D warnings`。
+- [x] 长 provider request 期间的 client 断连取消：stdio EOF / shutdown 会取消 active run，writer 失败会触发断连取消句柄。
 - [x] TypeScript extension scaffold：建立 VS Code 插件 TypeScript 工程、激活入口、基础命令和测试骨架。
 - [x] RPC server 管理：插件可启动 `prole rpc`，发送 `agent.initialize`，转发 `agent.event`，并在退出或错误时更新状态和提示。
 - [x] JSON-RPC request client：统一 request id、pending response、error response 和进程退出时的 pending request 清理。
+- [ ] VS Code/protocol TypeScript 类型共享收敛：建立 extension 可消费的 protocol 类型导出或 project reference，逐步删除 `rpcServer.ts` 本地重复 envelope 定义。
+- [ ] VS Code RPC/commands 边界测试补齐：覆盖 `RpcServerManager` 启动、stdio、无效 JSON、停止/订阅释放等路径，以及审批和 openChat 命令边界。
 - [ ] Sidebar Chat 与 `agent.event` 渲染。
 - [ ] 文本输入发送 turn，并通过 `agent.sendTurn` 驱动真实 Agent 回合。
 - [ ] VS Code 审批 UI 接入真实 RPC pending queue。

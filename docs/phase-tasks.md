@@ -18,7 +18,7 @@
 - `docs/cli.md` 原先把 RPC 取消和审批过期也写成后续任务；实际 Phase 1 已实现显式取消、审批超时和 EOF shutdown 取消，未完成的是全双工后台事件 writer。
 - `docs/architecture.md` 原先把 VS Code 插件描述成完全没有接入真实 RPC server；实际 RPC server 启动监管和 request client 已提前完成，未完成的是完整 Chat UI、事件渲染、审批回传和 diff editor 集成。
 
-`RPC 全双工 reader/writer 与独立事件 writer 队列` 不属于 Phase 1 已完成范围；它现在明确归入 Phase 3 的共享 RPC 交互基础设施。
+`RPC 全双工 reader/writer 与独立事件 writer 队列` 不属于 Phase 1 已完成范围；它已在 Phase 3 共享 RPC 交互基础设施中完成。
 
 ## Phase 0：项目章程
 
@@ -73,11 +73,13 @@
 
 | 状态 | 任务 | 来源 | 说明 |
 | --- | --- | --- | --- |
-| [ ] | RPC 全双工 reader/writer 与独立事件 writer 队列 | `docs/rpc-server.md`、`docs/turn-loop.md`、`docs/run-log.md`、`docs/roadmap.md` | 让 `agent.sendTurn` 更早返回 accepted，后台持续推送事件，并保证同一 run notification 按 `seq` 串行。 |
-| [ ] | 长 provider request 期间的 client 断连取消 | `docs/rpc-server.md`、`docs/json-rpc-protocol.md`、`docs/approval-model.md` | Phase 1 已支持 pending approval EOF shutdown；这里扩展到全双工运行中的断连感知。 |
+| [x] | RPC 全双工 reader/writer 与独立事件 writer 队列 | `docs/rpc-server.md`、`docs/turn-loop.md`、`docs/run-log.md`、`docs/roadmap.md` | 已完成：`agent.sendTurn` 创建 run 后立即返回 accepted，后台 live `agent.event` 由有界队列和单 writer 持续推送；交互式 RPC 测试覆盖 response-before-event、provider 未完成前早返回、审批批准/拒绝/取消和 resume/listRuns。验收：`cargo test`、`cargo clippy --all-targets -- -D warnings`。 |
+| [x] | 长 provider request 期间的 client 断连取消 | `docs/rpc-server.md`、`docs/json-rpc-protocol.md`、`docs/approval-model.md` | 已完成：stdio EOF / shutdown 会取消 active run，writer 失败会触发断连取消句柄并取消 active run 与 pending approvals。 |
 | [x] | TypeScript extension scaffold | `README.md`、`docs/vscode-extension.md` | 已完成基础命令和测试骨架。 |
 | [x] | RPC server 启动监管 | `README.md`、`docs/vscode-extension.md` | 已能启动 `prole rpc`、发送 initialize、转发事件并处理退出。 |
 | [x] | JSON-RPC request client | `README.md`、`docs/vscode-extension.md` | 已管理 request id、pending response、error response 和进程退出清理。 |
+| [ ] | VS Code/protocol TypeScript 类型共享收敛 | `packages/protocol`、`docs/json-rpc-protocol.md`、`docs/vscode-extension.md` | 建立 extension 可消费的 protocol 类型导出或 project reference，逐步删除 `rpcServer.ts` 本地重复 envelope 定义；本轮已先修正 `AgentEventEnvelope.runId` 必填和 runtime guard。 |
+| [ ] | VS Code RPC/commands 边界测试补齐 | `docs/vscode-extension.md`、`.agents/communication/daily/2026-05-28/code_review.md` | 补齐 `RpcServerManager` spawn/stdio/invalid JSON/stop/onEvent/stderrPreview 等边界，以及 `requestApproval` 的 `persistable: false`、openChat 错误降级和消息格式化分支。 |
 | [ ] | Sidebar Chat 和 `agent.event` 渲染 | `README.md`、`docs/vscode-extension.md` | 当前 manager 能转发事件，但 UI 尚未消费。 |
 | [ ] | 文本输入发送 turn 并接收真实 Agent 响应 | `README.md`、`docs/vscode-extension.md`、`docs/json-rpc-protocol.md` | UI 层调用 `agent.sendTurn`，通过事件流渲染进度和最终结果。 |
 | [ ] | VS Code 审批 UI 接入真实 RPC pending queue | `docs/approval-model.md`、`docs/vscode-extension.md` | modal adapter 已有，仍需消费 `tool.approvalRequired` 并发送 approve/reject。 |

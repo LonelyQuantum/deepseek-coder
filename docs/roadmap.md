@@ -71,12 +71,12 @@
 下一步：
 
 - 进入 Phase 3 VS Code 插件核心与共享 RPC 交互管线。
-- RPC 全双工事件 writer 队列已归入 Phase 3 共享 RPC 交互管线；当前 pending approval 已真实等待，但事件仍在 request 返回时 flush，后续让 `agent.sendTurn` 更早返回 accepted 并持续推送事件。
+- RPC 全双工事件 writer 队列已完成：`agent.sendTurn` 会在创建 run 后返回 accepted，后台通过有界队列和单 writer 持续推送 live `agent.event`，断连时会取消 active run。
 - TUI 保留为正式前端，但优先级调整到 VS Code 核心体验之后，复用同一套 RPC 事件管线和审批模型。
 
 Phase 1 收官后优化池：
 
-- RPC 事件输出模型收敛：把当前 request 边界 flush 的事件输出升级为独立 writer 队列，把 EOF shutdown 的 pending approval 取消扩展为长 provider request 期间也能即时感知 client 断连。
+- RPC 事件输出模型收敛：独立 writer 队列和长 provider request 期间的断连取消已完成；后续重点转向 VS Code 侧真实事件消费、审批回传和 UI 状态管理。
 - 工具执行安全打磨：Phase 3 实现命令风险分类器，补充进程树清理策略，并在审批信息中突出 cwd、命令摘要和风险升级原因。
 - Run Log 体积与隐私控制：为工具输出、verification 输出和 provider 摘要增加统一大小限制、截断原因和可导出的脱敏包边界。
 - Provider summary 事件：把 usage、cache 命中、模型名、stream 统计等写成稳定 schema，避免只依赖 provider 私有响应。
