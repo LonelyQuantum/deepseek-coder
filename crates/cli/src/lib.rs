@@ -70,7 +70,7 @@ pub fn run_cli_with_input<I, S, R, W, E>(
 where
     I: IntoIterator<Item = S>,
     S: Into<String>,
-    R: BufRead,
+    R: BufRead + Send,
     W: Write,
     E: Write,
 {
@@ -453,7 +453,7 @@ where
 
 fn run_rpc_command<R, W>(command: RpcCommand, stdin: &mut R, stdout: &mut W) -> Result<(), CliError>
 where
-    R: BufRead,
+    R: BufRead + Send,
     W: Write,
 {
     let config = AgentTurnLoopConfig {
@@ -1460,6 +1460,12 @@ mod tests {
     };
     use prole_coder_agent_rpc::{PROTOCOL_VERSION, RPC_APPROVAL_DENIED, RPC_TOOL_EXECUTION_FAILED};
     use serde_json::{Value, json};
+    use std::{
+        io::{self, Read, Write},
+        sync::{Arc, Condvar, Mutex, mpsc},
+        thread,
+        time::{Duration, Instant},
+    };
 
     use super::{
         CliCommand, ProviderKind, RunCommand, deepseek_chat_stream_to_turn_provider_stream,
@@ -1875,7 +1881,16 @@ mod tests {
     #[test]
     fn rpc_command_runs_fixture_turn_loop_handler() {
         let workspace = TestWorkspace::new("cli");
-        let input = [
+        let (input, output, join) = spawn_interactive_cli_rpc([
+            "prole",
+            "rpc",
+            "--provider",
+            "fixture",
+            "--fixture",
+            "final",
+        ]);
+        send_rpc_line(
+            &input,
             json!({
                 "jsonrpc": "2.0",
                 "id": "init_1",
@@ -1890,8 +1905,10 @@ mod tests {
                     "workspaceRoot": workspace.path_str(),
                     "workspaceTrusted": true
                 }
-            })
-            .to_string(),
+            }),
+        );
+        send_rpc_line(
+            &input,
             json!({
                 "jsonrpc": "2.0",
                 "id": "turn_1",
@@ -1901,35 +1918,21 @@ mod tests {
                     "message": "Say hello",
                     "mode": "ask"
                 }
-            })
-            .to_string(),
-        ]
-        .join("\n");
-        let mut stdin = std::io::Cursor::new(input.into_bytes());
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-
-        run_cli_with_input(
-            [
-                "prole",
-                "rpc",
-                "--provider",
-                "fixture",
-                "--fixture",
-                "final",
-            ],
-            &mut stdin,
-            &mut stdout,
-            &mut stderr,
-        )
-        .expect("fixture rpc command should succeed");
-
+            }),
+        );
+        output.wait_for_line(
+            |line| {
+                line["method"] == "agent.event"
+                    && line["params"]["type"] == "run.completed"
+                    && line["params"]["runId"] == "run_cli_rpc"
+            },
+            Duration::from_secs(30),
+        );
+        drop(input);
+        let (result, stderr) = join.join().expect("CLI RPC thread should not panic");
+        result.expect("fixture rpc command should succeed");
         assert!(stderr.is_empty());
-        let lines = String::from_utf8(stdout)
-            .expect("stdout should be UTF-8")
-            .lines()
-            .map(|line| serde_json::from_str::<Value>(line).expect("line should be JSON"))
-            .collect::<Vec<_>>();
+        let lines = output.lines();
         assert_eq!(lines[0]["id"], "init_1");
         assert_eq!(lines[1]["id"], "turn_1");
         assert_eq!(lines[1]["result"]["accepted"], true);
@@ -1947,6 +1950,143 @@ mod tests {
                 .iter()
                 .any(|event| event.event_type == "run.completed")
         );
+    }
+
+    type InteractiveCliRpc = (
+        mpsc::Sender<String>,
+        SharedOutput,
+        thread::JoinHandle<(Result<(), String>, Vec<u8>)>,
+    );
+
+    fn spawn_interactive_cli_rpc<I, S>(args: I) -> InteractiveCliRpc
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let args = args.into_iter().map(Into::into).collect::<Vec<_>>();
+        let (input_tx, input_rx) = mpsc::channel();
+        let mut stdin = io::BufReader::new(ChannelReader::new(input_rx));
+        let output = SharedOutput::default();
+        let mut stdout = output.clone();
+        let join = thread::spawn(move || {
+            let mut stderr = Vec::new();
+            let result = run_cli_with_input(args, &mut stdin, &mut stdout, &mut stderr)
+                .map_err(|error| error.to_string());
+            (result, stderr)
+        });
+        (input_tx, output, join)
+    }
+
+    fn send_rpc_line(input: &mpsc::Sender<String>, message: Value) {
+        input
+            .send(format!("{message}\n"))
+            .expect("request loop input should be open");
+    }
+
+    fn complete_output_lines(output: &[u8]) -> Vec<Value> {
+        let output = std::str::from_utf8(output).expect("output should be UTF-8");
+        output
+            .split_inclusive('\n')
+            .filter_map(|line| line.strip_suffix('\n'))
+            .filter(|line| !line.is_empty())
+            .map(|line| serde_json::from_str(line).expect("line should be JSON"))
+            .collect()
+    }
+
+    struct ChannelReader {
+        input: mpsc::Receiver<String>,
+        pending: std::io::Cursor<Vec<u8>>,
+    }
+
+    impl ChannelReader {
+        fn new(input: mpsc::Receiver<String>) -> Self {
+            Self {
+                input,
+                pending: std::io::Cursor::new(Vec::new()),
+            }
+        }
+    }
+
+    impl Read for ChannelReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            loop {
+                let read = self.pending.read(buf)?;
+                if read > 0 {
+                    return Ok(read);
+                }
+
+                match self.input.recv() {
+                    Ok(line) => {
+                        self.pending = std::io::Cursor::new(line.into_bytes());
+                    }
+                    Err(_) => return Ok(0),
+                }
+            }
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct SharedOutput {
+        inner: Arc<(Mutex<Vec<u8>>, Condvar)>,
+    }
+
+    impl SharedOutput {
+        fn lines(&self) -> Vec<Value> {
+            let output = self
+                .inner
+                .0
+                .lock()
+                .expect("shared output lock should not be poisoned")
+                .clone();
+            complete_output_lines(&output)
+        }
+
+        fn wait_for_line(&self, predicate: impl Fn(&Value) -> bool, timeout: Duration) -> Value {
+            let deadline = Instant::now()
+                .checked_add(timeout)
+                .expect("timeout deadline should be representable");
+            let (output, changed) = &*self.inner;
+            let mut output = output
+                .lock()
+                .expect("shared output lock should not be poisoned");
+
+            loop {
+                let lines = complete_output_lines(&output);
+                if let Some(line) = lines.iter().find(|line| predicate(line)) {
+                    return line.clone();
+                }
+
+                let now = Instant::now();
+                if now >= deadline {
+                    panic!(
+                        "timed out waiting for CLI RPC output line; output so far: {}",
+                        String::from_utf8_lossy(&output)
+                    );
+                }
+
+                let remaining = deadline.saturating_duration_since(now);
+                let wait_result = changed
+                    .wait_timeout(output, remaining)
+                    .expect("shared output lock should not be poisoned");
+                output = wait_result.0;
+            }
+        }
+    }
+
+    impl Write for SharedOutput {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            let (output, changed) = &*self.inner;
+            let mut output = output
+                .lock()
+                .expect("shared output lock should not be poisoned");
+            output.extend_from_slice(buf);
+            changed.notify_all();
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
     }
 
     #[test]
