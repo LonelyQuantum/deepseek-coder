@@ -2,7 +2,7 @@
 
 状态：`0.1.0` 协议版本的已接受草案。
 
-本文档定义 `deepseek-coder` 前端与 Rust Agent RPC Server 之间的内部协议。它不是 DeepSeek API 协议。
+本文档定义 `ProleCoder` 前端与 Rust Agent RPC Server 之间的内部协议。它不是 DeepSeek API 协议。
 
 ## 位置
 
@@ -138,11 +138,11 @@ Request：
   "params": {
     "protocolVersion": "0.1.0",
     "client": {
-      "name": "deepseek-coder-vscode",
+      "name": "prole-coder-vscode",
       "version": "0.1.0",
       "frontend": "vscode"
     },
-    "workspaceRoot": "C:/workspace/deepseek-coder",
+    "workspaceRoot": "C:/workspace/prole-coder",
     "workspaceTrusted": true
   }
 }
@@ -154,7 +154,7 @@ Result：
 {
   "protocolVersion": "0.1.0",
   "server": {
-    "name": "deepseek-coder-agent-rpc",
+    "name": "prole-coder-agent-rpc",
     "version": "0.1.0"
   },
   "capabilities": {
@@ -164,7 +164,7 @@ Result：
     "supportsPersistentApprovals": false,
     "supportedRiskLevels": ["read", "write", "exec", "network", "destructive"]
   },
-  "stateDir": ".deepseek-coder"
+  "stateDir": ".prole-coder"
 }
 ```
 
@@ -191,7 +191,7 @@ interface SendTurnParams {
 }
 
 interface TurnAttachment {
-  kind: "file" | "selection" | "diagnostic";
+  kind: "file" | "selection" | "explicit_content" | "diagnostic";
   path?: string;
   range?: {
     startLine: number;
@@ -217,7 +217,7 @@ Result 返回后，进度通过 `agent.event` notification 持续到达。
 
 当前 Rust request loop 已能解析 `agent.sendTurn` 并分发给 `AgentRpcRequestHandler`。`crates/agent-rpc::AgentTurnLoopRpcHandler` 已能创建 run、选择注入的 provider factory、启动后台 Turn Loop worker，并把 Run Log 事件返回给 request loop 输出。当前实现会收集事件直到 run 结束或遇到 `tool.approvalRequired`：遇到审批时，response 后会输出审批请求事件，worker 在 pending approval 队列中等待 `agent.approve` / `agent.reject` / `agent.cancel`，并在超时时写入取消事件。如果 request loop 读到 EOF，会调用 handler shutdown；对于已经暂停在 pending approval 的 active run，shutdown 会把审批解析为 `decision: "canceled"` 并写入 `run.canceled`。完全全双工的“先发送 accepted response，再独立事件 writer 持续推送”仍是后续异步执行队列目标。
 
-当前 handler 尚未消费 `attachments`；如果请求携带 attachment，会返回 `Invalid params`。选中文件、诊断和显式上下文条目会在 Context Builder 输入协议稳定后接入。
+Phase 2c 起，Rust handler 会消费 `attachments` 并转换为 Context Capsule 来源：`file` 由 Core 在工作区内读取，复用工具执行层的路径和敏感目录保护；`selection` / `explicit_content` 由前端提供文本但受数量、大小、重复来源和路径校验限制；`diagnostic` 由 VS Code/TUI 等前端传入结构化诊断文本。当前默认限制是单 turn 最多 32 个 attachment，单个 attachment 文本最多 256 KiB；超过限制会让该 run 以 `run.failed` / `E_INVALID_ATTACHMENT` 结束。
 
 ### `agent.approve`
 
@@ -369,7 +369,20 @@ interface AgentEventEnvelope<TPayload> {
   turnId?: string;
   payload: TPayload;
 }
+
+interface RunLogTruncation {
+  path: string;
+  reason: "max_string_bytes" | "max_array_items";
+  original: number;
+  stored: number;
+}
+
+interface RunLogPayloadMetadata {
+  runLogTruncation?: RunLogTruncation[];
+}
 ```
+
+Phase 2d 起，所有 Run Log payload 写入前都会经过统一脱敏/截断。任意事件 payload 都可能带有 `runLogTruncation`；前端应把它视为元数据，用来区分“字段不存在”“字段为空”和“字段因大小限制被截断”。当前默认边界是单字符串 16 KiB、单数组 256 项。
 
 规则：
 
@@ -459,10 +472,23 @@ interface PlanUpdated {
 interface ContextBuilt {
   inputTokens: number;
   maxInputTokens: number;
+  stablePrefixHash: string;
+  stablePrefixTokens: number;
+  stablePrefixBudgetTokens: number;
+  stablePrefixBudgetRatioPpm: number;
+  dynamicPreludeTokens: number;
+  turnSuffixTokens: number;
   estimator: {
     name: string;
     exact: boolean;
     description: string;
+    calibration?: {
+      sampleCount: number;
+      inputUnit: string;
+      slopePpm: number;
+      interceptTokens: number;
+      meanAbsolutePercentageErrorPpm: number;
+    };
   };
   cacheHitTokens?: number;
   cacheMissTokens?: number;
@@ -475,6 +501,8 @@ interface ContextBuilt {
       | "git_status"
       | "git_diff"
       | "file"
+      | "selection"
+      | "explicit_content"
       | "tool_result"
       | "plan"
       | "acceptance_criteria"
@@ -497,6 +525,8 @@ interface ContextBuilt {
       | "git_status"
       | "git_diff"
       | "file"
+      | "selection"
+      | "explicit_content"
       | "tool_result"
       | "plan"
       | "acceptance_criteria"
@@ -509,10 +539,27 @@ interface ContextBuilt {
     title?: string;
     estimatedTokens: number;
     inclusionReason: string;
-    omissionReason: "token_budget_exceeded";
+    omissionReason: "token_budget_exceeded" | "stable_prefix_budget_exceeded";
   }>;
+  sections: Array<{
+    placement: "stable_prefix" | "dynamic_prelude" | "turn_suffix";
+    tokens: number;
+    itemCount: number;
+  }>;
+  manifest?: {
+    manifestHash: string;
+    maxEntries: number;
+    totalDiscoveredFiles: number;
+    includedFiles: number;
+    omitted: Array<{
+      reason: string;
+      count: number;
+    }>;
+  };
 }
 ```
+
+Phase 2c 扩展后，`context.built` 不携带完整 prompt 文本，只携带可审计的 token/source/section 报告。`stablePrefixHash` 用于比较同一 workspace 的稳定前缀是否发生变化；`estimator.calibration` 只记录聚合校准元数据，不能包含可还原 prompt 的样本内容。`manifest` 字段来自自动生成或调用方提供的 workspace manifest summary，用于让前端解释稳定前缀、截断原因和 manifest hash。attachments 会以 `file`、`selection`、`explicit_content`、`diagnostic` 等 source kind 进入 `includedSources` / `omittedSources`，但 payload 不回传 attachment 正文。
 
 ### `provider.requested`
 
@@ -523,6 +570,31 @@ interface ProviderRequested {
   reasoningState:
     | { state: "no_replay_required" }
     | { state: "replay_required"; assistantMessages: number };
+}
+```
+
+### `provider.completed`
+
+Phase 2c 新增。该事件表示一次 provider 调用结束，用于记录 usage、cache 和 streaming 摘要；它不替代 `provider.requested`。
+
+```ts
+interface ProviderCompleted {
+  iteration: number;
+  model: string;
+  durationMs: number;
+  finishReason: "stop" | "length" | "tool_calls" | "content_filter" | "error";
+  usage?: {
+    promptTokens?: number;
+    completionTokens?: number;
+    totalTokens?: number;
+    promptCacheHitTokens?: number;
+    promptCacheMissTokens?: number;
+    reasoningTokens?: number;
+  };
+  streaming?: {
+    chunkCount: number;
+    toolCallDeltaCount: number;
+  };
 }
 ```
 
@@ -580,7 +652,7 @@ interface ToolStarted {
 ### `tool.completed`
 
 ```ts
-interface ToolCompleted {
+interface ToolCompleted extends RunLogPayloadMetadata {
   toolCallId: string;
   name: string;
   status: "ok" | "failed";
@@ -629,7 +701,7 @@ interface VerificationStarted {
 ### `verification.completed`
 
 ```ts
-interface VerificationCompleted {
+interface VerificationCompleted extends RunLogPayloadMetadata {
   verificationId: string;
   status: "passed" | "failed";
   exitCode: number;
@@ -758,7 +830,7 @@ Server 请求命令审批：
       "risk": "exec",
       "title": "Run tests",
       "detail": "Execute cargo test --workspace",
-      "cwd": "C:/workspace/deepseek-coder",
+      "cwd": "C:/workspace/prole-coder",
       "command": "cargo test --workspace",
       "persistable": false
     }
@@ -796,6 +868,7 @@ Server 必须能够通过以下信息重建 run：
 Run log 持久化前必须脱敏密钥。
 
 当前 `crates/agent-core/src/run_log.rs` 已实现内部 JSONL 存储层。内部事件使用 `timeUnixMs`，`crates/agent-rpc` 已实现基础 stdio 事件桥接，会在转换成 JSON-RPC notification 时生成协议 envelope 中的 `time` 字符串。
+Run Log 写入入口会先脱敏，再执行字符串/数组大小限制；截断记录进入 payload 顶层 `runLogTruncation`。
 
 ## 实现说明
 
@@ -808,7 +881,8 @@ Run log 持久化前必须脱敏密钥。
 
 - 为 `tool.completed`、`patch.proposed` 等事件补齐与 Rust 结果类型一致的详细 payload schema。
 - 将现有工具注册表和错误码注册表 fixture 扩展到事件 payload 和 RPC method，确保 `docs/json-rpc-protocol.md`、`packages/protocol` 和 `crates/agent-rpc` 不分叉。
+- 扩展 attachment payload schema，把 diagnostic severity、code、source 等字段从纯文本升级为结构化字段。
+- 将 `provider.completed` 的 usage/cache/streaming 字段纳入更完整的 Rust/TypeScript 事件 payload fixture，避免文档、core 和前端类型漂移。
 - 建立 `assistant.delta` 高频事件的批量发送、节流或合并策略，并用 benchmark 验证 stdio JSON-RPC 在 VS Code 扩展中的流畅度。
 - 明确事件重放规则：run resume 时哪些事件原样回放，哪些事件需要标记为历史事件。
-- 增加输出截断和脱敏字段约定，使前端能区分“没有输出”和“输出被安全策略截断”。
 - 在协议层表达 workspace trust、审批持久化能力和禁用工具原因，避免 UI 自行推断。

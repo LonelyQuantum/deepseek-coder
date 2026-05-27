@@ -8,7 +8,7 @@
 
 ## 决策
 
-`deepseek-coder` 使用 `AGPL-3.0-or-later` 授权。
+`ProleCoder` 使用 `AGPL-3.0-or-later` 授权。
 
 ## 影响
 

@@ -145,22 +145,77 @@ const statusResultSchema = {
   },
 } as const satisfies JsonSchema;
 
+const workspaceManifestResultSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["status", "summary", "manifestHash", "summaryMarkdown", "manifest"],
+  properties: {
+    status: { type: "string", enum: ["ok", "failed"] },
+    summary: { type: "string" },
+    errorCode: { type: "string" },
+    manifestHash: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    summaryMarkdown: { type: "string" },
+    manifest: {
+      type: "object",
+      additionalProperties: true,
+      required: [
+        "manifestVersion",
+        "manifestHash",
+        "maxEntries",
+        "totalDiscoveredFiles",
+        "includedFiles",
+        "entries",
+        "omitted",
+      ],
+      properties: {
+        manifestVersion: { type: "integer", minimum: 1 },
+        manifestHash: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        workspaceRoot: { type: "string" },
+        scanRoot: { type: "string" },
+        maxEntries: { type: "integer", minimum: 1 },
+        totalDiscoveredFiles: { type: "integer", minimum: 0 },
+        includedFiles: { type: "integer", minimum: 0 },
+        totalSizeBytes: { type: "integer", minimum: 0 },
+        entries: { type: "array", items: { type: "object" } },
+        omitted: { type: "array", items: { type: "object" } },
+      },
+    },
+  },
+} as const satisfies JsonSchema;
+
+const readFileResultSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["status", "summary", "path", "content", "lineCount", "sha256", "sizeBytes"],
+  properties: {
+    status: { type: "string", enum: ["ok", "failed"] },
+    summary: { type: "string" },
+    errorCode: { type: "string" },
+    path: { type: "string" },
+    content: { type: "string" },
+    lineCount: { type: "integer", minimum: 0 },
+    sha256: { type: "string", pattern: "^[0-9a-f]{64}$" },
+    sizeBytes: { type: "integer", minimum: 0 },
+  },
+} as const satisfies JsonSchema;
+
 export const toolDefinitions = [
   {
     name: "workspace_manifest",
     description: "生成 workspace manifest。",
     risk: "read",
     approval: "none",
-    implementationStatus: "schema_only",
+    implementationStatus: "executor_implemented",
     argumentSchema: {
       type: "object",
       additionalProperties: false,
       properties: {
-        root: { type: "string" },
+        root: { type: "string", minLength: 1 },
         respectGitignore: { type: "boolean" },
+        maxEntries: { type: "integer", minimum: 1 },
       },
     },
-    resultSchema: statusResultSchema,
+    resultSchema: workspaceManifestResultSchema,
   },
   {
     name: "read_file",
@@ -178,7 +233,7 @@ export const toolDefinitions = [
         endLine: { type: "integer", minimum: 1 },
       },
     },
-    resultSchema: statusResultSchema,
+    resultSchema: readFileResultSchema,
   },
   {
     name: "search",
@@ -367,7 +422,7 @@ export interface TextRange {
 }
 
 export interface TurnAttachment {
-  readonly kind: "file" | "selection" | "diagnostic";
+  readonly kind: "file" | "selection" | "explicit_content" | "diagnostic";
   readonly path?: string;
   readonly range?: TextRange;
   readonly text?: string;
@@ -509,10 +564,44 @@ export interface AgentEventEnvelope<TPayload = unknown> {
   readonly payload: TPayload;
 }
 
+export interface RunLogTruncation {
+  readonly path: string;
+  readonly reason: "max_string_bytes" | "max_array_items";
+  readonly original: number;
+  readonly stored: number;
+}
+
+export interface RunLogPayloadMetadata {
+  readonly runLogTruncation?: readonly RunLogTruncation[];
+}
+
 export interface AssistantDeltaPayload {
   readonly text: string;
   readonly iteration?: number;
   readonly stream?: boolean;
+}
+
+export interface ProviderUsagePayload {
+  readonly promptTokens?: number;
+  readonly completionTokens?: number;
+  readonly totalTokens?: number;
+  readonly promptCacheHitTokens?: number;
+  readonly promptCacheMissTokens?: number;
+  readonly reasoningTokens?: number;
+}
+
+export interface ProviderStreamingPayload {
+  readonly chunkCount: number;
+  readonly toolCallDeltaCount: number;
+}
+
+export interface ProviderCompletedPayload extends RunLogPayloadMetadata {
+  readonly iteration: number;
+  readonly model: string;
+  readonly durationMs: number;
+  readonly finishReason: "stop" | "length" | "tool_calls" | "content_filter" | "error";
+  readonly usage?: ProviderUsagePayload;
+  readonly streaming?: ProviderStreamingPayload;
 }
 
 export interface ToolApprovalRequiredPayload {

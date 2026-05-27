@@ -18,11 +18,14 @@ import {
   type CancelResult,
   type ListRunsParams,
   type ListRunsResult,
+  type ProviderCompletedPayload,
+  type RunLogPayloadMetadata,
   type RunSummary,
   type RejectParams,
   type RejectResult,
   type ToolApprovalRequiredPayload,
   type ToolApprovalResolvedPayload,
+  type TurnAttachment,
   approvalStateTransitions,
   canTransitionApprovalState,
   jsonRpcVersion,
@@ -223,6 +226,75 @@ test("run summary params and results use stable protocol fields", () => {
   assert.equal(result.runs[0]?.lastSeq, 8);
 });
 
+test("attachments and provider completed payload use phase 2c and 2d fields", () => {
+  const attachments = [
+    {
+      kind: "file",
+      path: "README.md",
+    },
+    {
+      kind: "selection",
+      path: "src/lib.rs",
+      range: {
+        startLine: 1,
+        startColumn: 1,
+        endLine: 3,
+        endColumn: 1,
+      },
+      text: "pub fn demo() {}",
+    },
+    {
+      kind: "explicit_content",
+      text: "acceptance criteria",
+    },
+    {
+      kind: "diagnostic",
+      path: "src/lib.rs",
+      range: {
+        startLine: 2,
+        startColumn: 5,
+        endLine: 2,
+        endColumn: 9,
+      },
+      text: "warning: unused function",
+    },
+  ] satisfies readonly TurnAttachment[];
+  const providerCompleted = {
+    iteration: 1,
+    model: "deepseek-v4-pro",
+    durationMs: 42,
+    finishReason: "stop",
+    usage: {
+      promptTokens: 100,
+      completionTokens: 20,
+      totalTokens: 120,
+      promptCacheHitTokens: 64,
+      promptCacheMissTokens: 36,
+      reasoningTokens: 8,
+    },
+    streaming: {
+      chunkCount: 3,
+      toolCallDeltaCount: 1,
+    },
+    runLogTruncation: [
+      {
+        path: "$.usage.raw",
+        reason: "max_string_bytes",
+        original: 20000,
+        stored: 16384,
+      },
+    ],
+  } satisfies ProviderCompletedPayload;
+  const metadata = {
+    runLogTruncation: providerCompleted.runLogTruncation,
+  } satisfies RunLogPayloadMetadata;
+
+  assert.equal(attachments[2]?.kind, "explicit_content");
+  assert.equal(providerCompleted.usage.promptCacheHitTokens, 64);
+  assert.equal(providerCompleted.streaming.toolCallDeltaCount, 1);
+  assert.equal(metadata.runLogTruncation?.[0]?.reason, "max_string_bytes");
+});
+
 test("tool registry contains every declared tool exactly once", () => {
   const registeredNames = toolDefinitions.map((tool) => tool.name);
 
@@ -283,4 +355,46 @@ test("tool schemas are explicit object schemas", () => {
     assert.equal(tool.argumentSchema.type, "object", `${tool.name} arguments must be an object`);
     assert.equal(tool.resultSchema.type, "object", `${tool.name} result must be an object`);
   }
+});
+
+test("read_file result schema exposes file summary metadata", () => {
+  const readFile = findToolDefinition("read_file");
+
+  assert.ok(readFile);
+  assert.deepEqual(readFile.resultSchema.required, [
+    "status",
+    "summary",
+    "path",
+    "content",
+    "lineCount",
+    "sha256",
+    "sizeBytes",
+  ]);
+  assert.equal(
+    (readFile.resultSchema.properties as Record<string, { pattern?: string }>).sha256?.pattern,
+    "^[0-9a-f]{64}$",
+  );
+  assert.equal(
+    (readFile.resultSchema.properties as Record<string, { minimum?: number }>).sizeBytes?.minimum,
+    0,
+  );
+});
+
+test("workspace_manifest is executable and exposes manifest metadata schema", () => {
+  const workspaceManifest = findToolDefinition("workspace_manifest");
+
+  assert.ok(workspaceManifest);
+  assert.equal(workspaceManifest.implementationStatus, "executor_implemented");
+  assert.deepEqual(workspaceManifest.resultSchema.required, [
+    "status",
+    "summary",
+    "manifestHash",
+    "summaryMarkdown",
+    "manifest",
+  ]);
+  assert.equal(
+    (workspaceManifest.resultSchema.properties as Record<string, { pattern?: string }>)
+      .manifestHash?.pattern,
+    "^sha256:[0-9a-f]{64}$",
+  );
 });

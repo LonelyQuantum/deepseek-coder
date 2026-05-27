@@ -1,4 +1,6 @@
 use crate::approval::{ApprovalRequirement, RiskLevel};
+use serde_json::{Map, Value};
+use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolName {
@@ -92,8 +94,39 @@ const WORKSPACE_MANIFEST_ARGUMENT_SCHEMA: &str = r#"{
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "root": { "type": "string" },
-    "respectGitignore": { "type": "boolean" }
+    "root": { "type": "string", "minLength": 1 },
+    "respectGitignore": { "type": "boolean" },
+    "maxEntries": { "type": "integer", "minimum": 1 }
+  }
+}"#;
+
+const WORKSPACE_MANIFEST_RESULT_SCHEMA: &str = r#"{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "summary", "manifestHash", "summaryMarkdown", "manifest"],
+  "properties": {
+    "status": { "type": "string", "enum": ["ok", "failed"] },
+    "summary": { "type": "string" },
+    "errorCode": { "type": "string" },
+    "manifestHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "summaryMarkdown": { "type": "string" },
+    "manifest": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["manifestVersion", "manifestHash", "maxEntries", "totalDiscoveredFiles", "includedFiles", "entries", "omitted"],
+      "properties": {
+        "manifestVersion": { "type": "integer", "minimum": 1 },
+        "manifestHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "workspaceRoot": { "type": "string" },
+        "scanRoot": { "type": "string" },
+        "maxEntries": { "type": "integer", "minimum": 1 },
+        "totalDiscoveredFiles": { "type": "integer", "minimum": 0 },
+        "includedFiles": { "type": "integer", "minimum": 0 },
+        "totalSizeBytes": { "type": "integer", "minimum": 0 },
+        "entries": { "type": "array", "items": { "type": "object" } },
+        "omitted": { "type": "array", "items": { "type": "object" } }
+      }
+    }
   }
 }"#;
 
@@ -105,6 +138,22 @@ const READ_FILE_ARGUMENT_SCHEMA: &str = r#"{
     "path": { "type": "string", "minLength": 1 },
     "startLine": { "type": "integer", "minimum": 1 },
     "endLine": { "type": "integer", "minimum": 1 }
+  }
+}"#;
+
+const READ_FILE_RESULT_SCHEMA: &str = r#"{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "summary", "path", "content", "lineCount", "sha256", "sizeBytes"],
+  "properties": {
+    "status": { "type": "string", "enum": ["ok", "failed"] },
+    "summary": { "type": "string" },
+    "errorCode": { "type": "string" },
+    "path": { "type": "string" },
+    "content": { "type": "string" },
+    "lineCount": { "type": "integer", "minimum": 0 },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "sizeBytes": { "type": "integer", "minimum": 0 }
   }
 }"#;
 
@@ -201,9 +250,9 @@ pub const BUILTIN_TOOLS: &[ToolDefinition] = &[
         "Generate the workspace manifest.",
         RiskLevel::Read,
         ApprovalRequirement::None,
-        ToolImplementationStatus::SchemaOnly,
+        ToolImplementationStatus::ExecutorImplemented,
         WORKSPACE_MANIFEST_ARGUMENT_SCHEMA,
-        STATUS_RESULT_SCHEMA,
+        WORKSPACE_MANIFEST_RESULT_SCHEMA,
     ),
     ToolDefinition::new(
         ToolName::ReadFile,
@@ -212,7 +261,7 @@ pub const BUILTIN_TOOLS: &[ToolDefinition] = &[
         ApprovalRequirement::None,
         ToolImplementationStatus::ExecutorImplemented,
         READ_FILE_ARGUMENT_SCHEMA,
-        STATUS_RESULT_SCHEMA,
+        READ_FILE_RESULT_SCHEMA,
     ),
     ToolDefinition::new(
         ToolName::Search,
@@ -283,13 +332,262 @@ pub fn find_builtin_tool(name: &str) -> Option<&'static ToolDefinition> {
     BUILTIN_TOOLS.iter().find(|tool| tool.name.as_str() == name)
 }
 
+pub fn validate_tool_arguments(
+    definition: &ToolDefinition,
+    arguments: &Value,
+) -> Result<(), ToolArgumentSchemaError> {
+    let schema: Value = serde_json::from_str(definition.argument_schema).map_err(|source| {
+        ToolArgumentSchemaError::new(
+            "$",
+            format!(
+                "invalid schema for tool `{}`: {source}",
+                definition.name.as_str()
+            ),
+        )
+    })?;
+
+    validate_json_schema_value(&schema, arguments, "$")
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("{path}: {detail}")]
+pub struct ToolArgumentSchemaError {
+    path: String,
+    detail: String,
+}
+
+impl ToolArgumentSchemaError {
+    fn new(path: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            detail: detail.into(),
+        }
+    }
+
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    pub fn detail(&self) -> &str {
+        &self.detail
+    }
+}
+
+fn validate_json_schema_value(
+    schema: &Value,
+    value: &Value,
+    path: &str,
+) -> Result<(), ToolArgumentSchemaError> {
+    validate_enum(schema, value, path)?;
+    validate_type(schema, value, path)?;
+
+    if let Some(object) = value.as_object() {
+        validate_object_schema(schema, object, path)?;
+    }
+    if let Some(items) = value.as_array() {
+        validate_array_schema(schema, items, path)?;
+    }
+    if let Some(text) = value.as_str() {
+        validate_string_schema(schema, text, path)?;
+    }
+    if value.is_number() {
+        validate_number_schema(schema, value, path)?;
+    }
+
+    Ok(())
+}
+
+fn validate_enum(schema: &Value, value: &Value, path: &str) -> Result<(), ToolArgumentSchemaError> {
+    let Some(allowed) = schema.get("enum").and_then(Value::as_array) else {
+        return Ok(());
+    };
+    if allowed.iter().any(|candidate| candidate == value) {
+        return Ok(());
+    }
+
+    Err(ToolArgumentSchemaError::new(
+        path,
+        "value is not one of the allowed enum variants",
+    ))
+}
+
+fn validate_type(schema: &Value, value: &Value, path: &str) -> Result<(), ToolArgumentSchemaError> {
+    let Some(expected_type) = schema.get("type").and_then(Value::as_str) else {
+        return Ok(());
+    };
+
+    let valid = match expected_type {
+        "object" => value.is_object(),
+        "array" => value.is_array(),
+        "string" => value.is_string(),
+        "boolean" => value.is_boolean(),
+        "integer" => integer_value(value).is_some(),
+        other => {
+            return Err(ToolArgumentSchemaError::new(
+                path,
+                format!("unsupported schema type `{other}`"),
+            ));
+        }
+    };
+
+    if valid {
+        Ok(())
+    } else {
+        Err(ToolArgumentSchemaError::new(
+            path,
+            format!(
+                "expected {expected_type}, got {}",
+                json_value_type_name(value)
+            ),
+        ))
+    }
+}
+
+fn validate_object_schema(
+    schema: &Value,
+    object: &Map<String, Value>,
+    path: &str,
+) -> Result<(), ToolArgumentSchemaError> {
+    let properties = schema.get("properties").and_then(Value::as_object);
+
+    if let Some(required) = schema.get("required").and_then(Value::as_array) {
+        for property in required {
+            let property = property.as_str().ok_or_else(|| {
+                ToolArgumentSchemaError::new(path, "required property names must be strings")
+            })?;
+            if !object.contains_key(property) {
+                return Err(ToolArgumentSchemaError::new(
+                    path,
+                    format!("missing required property `{property}`"),
+                ));
+            }
+        }
+    }
+
+    if schema.get("additionalProperties").and_then(Value::as_bool) == Some(false) {
+        for property in object.keys() {
+            if properties.is_none_or(|properties| !properties.contains_key(property)) {
+                return Err(ToolArgumentSchemaError::new(
+                    property_path(path, property),
+                    "unexpected property",
+                ));
+            }
+        }
+    }
+
+    if let Some(properties) = properties {
+        for (property, property_schema) in properties {
+            if let Some(property_value) = object.get(property) {
+                validate_json_schema_value(
+                    property_schema,
+                    property_value,
+                    &property_path(path, property),
+                )?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_array_schema(
+    schema: &Value,
+    items: &[Value],
+    path: &str,
+) -> Result<(), ToolArgumentSchemaError> {
+    if let Some(min_items) = schema.get("minItems").and_then(Value::as_u64)
+        && u64::try_from(items.len()).unwrap_or(u64::MAX) < min_items
+    {
+        return Err(ToolArgumentSchemaError::new(
+            path,
+            format!("array has fewer than {min_items} item(s)"),
+        ));
+    }
+
+    if let Some(item_schema) = schema.get("items") {
+        for (index, item) in items.iter().enumerate() {
+            validate_json_schema_value(item_schema, item, &array_item_path(path, index))?;
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_string_schema(
+    schema: &Value,
+    text: &str,
+    path: &str,
+) -> Result<(), ToolArgumentSchemaError> {
+    if let Some(min_length) = schema.get("minLength").and_then(Value::as_u64)
+        && u64::try_from(text.chars().count()).unwrap_or(u64::MAX) < min_length
+    {
+        return Err(ToolArgumentSchemaError::new(
+            path,
+            format!("string is shorter than {min_length} character(s)"),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_number_schema(
+    schema: &Value,
+    value: &Value,
+    path: &str,
+) -> Result<(), ToolArgumentSchemaError> {
+    let Some(minimum) = schema.get("minimum").and_then(integer_value) else {
+        return Ok(());
+    };
+    let Some(actual) = integer_value(value) else {
+        return Ok(());
+    };
+
+    if actual < minimum {
+        return Err(ToolArgumentSchemaError::new(
+            path,
+            format!("integer is smaller than minimum {minimum}"),
+        ));
+    }
+
+    Ok(())
+}
+
+fn integer_value(value: &Value) -> Option<i128> {
+    let number = value.as_number()?;
+    if let Some(number) = number.as_i64() {
+        return Some(i128::from(number));
+    }
+    number.as_u64().map(i128::from)
+}
+
+fn property_path(path: &str, property: &str) -> String {
+    format!("{path}.{property}")
+}
+
+fn array_item_path(path: &str, index: usize) -> String {
+    format!("{path}[{index}]")
+}
+
+fn json_value_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(number) if number.is_i64() || number.is_u64() => "integer",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
     use serde::Deserialize;
+    use serde_json::json;
 
-    use super::{BUILTIN_TOOLS, ToolName, find_builtin_tool};
+    use super::{BUILTIN_TOOLS, ToolName, find_builtin_tool, validate_tool_arguments};
     use crate::approval::{ALL_RISK_LEVELS, ApprovalRequirement, RiskLevel};
 
     #[test]
@@ -320,8 +618,10 @@ mod tests {
     #[test]
     fn schemas_are_explicit_objects() {
         for tool in BUILTIN_TOOLS {
+            let schema: serde_json::Value =
+                serde_json::from_str(tool.argument_schema).expect("argument schema should parse");
             assert!(
-                tool.argument_schema.contains("\"type\": \"object\""),
+                schema["type"] == "object",
                 "tool {} argument schema must be an object",
                 tool.name.as_str()
             );
@@ -331,6 +631,103 @@ mod tests {
                 tool.name.as_str()
             );
         }
+    }
+
+    #[test]
+    fn tool_argument_schema_validator_rejects_unknown_properties() {
+        let read_file = find_builtin_tool(ToolName::ReadFile.as_str())
+            .expect("read_file tool must be registered");
+
+        let error = validate_tool_arguments(
+            read_file,
+            &json!({
+                "path": "README.md",
+                "unexpected": true,
+            }),
+        )
+        .expect_err("unknown properties should be rejected");
+
+        assert_eq!(error.path(), "$.unexpected");
+        assert_eq!(error.detail(), "unexpected property");
+    }
+
+    #[test]
+    fn tool_argument_schema_validator_rejects_wrong_argument_types() {
+        let apply_patch = find_builtin_tool(ToolName::ApplyPatch.as_str())
+            .expect("apply_patch tool must be registered");
+
+        let error = validate_tool_arguments(
+            apply_patch,
+            &json!({
+                "unifiedDiff": "--- a/README.md\n+++ b/README.md\n",
+                "expectedFiles": "[\"README.md\"]",
+            }),
+        )
+        .expect_err("string expectedFiles should be rejected before typed deserialization");
+
+        assert_eq!(error.path(), "$.expectedFiles");
+        assert!(error.detail().contains("expected array"));
+    }
+
+    #[test]
+    fn tool_argument_schema_validator_accepts_nested_objects() {
+        let plan_update = find_builtin_tool(ToolName::PlanUpdate.as_str())
+            .expect("plan_update tool must be registered");
+
+        validate_tool_arguments(
+            plan_update,
+            &json!({
+                "steps": [
+                    {
+                        "id": "step-1",
+                        "title": "Write tests",
+                        "status": "completed",
+                        "detail": "covered by fixture"
+                    }
+                ]
+            }),
+        )
+        .expect("valid nested plan_update arguments should pass schema validation");
+    }
+
+    #[test]
+    fn read_file_result_schema_exposes_file_summary_metadata() {
+        let read_file = find_builtin_tool(ToolName::ReadFile.as_str())
+            .expect("read_file tool must be registered");
+
+        assert!(read_file.result_schema.contains("\"sha256\""));
+        assert!(read_file.result_schema.contains("\"sizeBytes\""));
+        assert!(
+            read_file
+                .result_schema
+                .contains("\"pattern\": \"^[0-9a-f]{64}$\"")
+        );
+    }
+
+    #[test]
+    fn workspace_manifest_result_schema_exposes_manifest_metadata() {
+        let workspace_manifest = find_builtin_tool(ToolName::WorkspaceManifest.as_str())
+            .expect("workspace_manifest tool must be registered");
+
+        assert_eq!(
+            workspace_manifest.implementation_status,
+            super::ToolImplementationStatus::ExecutorImplemented
+        );
+        assert!(
+            workspace_manifest
+                .result_schema
+                .contains("\"manifestHash\"")
+        );
+        assert!(
+            workspace_manifest
+                .result_schema
+                .contains("\"summaryMarkdown\"")
+        );
+        assert!(
+            workspace_manifest
+                .result_schema
+                .contains("\"pattern\": \"^sha256:[0-9a-f]{64}$\"")
+        );
     }
 
     #[test]

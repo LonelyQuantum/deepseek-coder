@@ -93,14 +93,16 @@ pub struct ToolDefinition {
 - `path`
 - `content`
 - `lineCount`
+- `sha256`：完整文件 UTF-8 内容的 SHA-256 小写 hex。
+- `sizeBytes`：完整文件 UTF-8 内容的字节数。
 
-文件内容摘要字段如 `sha256` 属于 manifest 和缓存增强项，当前 Phase 1 `read_file` 执行结果尚不返回该字段。
+`startLine` / `endLine` 只影响返回的 `content` 片段；`sha256` 和 `sizeBytes` 始终描述完整文件，供 workspace manifest、Context Capsule 来源审计和工具结果一致性校验使用。
 
 ## 内置工具
 
 ### `workspace_manifest`
 
-生成工作区 manifest。
+生成 workspace manifest v0，作为长上下文的稳定文件骨架。
 
 风险：`read`。
 
@@ -108,13 +110,15 @@ pub struct ToolDefinition {
 
 参数：
 
-- `root`：workspace 根目录，省略时使用初始化时的 `workspaceRoot`。
-- `respectGitignore`：是否遵守 `.gitignore`。
+- `root`：workspace-relative 扫描根目录，省略时使用初始化时的 `workspaceRoot`。
+- `respectGitignore`：是否遵守 `.gitignore` 和 `.prole-coderignore`。
+- `maxEntries`：最多返回的 manifest 条目数量，省略时使用默认值 500。
 
 结果：
 
-- `entries`：文件条目列表。
-- `ignoredCount`：被忽略文件数量。
+- `manifestHash`：canonical manifest JSON 的 `sha256:<64 hex>` 摘要，不包含本机绝对路径。
+- `summaryMarkdown`：可直接放入 Context Capsule stable prefix 的简洁摘要。
+- `manifest`：结构化 manifest，包含 `manifestVersion`、`workspaceRoot`、`scanRoot`、entries、git 摘要、omitted 原因和 `maxEntries`。
 
 ### `read_file`
 
@@ -272,7 +276,7 @@ pub struct ToolDefinition {
 - TypeScript 协议类型：`packages/protocol/src/index.ts`。
 - 共享协议 fixture：`docs/protocol/tool-registry.v1.json`。
 
-`crates/agent-rpc` 已实现 Run Log 事件到 `agent.event` notification 的基础桥接，并已分发 `agent.approve` / `agent.reject`。真实 RPC handler 已能把工具请求、审批请求、审批决定和工具结果暴露给 CLI/TUI/VS Code；TUI/VS Code 仍需要把已有 UI 原语接入该 pending 队列。
+`crates/agent-rpc` 已实现 Run Log 事件到 `agent.event` notification 的基础桥接，并已分发 `agent.approve` / `agent.reject`。真实 RPC handler 已能把工具请求、审批请求、审批决定和工具结果暴露给 CLI/VS Code/TUI；VS Code/TUI 仍需要把已有 UI 原语接入该 pending 队列，其中 VS Code 接入优先推进。
 
 ## 协议一致性测试
 
@@ -290,13 +294,14 @@ fixture 中的 `tools` 被当作无序集合校验；测试会按工具名规整
 
 `WorkspaceToolExecutor` 返回的结果对象保留原始工具输出，便于调用方做精确展示、错误诊断和后续验证。工具结果写入 run log、进入 prompt 或发送给前端历史回放前，应先调用 `redacted_tool_result_value` 转换为已脱敏 JSON。
 
-该函数复用 Run Log 的基础脱敏规则，当前覆盖敏感字段名和明显的 `sk-...` 形态密钥片段。它不是完整的安全边界；更丰富的环境变量、云服务 key、证书和大输出截断策略仍属于后续统一脱敏层。
+该函数复用 Run Log 的统一脱敏/截断规则，当前覆盖敏感字段名、明显的 `sk-...` 形态密钥片段、单字符串 16 KiB 截断和单数组 256 项截断。截断信息通过 `runLogTruncation` 写入 payload，工具结果、verification 输出和 Run Log 事件共享同一套边界。
 
 ## Phase 1 实现范围
 
 `WorkspaceToolExecutor` 当前提供：
 
-- `read_file`：只读取 workspace 内 UTF-8 文本文件，支持 1-based 行范围。
+- `workspace_manifest`：生成 workspace manifest v0，默认遵守 `.gitignore` 和 `.prole-coderignore`，硬排除 `.git/`、`.secrets/`、`.secret/`、`.agents/`、`.codex/` 和 `.prole-coder/`，并返回稳定排序条目、manifest hash、git 状态和截断原因。
+- `read_file`：只读取 workspace 内 UTF-8 文本文件，支持 1-based 行范围，并返回完整文件的 `sha256` 和 `sizeBytes`。
 - `search`：通过 `rg --json --fixed-strings` 搜索，默认排除 `.git/`、`.secrets/`、`.secret/`、`.env*`、`node_modules/` 和 `target/`。
 - `apply_patch`：应用受限 unified diff，要求 patch 实际文件集合与 `expectedFiles` 完全一致；执行时会先在内存中完成全部文件的 hunk 校验和 staging，再统一写盘，因此解析或 hunk mismatch 不会留下部分文件已修改的状态；成功后返回 reverse patch。
 - `shell`：在 workspace 内执行非交互式命令，支持超时，返回 exit code、stdout、stderr 和耗时。
@@ -309,9 +314,9 @@ fixture 中的 `tools` 被当作无序集合校验；测试会按工具名规整
 - 绝对路径、`..` 路径和解析到 workspace 外的路径都会失败。
 - `.git/`、`.secrets/`、`.secret/`、`.agents/`、`.codex/`、`.env` 和 `.env.*` 被视为敏感路径，读写工具默认拒绝访问。
 
-当前实现暂不包含 workspace manifest、LSP diagnostics 和 plan update 的执行逻辑；它们仍只有 schema 和静态风险定义。
+当前实现暂不包含 LSP diagnostics 和 plan update 的执行逻辑；它们仍只有 schema 和静态风险定义。
 
-当前执行层已接入基础 Agent Turn Loop、审批策略、取消信号和 run log。写入与命令执行会触发审批请求，并记录 `tool.approvalResolved`；CLI 二进制可以通过 stdin/stderr 做真实 y/n 审批，测试可使用显式 auto-approve 策略验证已批准路径。Run Log 事件已能通过基础 RPC 桥接发送给前端；`AgentTurnLoopRpcHandler` 已能通过 `agent.sendTurn` 真实驱动 Core，并在 `tool.approvalRequired` 处等待 `agent.approve` / `agent.reject` / `agent.cancel` 或审批超时。`shell`、`search`、`git_status` 和 `git_diff` 会在子进程轮询循环中检查 `CancellationToken`，取消时 kill child 并让 Turn Loop 写入 `run.canceled`。TUI/VS Code 接入真实 RPC 队列的完整 UI、网络/破坏性风险升级和更强进程树清理仍需要后续实现。
+当前执行层已接入基础 Agent Turn Loop、审批策略、取消信号和 run log。写入与命令执行会触发审批请求，并记录 `tool.approvalResolved`；CLI 二进制可以通过 stdin/stderr 做真实 y/n 审批，测试可使用显式 auto-approve 策略验证已批准路径。Run Log 事件已能通过基础 RPC 桥接发送给前端；`AgentTurnLoopRpcHandler` 已能通过 `agent.sendTurn` 真实驱动 Core，并在 `tool.approvalRequired` 处等待 `agent.approve` / `agent.reject` / `agent.cancel` 或审批超时。`shell`、`search`、`git_status` 和 `git_diff` 会在子进程轮询循环中检查 `CancellationToken`，取消时 kill child 并让 Turn Loop 写入 `run.canceled`。VS Code/TUI 接入真实 RPC 队列的完整 UI、网络/破坏性风险升级和更强进程树清理仍需要后续实现，其中 VS Code UI 接入归入 Phase 3。
 
 ## 后续增强
 
@@ -325,14 +330,23 @@ fixture 中的 `tools` 被当作无序集合校验；测试会按工具名规整
 ### 路径与敏感信息
 
 - 将当前静态敏感路径拒绝规则扩展为可配置规则，合并 `.gitignore`、用户 ignore 配置、常见密钥文件名和平台密钥目录。
-- 扩展 `redacted_tool_result_value` 背后的统一脱敏层，覆盖更多密钥形态、环境变量、stdout、stderr、diff、搜索结果和读取文件内容，并记录截断原因。
+- 继续扩展 `redacted_tool_result_value` 背后的统一脱敏层，覆盖更多密钥形态、环境变量、证书和云服务凭据。
 - 对大文件、二进制文件和非 UTF-8 文件给出结构化错误或专门的 metadata 结果，而不是把它们交给文本工具处理。
 
 ### `read_file`
 
-- 增加 `sha256`、字节长度、编码信息和内容截断元数据。
+- Phase 2a-1 已增加 `sha256` 和 `sizeBytes`，并补充对应单元测试。
+- 后续增加编码信息和内容截断元数据。
 - 支持按 token 预算或语法边界读取片段，避免长文件被随意切断。
 - 增加文件快照 id，方便 run log 复现“读取时看到的内容”。
+
+### Tool call JSON Schema 校验
+
+Phase 2d 已增加通用 tool argument validator，优先使用工具注册表中的 JSON Schema 校验模型参数。
+
+校验顺序为：解析 arguments 字符串为 `serde_json::Value` -> schema validation -> typed deserialization -> 审批 -> 执行工具。
+
+Schema 校验不能只作为 typed deserialization 失败后的补救，因为 Rust 结构体反序列化可能忽略未知字段，而 schema 才能稳定表达 `additionalProperties`、枚举、范围和互斥字段。当前 validator 覆盖本仓库工具 schema 使用到的 JSON Schema 子集：`type`、`required`、`properties`、`additionalProperties: false`、`items`、`enum`、`minLength`、`minItems` 和 `minimum`。
 
 ### `search`
 
@@ -351,7 +365,7 @@ fixture 中的 `tools` 被当作无序集合校验；测试会按工具名规整
 ### `shell`
 
 - 在执行前加入命令风险分类：网络、破坏性、依赖安装、发布、远程 git 操作等必须升级审批。
-- 限制输出大小并记录截断原因，避免 stdout/stderr 把密钥或超大日志直接带入 run log。
+- 已通过 Run Log 统一脱敏/截断限制输出大小并记录截断原因；后续继续增强命令风险分类和进程树清理。
 - 记录环境变量差异，但默认隐藏或脱敏敏感变量。
 - 后续按平台分别实现更强的 sandbox 策略；Windows、Linux 和 macOS 不能假设具备相同隔离能力。
 
@@ -363,6 +377,5 @@ fixture 中的 `tools` 被当作无序集合校验；测试会按工具名规整
 
 ### 尚未实现的内置工具
 
-- `workspace_manifest`：应生成长上下文的稳定骨架，包含 ignore 规则、语言、大小、hash、token 估算和风险标记。
 - `lsp_diagnostics`：应能从 VS Code 或独立语言服务器读取 Problems/diagnostics，并保留来源、范围和严重级别。
 - `plan_update`：应由 Agent Core 写入 run log，并通过 JSON-RPC 事件同步给 CLI/TUI/VS Code。

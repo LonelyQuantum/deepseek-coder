@@ -60,19 +60,21 @@ Agent Core 不应通过启发式后处理掩盖失败。
 
 Phase 1 已实现基础 Context Builder，详见 `docs/context-capsule.md`。它能从用户任务、项目规则、git 状态、文件、工具结果和计划等片段生成稳定排序的上下文输入，并输出 token 预算报告。
 
-当前 token 统计使用 `utf8_bytes` 估算器，不是 DeepSeek tokenizer 的精确 token 数。Context Builder 已接入基础 Agent Turn Loop，并会写入 `context.built` run log 事件；基础 RPC 事件桥接已能把该事件转换为 JSON-RPC notification，`TurnEventSink` 已能在事件写入后立即输出，RPC request loop 和真实 Turn Loop handler 已接入。
+当前 token 统计通过 `TokenEstimator` trait 接入，默认使用 `utf8_bytes` 估算器，不是 DeepSeek tokenizer 的精确 token 数；Phase 2b 已提供 `CalibratedEstimator`，基于 provider usage 样本拟合但仍报告 `exact=false`。Context Builder 已接入基础 Agent Turn Loop，并会写入 `context.built` run log 事件；基础 RPC 事件桥接已能把该事件转换为 JSON-RPC notification，`TurnEventSink` 已能在事件写入后立即输出，RPC request loop 和真实 Turn Loop handler 已接入。
+
+Phase 2a/2b/2c 已把基础 builder 升级为结构化 `ContextCapsule`：先构建可审计的 sections、sources 和 token report，再由 `context_capsule.v1` deterministic renderer 按 `CachePlacement::{StablePrefix, DynamicPrelude, TurnSuffix}` 生成 provider 输入。现阶段 `content` 是兼容别名，始终等于 `rendered`；Turn Loop 已自动生成 workspace manifest summary 并放入 `StablePrefix`；`context.built` 会输出 `stablePrefixHash`、稳定前缀预算和 estimator metadata。`agent.sendTurn.attachments` 已接入 file、selection、explicit_content 和 diagnostic；provider usage/cache/stream 摘要通过独立 `provider.completed` 事件进入 run log。
 
 ## 本地工具执行
 
-Phase 1 已实现 `WorkspaceToolExecutor`，作为 read/search/apply_patch/shell/git 工具的基础执行层。它负责 workspace 路径解析、敏感路径拒绝、命令超时和结构化工具结果。详细设计见 `docs/tool-system.md`。
+Phase 1 已实现 `WorkspaceToolExecutor`，作为 workspace_manifest/read/search/apply_patch/shell/git 工具的基础执行层。它负责 workspace 路径解析、敏感路径拒绝、命令超时和结构化工具结果。详细设计见 `docs/tool-system.md`。
 
-当前执行层已接入基础 Agent Turn Loop，可以跑通“模型请求工具 -> 请求审批 -> 记录审批决定 -> 执行工具 -> 写入 run log -> 继续下一轮模型调用”的 fake provider 集成测试。RPC handler 已能在 `tool.approvalRequired` 处等待 `agent.approve` / `agent.reject` / `agent.cancel` 或审批超时，并能通过 `CancellationToken` 协作式取消 provider request 和命令类工具。尚未完成的是 tool call JSON Schema 校验层、命令风险分类器和更强 sandbox。
+当前执行层已接入基础 Agent Turn Loop，可以跑通“模型请求工具 -> 请求审批 -> 记录审批决定 -> 执行工具 -> 写入 run log -> 继续下一轮模型调用”的 fake provider 集成测试。RPC handler 已能在 `tool.approvalRequired` 处等待 `agent.approve` / `agent.reject` / `agent.cancel` 或审批超时，并能通过 `CancellationToken` 协作式取消 provider request 和命令类工具。Phase 2d 已加入 tool call JSON Schema 预校验：模型 arguments 会先解析为 `serde_json::Value` 并按工具注册表 schema 校验，再进入 Rust typed deserialization、审批和执行。尚未完成的是命令风险分类器和更强 sandbox。
 
 ## Run Log
 
-Phase 1 已实现基础 Run Log 存储层，详见 `docs/run-log.md`。它提供 workspace 内 `.deepseek-coder/runs/<runId>/events.jsonl` 追加写入、按序读取、序列校验和基础脱敏。
+Phase 1 已实现基础 Run Log 存储层，详见 `docs/run-log.md`。它提供 workspace 内 `.prole-coder/runs/<runId>/events.jsonl` 追加写入、按序读取、序列校验和基础脱敏。
 
-当前 Run Log 已接入基础 Agent Turn Loop，会记录 user turn、context、provider 请求摘要、工具请求、审批请求、审批决定、工具结果和 run 完成/失败事件。CLI `run` 已在回合成功后写入 `verification.started` / `verification.completed` 事件，并对验证输出做脱敏；共享的 RPC verification request loop 和更完整 provider 摘要仍待实现。`RunLog` 是单 writer 句柄；Agent Core 另外提供 `RunLogWriter` trait 和 `SerializedRunLog`，RPC active run 使用同步包装串行化同一 run 的 append/load。每个 run 还会维护 `summary.json`，供 `agent.listRuns` 在不扫描完整 JSONL 的情况下读取标题、状态、时间、事件数、最终摘要、变更文件和验证状态。
+当前 Run Log 已接入基础 Agent Turn Loop，会记录 user turn、context、provider 请求摘要、工具请求、审批请求、审批决定、工具结果和 run 完成/失败事件。CLI `run` 已在回合成功后写入 `verification.started` / `verification.completed` 事件，并对验证输出做脱敏和截断；工具结果、verification 输出和 provider 相关 payload 都经过 Run Log 的统一 `sanitize_payload` 入口，超长字符串/数组会在 `runLogTruncation` 中记录边界。`RunLog` 是单 writer 句柄；Agent Core 另外提供 `RunLogWriter` trait 和 `SerializedRunLog`，RPC active run 使用同步包装串行化同一 run 的 append/load。每个 run 还会维护 `summary.json`，供 `agent.listRuns` 在不扫描完整 JSONL 的情况下读取标题、状态、时间、事件数、最终摘要、变更文件和验证状态。
 
 ## Agent Turn Loop
 
@@ -88,14 +90,12 @@ Phase 1 已通过以下闭环验收：
 2. 进程级 CLI fixture smoke test。
 3. 真实 DeepSeek provider streaming 联网验收。
 4. 真实 streaming tool call delta 拼装验收。
-5. 小型真实仓库 CLI 验收：通过 `deepseek-coder run` 在临时 Rust 仓库上跑通读取、修改、验证和报告。
+5. 小型真实仓库 CLI 验收：通过 `prole run` 在临时 Rust 仓库上跑通读取、修改、验证和报告。
 
 ## 后续增强
 
 - 实现 RPC 全双工事件 writer 队列，让 `agent.sendTurn` 可以更早返回 accepted，并在后台持续推送事件。
-- 将 TUI/VS Code 接入真实 RPC pending approval 队列。
-- 增加 tool call 参数 JSON Schema 校验层，补足当前仅依赖 Rust 反序列化的基础校验。
+- 优先将 VS Code 接入真实 RPC pending approval 队列，TUI 后续复用同一协议和审批模型。
 - 实现命令风险分类器和更强 sandbox，区分普通测试命令、网络访问、删除、reset、发布等高风险操作。
-- 扩展 Phase 2 Context Capsule，把 workspace manifest、稳定前缀、缓存命中统计和更精确 token 预算纳入 provider 请求。
-- 在工具结果进入 run log 或下一轮 prompt 前增加统一大小限制。
+- 扩展 DeepSeek cache hit/miss 手动样本，在大上下文重复前缀场景下记录更清晰的 live 验收过程。
 - 扩展 `crates/agent-rpc` 的 client 断连取消和多 active run 管理，供 CLI/TUI/VS Code 共享。

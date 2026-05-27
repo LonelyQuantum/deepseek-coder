@@ -1,18 +1,18 @@
 [package]
-name = "deepseek-coder-cli"
+name = "prole-coder-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
 [[bin]]
-name = "deepseek-coder"
+name = "prole"
 path = "src/main.rs"
 
 [dependencies]
 async-stream = "0.3"
-deepseek-coder-agent-core = { path = "../agent-core" }
-deepseek-coder-agent-rpc = { path = "../agent-rpc" }
+prole-coder-agent-core = { path = "../agent-core" }
+prole-coder-agent-rpc = { path = "../agent-rpc" }
 futures-util = "0.3"
 serde_json = "1"
 thiserror = "2"

@@ -1,6 +1,6 @@
 # 贡献指南
 
-感谢你参与 `deepseek-coder`。这是一个使用 `AGPL-3.0-or-later` 许可证发布的自由软件代码 Agent，主要技术栈是 Rust 和 TypeScript。
+感谢你参与 `ProleCoder`。这是一个使用 `AGPL-3.0-or-later` 许可证发布的自由软件代码 Agent，主要技术栈是 Rust 和 TypeScript。
 
 ## 开发环境
 

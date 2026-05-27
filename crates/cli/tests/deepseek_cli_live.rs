@@ -2,7 +2,7 @@
 
 use std::{env, error::Error, process::Command};
 
-use deepseek_coder_agent_core::{
+use prole_coder_agent_core::{
     provider::deepseek_api::{DEFAULT_API_BASE_URL, DEFAULT_MODEL, DeepSeekModelId},
     run_log::RunLogStore,
     test_helpers::{LIVE_TEST_FLAG, TestWorkspace, live_api_key, repo_root_from_crate_manifest},
@@ -10,7 +10,7 @@ use deepseek_coder_agent_core::{
 use serde_json::Value;
 
 #[test]
-#[ignore = "requires DEEPSEEK_CODER_LIVE_TESTS=1, API key, and network access"]
+#[ignore = "requires PROLE_CODER_LIVE_TESTS=1, API key, and network access"]
 fn live_deepseek_cli_streaming_smoke_test() -> Result<(), Box<dyn Error>> {
     if env::var(LIVE_TEST_FLAG).ok().as_deref() != Some("1") {
         eprintln!("skipping live DeepSeek CLI test: set {LIVE_TEST_FLAG}=1 to enable");
@@ -24,7 +24,7 @@ fn live_deepseek_cli_streaming_smoke_test() -> Result<(), Box<dyn Error>> {
         env::var("DEEPSEEK_BASE_URL").unwrap_or_else(|_| DEFAULT_API_BASE_URL.to_owned());
     let model = env::var("DEEPSEEK_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_owned());
 
-    let output = Command::new(env!("CARGO_BIN_EXE_deepseek-coder"))
+    let output = Command::new(env!("CARGO_BIN_EXE_prole"))
         .env("DEEPSEEK_API_KEY", &api_key)
         .env("DEEPSEEK_BASE_URL", base_url)
         .env("DEEPSEEK_MODEL", model)
@@ -99,7 +99,7 @@ fn live_deepseek_cli_streaming_smoke_test() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
-#[ignore = "requires DEEPSEEK_CODER_LIVE_TESTS=1, API key, network access, and local cargo"]
+#[ignore = "requires PROLE_CODER_LIVE_TESTS=1, API key, network access, and local cargo"]
 fn live_deepseek_cli_real_repo_acceptance_test() -> Result<(), Box<dyn Error>> {
     if env::var(LIVE_TEST_FLAG).ok().as_deref() != Some("1") {
         eprintln!("skipping live DeepSeek CLI test: set {LIVE_TEST_FLAG}=1 to enable");
@@ -111,7 +111,7 @@ fn live_deepseek_cli_real_repo_acceptance_test() -> Result<(), Box<dyn Error>> {
     workspace.write(
         "Cargo.toml",
         r#"[package]
-name = "deepseek-coder-live-acceptance"
+name = "prole-coder-live-acceptance"
 version = "0.0.0"
 edition = "2024"
 
@@ -121,7 +121,7 @@ path = "src/lib.rs"
     );
     workspace.write(
         "README.md",
-        "Tiny Rust repository for the deepseek-coder live CLI acceptance test.\n",
+        "Tiny Rust repository for the ProleCoder live CLI acceptance test.\n",
     );
     workspace.write(
         "src/lib.rs",
@@ -147,7 +147,7 @@ mod tests {
         .unwrap_or_else(|_| DeepSeekModelId::V4_FLASH.to_owned());
     let verify_command = cargo_test_command();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_deepseek-coder"))
+    let output = Command::new(env!("CARGO_BIN_EXE_prole"))
         .env("DEEPSEEK_API_KEY", &api_key)
         .env("DEEPSEEK_BASE_URL", base_url)
         .env("DEEPSEEK_MODEL", model)

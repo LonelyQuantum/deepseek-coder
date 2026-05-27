@@ -11,7 +11,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::{cancellation::CancellationToken, run_log::redact_value};
+use crate::workspace_manifest::{
+    DEFAULT_WORKSPACE_MANIFEST_MAX_ENTRIES, WorkspaceManifest, WorkspaceManifestConfig,
+    WorkspaceManifestError, build_workspace_manifest,
+};
+use crate::{cancellation::CancellationToken, hashing::sha256_hex, run_log::sanitize_payload};
 
 const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
 const DEFAULT_SEARCH_MAX_RESULTS: usize = 100;
@@ -39,6 +43,50 @@ impl WorkspaceToolExecutor {
         &self.root
     }
 
+    pub fn workspace_manifest(
+        &self,
+        args: WorkspaceManifestArgs,
+    ) -> Result<WorkspaceManifestResult, ToolExecutionError> {
+        self.workspace_manifest_with_cancellation(args, &CancellationToken::new())
+    }
+
+    pub fn workspace_manifest_with_cancellation(
+        &self,
+        args: WorkspaceManifestArgs,
+        cancellation_token: &CancellationToken,
+    ) -> Result<WorkspaceManifestResult, ToolExecutionError> {
+        check_canceled(cancellation_token, "workspace_manifest")?;
+        let max_entries = args
+            .max_entries
+            .unwrap_or(DEFAULT_WORKSPACE_MANIFEST_MAX_ENTRIES);
+        let config = WorkspaceManifestConfig::new(max_entries)
+            .with_respect_gitignore(args.respect_gitignore.unwrap_or(true));
+        let manifest =
+            build_workspace_manifest(&self.root, args.root.as_deref(), config, cancellation_token)
+                .map_err(|source| match source {
+                    WorkspaceManifestError::Canceled { source } => {
+                        ToolExecutionError::CommandCanceled {
+                            program: "workspace_manifest".to_owned(),
+                            reason: source.reason().to_owned(),
+                        }
+                    }
+                    source => ToolExecutionError::WorkspaceManifest { source },
+                })?;
+        let summary_markdown = manifest.summary_markdown();
+
+        Ok(WorkspaceManifestResult {
+            status: ToolStatus::Ok,
+            summary: format!(
+                "Built workspace manifest with {} of {} files.",
+                manifest.included_files, manifest.total_discovered_files
+            ),
+            error_code: None,
+            manifest_hash: manifest.manifest_hash.clone(),
+            summary_markdown,
+            manifest,
+        })
+    }
+
     pub fn read_file(&self, args: ReadFileArgs) -> Result<ReadFileResult, ToolExecutionError> {
         self.read_file_with_cancellation(args, &CancellationToken::new())
     }
@@ -58,6 +106,8 @@ impl WorkspaceToolExecutor {
             path: path.clone(),
             source,
         })?;
+        let size_bytes = full_content.len() as u64;
+        let sha256 = sha256_hex(full_content.as_bytes());
         let line_count = count_lines(&full_content);
         let content = select_line_range(
             &full_content,
@@ -74,6 +124,8 @@ impl WorkspaceToolExecutor {
             path: args.path,
             content,
             line_count,
+            sha256,
+            size_bytes,
         })
     }
 
@@ -536,6 +588,26 @@ impl ToolStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WorkspaceManifestArgs {
+    pub root: Option<String>,
+    pub respect_gitignore: Option<bool>,
+    pub max_entries: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceManifestResult {
+    pub status: ToolStatus,
+    pub summary: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    pub manifest_hash: String,
+    pub summary_markdown: String,
+    pub manifest: WorkspaceManifest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ReadFileArgs {
     pub path: String,
     pub start_line: Option<usize>,
@@ -552,6 +624,8 @@ pub struct ReadFileResult {
     pub path: String,
     pub content: String,
     pub line_count: usize,
+    pub sha256: String,
+    pub size_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -663,7 +737,7 @@ pub struct GitDiffResult {
 pub fn redacted_tool_result_value<T: Serialize>(result: &T) -> Result<Value, ToolExecutionError> {
     let value = serde_json::to_value(result)
         .map_err(|source| ToolExecutionError::Serialization { source })?;
-    Ok(redact_value(value))
+    Ok(sanitize_payload(value))
 }
 
 #[derive(Debug, Error)]
@@ -714,6 +788,11 @@ pub enum ToolExecutionError {
     Io { path: PathBuf, source: io::Error },
     #[error("I/O error while running `{program}`: {source}")]
     CommandIo { program: String, source: io::Error },
+    #[error("workspace manifest failed: {source}")]
+    WorkspaceManifest {
+        #[from]
+        source: WorkspaceManifestError,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -1262,17 +1341,32 @@ fn diff_file_paths(diff: &str) -> Vec<String> {
 mod tests {
     use super::{
         ApplyPatchArgs, GitDiffArgs, GitStatusArgs, ReadFileArgs, SearchArgs, ShellArgs,
-        ShellResult, ToolExecutionError, ToolStatus, WorkspaceToolExecutor,
+        ShellResult, ToolExecutionError, ToolStatus, WorkspaceManifestArgs, WorkspaceToolExecutor,
         redacted_tool_result_value,
     };
     use crate::cancellation::CancellationToken;
-    use crate::run_log::REDACTED_VALUE;
+    use crate::hashing::sha256_hex;
+    use crate::run_log::{REDACTED_VALUE, RUN_LOG_MAX_STRING_BYTES};
     use crate::test_helpers::TestWorkspace;
+
+    #[test]
+    fn sha256_hex_matches_known_vectors() {
+        assert_eq!(
+            sha256_hex(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
 
     #[test]
     fn read_file_reads_full_file_and_line_range() {
         let workspace = TestWorkspace::new("tool-execution");
-        workspace.write("src/main.rs", "fn main() {}\nprintln!(\"hi\");\n");
+        let full_content = "fn main() {}\nprintln!(\"hi\");\n";
+        let expected_sha256 = sha256_hex(full_content.as_bytes());
+        workspace.write("src/main.rs", full_content);
         let tools = WorkspaceToolExecutor::new(workspace.path()).expect("workspace should open");
 
         let full = tools
@@ -1283,7 +1377,13 @@ mod tests {
             })
             .expect("file should read");
         assert_eq!(full.line_count, 2);
-        assert_eq!(full.content, "fn main() {}\nprintln!(\"hi\");\n");
+        assert_eq!(full.content, full_content);
+        assert_eq!(full.size_bytes, full_content.len() as u64);
+        assert_eq!(full.sha256, expected_sha256);
+
+        let serialized = serde_json::to_value(&full).expect("read result should serialize");
+        assert_eq!(serialized["sizeBytes"], full_content.len() as u64);
+        assert_eq!(serialized["sha256"], expected_sha256);
 
         let line = tools
             .read_file(ReadFileArgs {
@@ -1293,6 +1393,42 @@ mod tests {
             })
             .expect("line range should read");
         assert_eq!(line.content, "println!(\"hi\");\n");
+        assert_eq!(line.size_bytes, full.size_bytes);
+        assert_eq!(line.sha256, full.sha256);
+    }
+
+    #[test]
+    fn workspace_manifest_builds_result_and_excludes_sensitive_paths() {
+        let workspace = TestWorkspace::new("tool-execution");
+        workspace.write("src/lib.rs", "pub fn answer() -> i32 { 42 }\n");
+        workspace.write(".secrets/token.txt", "secret\n");
+        let tools = WorkspaceToolExecutor::new(workspace.path()).expect("workspace should open");
+
+        let result = tools
+            .workspace_manifest(WorkspaceManifestArgs {
+                root: None,
+                respect_gitignore: Some(true),
+                max_entries: Some(10),
+            })
+            .expect("manifest should build");
+
+        assert_eq!(result.status, ToolStatus::Ok);
+        assert_eq!(result.manifest_hash, result.manifest.manifest_hash);
+        assert!(result.summary_markdown.contains(&result.manifest_hash));
+        assert!(
+            result
+                .manifest
+                .entries
+                .iter()
+                .any(|entry| entry.path == "src/lib.rs")
+        );
+        assert!(
+            !result
+                .manifest
+                .entries
+                .iter()
+                .any(|entry| entry.path.starts_with(".secrets/"))
+        );
     }
 
     #[test]
@@ -1523,6 +1659,31 @@ mod tests {
         assert_eq!(value["stdout"], format!("stdout contains {REDACTED_VALUE}"));
         assert_eq!(value["stderr"], format!("stderr contains {REDACTED_VALUE}"));
         assert!(!value.to_string().contains(&secret));
+    }
+
+    #[test]
+    fn redacted_tool_result_value_truncates_large_shell_output_for_logs() {
+        let result = ShellResult {
+            status: ToolStatus::Ok,
+            summary: "Command completed.".to_owned(),
+            error_code: None,
+            exit_code: Some(0),
+            stdout: "x".repeat(RUN_LOG_MAX_STRING_BYTES + 1),
+            stderr: String::new(),
+            duration_ms: 1,
+        };
+
+        let value =
+            redacted_tool_result_value(&result).expect("tool result should serialize and sanitize");
+
+        assert_eq!(
+            value["stdout"]
+                .as_str()
+                .expect("stdout should be string")
+                .len(),
+            RUN_LOG_MAX_STRING_BYTES
+        );
+        assert_eq!(value["runLogTruncation"][0]["reason"], "max_string_bytes");
     }
 
     #[test]

@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use deepseek_coder_agent_core::{
+use prole_coder_agent_core::{
     approval::ApprovalPersistence,
     turn_loop::{ApprovalDecision, TurnApprovalRequest},
 };
@@ -103,10 +103,10 @@ impl ApprovalPromptModel {
 
 #[cfg(test)]
 mod tests {
-    use deepseek_coder_agent_core::approval::{ApprovalPersistence, RiskLevel};
+    use prole_coder_agent_core::approval::{ApprovalPersistence, RiskLevel};
 
     use super::{APPROVAL_REJECTED_REASON, ApprovalPromptAction, ApprovalPromptModel};
-    use deepseek_coder_agent_core::turn_loop::{ApprovalDecision, TurnApprovalRequest};
+    use prole_coder_agent_core::turn_loop::{ApprovalDecision, TurnApprovalRequest};
 
     #[test]
     fn approval_prompt_renders_tool_context() {

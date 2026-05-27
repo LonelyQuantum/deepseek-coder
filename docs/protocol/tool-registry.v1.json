@@ -13,7 +13,7 @@
       "name": "workspace_manifest",
       "risk": "read",
       "approval": "none",
-      "status": "schema_only"
+      "status": "executor_implemented"
     },
     {
       "name": "read_file",

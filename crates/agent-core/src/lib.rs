@@ -3,17 +3,20 @@
 pub mod approval;
 pub mod cancellation;
 pub mod context;
+mod hashing;
 pub mod provider;
 pub mod reasoning;
 pub mod run_log;
 #[doc(hidden)]
 pub mod test_helpers;
+pub mod token_estimator;
 pub mod tool;
 pub mod tool_execution;
 pub mod turn_loop;
+pub mod workspace_manifest;
 
-pub const PROJECT_NAME: &str = "deepseek-coder";
-pub const DEFAULT_STATE_DIR: &str = ".deepseek-coder";
+pub const PROJECT_NAME: &str = "ProleCoder";
+pub const DEFAULT_STATE_DIR: &str = ".prole-coder";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AgentMetadata {

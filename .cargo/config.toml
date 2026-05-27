@@ -1,3 +1,9 @@
 [alias]
-demo = "test -p deepseek-coder-cli --test agent_interaction_demo fixture_agent_interaction_transcript_demo -- --ignored --exact --nocapture"
-demo-live = "test -p deepseek-coder-cli --test agent_interaction_demo live_deepseek_agent_interaction_transcript_demo -- --ignored --exact --nocapture"
+demo = "test -p prole-coder-cli --test agent_interaction_demo fixture_agent_interaction_transcript_demo -- --ignored --exact --nocapture"
+demo-live = "test -p prole-coder-cli --test agent_interaction_demo live_deepseek_agent_interaction_transcript_demo -- --ignored --exact --nocapture"
+demo-live-random = "test -p prole-coder-cli --test agent_interaction_demo live_deepseek_agent_random_story_demo -- --ignored --exact --nocapture"
+demo-context = "test -p prole-coder-cli --test agent_interaction_demo context_capsule_structure_demo -- --ignored --exact --nocapture"
+demo-context-visual = "test -p prole-coder-cli --test agent_interaction_demo context_capsule_visualization_demo -- --ignored --exact --nocapture"
+demo-truncation = "test -p prole-coder-cli --test agent_interaction_demo run_log_truncation_demo -- --ignored --exact --nocapture"
+demo-schema = "test -p prole-coder-cli --test agent_interaction_demo tool_schema_validation_demo -- --ignored --exact --nocapture"
+demo-attachment = "test -p prole-coder-cli --test agent_interaction_demo attachment_context_demo -- --ignored --exact --nocapture"

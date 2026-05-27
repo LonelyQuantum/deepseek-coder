@@ -1,15 +1,15 @@
 use std::{env, error::Error, time::Duration};
 
-use deepseek_coder_agent_core::{
+use futures_util::StreamExt;
+use prole_coder_agent_core::{
     provider::deepseek_api::{
         ChatFunctionDefinition, ChatMessage, ChatTool, ChatToolCallAccumulator,
         DEFAULT_API_BASE_URL, DEFAULT_MODEL, DeepSeekApiAdapter, DeepSeekApiConfig, StreamEvent,
-        ThinkingConfig, ToolChoice,
+        ThinkingConfig, ToolChoice, Usage,
     },
     reasoning::{ReasoningContentState, ReasoningContentStateMachine},
     test_helpers::{LIVE_TEST_FLAG, live_api_key, repo_root_from_crate_manifest},
 };
-use futures_util::StreamExt;
 
 fn live_config() -> Result<DeepSeekApiConfig, Box<dyn Error>> {
     let api_key = live_api_key(repo_root_from_crate_manifest(env!("CARGO_MANIFEST_DIR")))?;
@@ -44,7 +44,7 @@ fn live_reasoning_probe_tool() -> ChatTool {
 }
 
 #[tokio::test]
-#[ignore = "requires DEEPSEEK_CODER_LIVE_TESTS=1, API key, and network access"]
+#[ignore = "requires PROLE_CODER_LIVE_TESTS=1, API key, and network access"]
 async fn live_chat_completion_smoke_test() -> Result<(), Box<dyn Error>> {
     let Some(adapter) = live_adapter()? else {
         return Ok(());
@@ -81,7 +81,7 @@ async fn live_chat_completion_smoke_test() -> Result<(), Box<dyn Error>> {
 }
 
 #[tokio::test]
-#[ignore = "requires DEEPSEEK_CODER_LIVE_TESTS=1, API key, and network access"]
+#[ignore = "requires PROLE_CODER_LIVE_TESTS=1, API key, and network access"]
 async fn live_reasoning_content_tool_replay_smoke_test() -> Result<(), Box<dyn Error>> {
     let Some(adapter) = live_adapter()? else {
         return Ok(());
@@ -173,7 +173,7 @@ async fn live_reasoning_content_tool_replay_smoke_test() -> Result<(), Box<dyn E
 }
 
 #[tokio::test]
-#[ignore = "requires DEEPSEEK_CODER_LIVE_TESTS=1, API key, and network access"]
+#[ignore = "requires PROLE_CODER_LIVE_TESTS=1, API key, and network access"]
 async fn live_chat_completion_stream_smoke_test() -> Result<(), Box<dyn Error>> {
     let Some(adapter) = live_adapter()? else {
         return Ok(());
@@ -228,7 +228,7 @@ async fn live_chat_completion_stream_smoke_test() -> Result<(), Box<dyn Error>> 
 }
 
 #[tokio::test]
-#[ignore = "requires DEEPSEEK_CODER_LIVE_TESTS=1, API key, and network access"]
+#[ignore = "requires PROLE_CODER_LIVE_TESTS=1, API key, and network access"]
 async fn live_streaming_tool_call_accumulator_smoke_test() -> Result<(), Box<dyn Error>> {
     let Some(adapter) = live_adapter()? else {
         return Ok(());
@@ -303,4 +303,78 @@ async fn live_streaming_tool_call_accumulator_smoke_test() -> Result<(), Box<dyn
     );
 
     Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires PROLE_CODER_LIVE_TESTS=1, API key, network access, and manual cache observation"]
+async fn live_cache_usage_summary_smoke_test() -> Result<(), Box<dyn Error>> {
+    let Some(adapter) = live_adapter()? else {
+        return Ok(());
+    };
+
+    let stable_prefix = "Stable cache probe prefix for prole-coder. ".repeat(256);
+    let first_usage = collect_stream_usage(
+        &adapter,
+        stable_prefix.clone(),
+        "First cache usage probe. Reply with CACHE_PROBE_ONE.",
+    )
+    .await?
+    .ok_or("first live cache probe should produce usage")?;
+    let second_usage = collect_stream_usage(
+        &adapter,
+        stable_prefix,
+        "Second cache usage probe with the same stable prefix. Reply with CACHE_PROBE_TWO.",
+    )
+    .await?
+    .ok_or("second live cache probe should produce usage")?;
+
+    eprintln!(
+        "first cache usage: hit={:?}, miss={:?}, prompt={}",
+        first_usage.prompt_cache_hit_tokens,
+        first_usage.prompt_cache_miss_tokens,
+        first_usage.prompt_tokens
+    );
+    eprintln!(
+        "second cache usage: hit={:?}, miss={:?}, prompt={}",
+        second_usage.prompt_cache_hit_tokens,
+        second_usage.prompt_cache_miss_tokens,
+        second_usage.prompt_tokens
+    );
+
+    assert!(
+        second_usage.prompt_cache_hit_tokens.is_some()
+            || second_usage.prompt_cache_miss_tokens.is_some(),
+        "live cache usage probe should expose prompt cache hit/miss fields"
+    );
+
+    Ok(())
+}
+
+async fn collect_stream_usage(
+    adapter: &DeepSeekApiAdapter,
+    stable_prefix: String,
+    user_task: &str,
+) -> Result<Option<Usage>, Box<dyn Error>> {
+    let request = adapter
+        .new_chat_request(vec![
+            ChatMessage::system(stable_prefix),
+            ChatMessage::user(user_task),
+        ])?
+        .with_thinking(ThinkingConfig::disabled())
+        .with_max_tokens(32);
+    let mut stream = adapter.create_chat_completion_stream(request).await?;
+    let mut usage = None;
+
+    while let Some(event) = stream.next().await {
+        match event? {
+            StreamEvent::Chunk(chunk) => {
+                if chunk.usage.is_some() {
+                    usage = chunk.usage;
+                }
+            }
+            StreamEvent::Done => break,
+        }
+    }
+
+    Ok(usage)
 }

@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 export const RPC_PROTOCOL_VERSION = "0.1.0";
 export const RPC_INITIALIZE_METHOD = "agent.initialize";
 export const RPC_EVENT_METHOD = "agent.event";
-export const DEFAULT_RPC_COMMAND = "deepseek-coder";
+export const DEFAULT_RPC_COMMAND = "prole";
 export const DEFAULT_RPC_ARGS = ["rpc"] as const;
 
 export type RpcServerStatus = "stopped" | "starting" | "ready" | "failed";
@@ -134,13 +134,13 @@ export const nodeRpcProcessFactory: RpcProcessFactory = {
 export function readRpcServerLaunchConfig(config: RpcServerConfiguration): RpcServerLaunchConfig {
   const command = config.get("command", DEFAULT_RPC_COMMAND).trim();
   if (command.length === 0) {
-    throw new Error("deepseek-coder.rpc.command must not be empty");
+    throw new Error("prole-coder.rpc.command must not be empty");
   }
 
   const args = config.get<readonly string[]>("args", DEFAULT_RPC_ARGS);
   for (const arg of args) {
     if (typeof arg !== "string") {
-      throw new Error("deepseek-coder.rpc.args must contain only strings");
+      throw new Error("prole-coder.rpc.args must contain only strings");
     }
   }
 
@@ -320,7 +320,7 @@ export class RpcServerManager implements DisposableLike {
       params: {
         protocolVersion: RPC_PROTOCOL_VERSION,
         client: {
-          name: "deepseek-coder-vscode",
+          name: "prole-coder-vscode",
           version: this.extensionVersion,
           frontend: "vscode",
         },
@@ -439,7 +439,7 @@ export class RpcServerManager implements DisposableLike {
 
     if (this.currentStatus === "ready") {
       this.currentStatus = "failed";
-      this.notifier?.warn(`deepseek-coder RPC server exited unexpectedly: ${formatExit(code, signal)}`);
+      this.notifier?.warn(`prole-coder RPC server exited unexpectedly: ${formatExit(code, signal)}`);
       return;
     }
 
@@ -457,7 +457,7 @@ export class RpcServerManager implements DisposableLike {
     this.readyState = undefined;
     this.currentStatus = "failed";
     this.rejectPendingRequests(error);
-    this.notifier?.warn(`deepseek-coder RPC server error: ${error.message}`);
+    this.notifier?.warn(`prole-coder RPC server error: ${error.message}`);
   }
 
   private failStarting(error: Error): void {

@@ -1,26 +1,35 @@
-use std::{future::Future, path::Path, pin::Pin};
+use std::{collections::HashSet, future::Future, path::Path, pin::Pin, time::Instant};
 
 use futures_util::{Stream, StreamExt};
-use serde::de::DeserializeOwned;
+use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
 use thiserror::Error;
 
 use crate::{
     approval::{ApprovalRequirement, RiskLevel},
     cancellation::{CancellationError, CancellationToken},
-    context::{ContextBuildError, ContextBuilder, ContextBuilderConfig, ContextItem},
+    context::{
+        ContextBuildError, ContextBuilder, ContextBuilderConfig, ContextItem, ContextItemKind,
+        ContextManifestOmitted, ContextManifestReport,
+    },
     provider::deepseek_api::{ChatMessage, ChatToolCall},
     reasoning::{
         ReasoningContentError, ReasoningContentMode, ReasoningContentState,
         ReasoningContentStateMachine,
     },
     run_log::{RunLogError, RunLogEvent, RunLogWriter},
-    tool::{ToolDefinition, ToolName, find_builtin_tool},
+    tool::{
+        ToolArgumentSchemaError, ToolDefinition, ToolName, find_builtin_tool,
+        validate_tool_arguments,
+    },
     tool_execution::{
-        ApplyPatchArgs, ShellArgs, ToolExecutionError, ToolStatus, WorkspaceToolExecutor,
-        redacted_tool_result_value,
+        ApplyPatchArgs, ReadFileArgs, ShellArgs, ToolExecutionError, ToolStatus,
+        WorkspaceManifestArgs, WorkspaceToolExecutor, redacted_tool_result_value,
     },
 };
+
+const DEFAULT_MAX_ATTACHMENTS: usize = 32;
+const DEFAULT_MAX_ATTACHMENT_BYTES: u64 = 256 * 1024;
 
 #[derive(Debug)]
 pub struct AgentTurnLoop<P, A> {
@@ -296,6 +305,7 @@ where
     {
         let cancellation_token = request.cancellation_token.clone();
         cancellation_token.check()?;
+        let started = Instant::now();
         let mut stream = self
             .provider
             .complete_stream(request)
@@ -343,6 +353,14 @@ where
 
         cancellation_token.check()?;
         let response = response.ok_or(AgentTurnLoopError::ProviderStreamEndedWithoutCompletion)?;
+        append_provider_completed_event(
+            run_log,
+            event_sink,
+            turn_id,
+            iteration,
+            started.elapsed().as_millis(),
+            &response.completion,
+        )?;
         Ok(CollectedProviderTurn {
             response,
             emitted_content_delta,
@@ -355,12 +373,220 @@ where
     ) -> Result<crate::context::ContextCapsule, AgentTurnLoopError> {
         let mut builder =
             ContextBuilder::new(ContextBuilderConfig::new(self.config.max_input_tokens));
+        if !input
+            .context_items
+            .iter()
+            .any(|item| item.kind == ContextItemKind::WorkspaceManifest)
+        {
+            let manifest = self.tools.workspace_manifest_with_cancellation(
+                WorkspaceManifestArgs {
+                    root: None,
+                    respect_gitignore: Some(true),
+                    max_entries: None,
+                },
+                &input.cancellation_token,
+            )?;
+            builder.set_manifest_report(ContextManifestReport {
+                manifest_hash: manifest.manifest.manifest_hash.clone(),
+                max_entries: manifest.manifest.max_entries,
+                total_discovered_files: manifest.manifest.total_discovered_files,
+                included_files: manifest.manifest.included_files,
+                omitted: manifest
+                    .manifest
+                    .omitted
+                    .iter()
+                    .map(|omitted| ContextManifestOmitted {
+                        reason: omitted.reason.as_str().to_owned(),
+                        count: omitted.count,
+                    })
+                    .collect(),
+            });
+            builder.add_item(ContextItem::workspace_manifest(
+                manifest.summary_markdown,
+                "stable workspace manifest summary",
+            ));
+        }
         builder.add_item(ContextItem::user_task(input.user_task.clone()));
         for item in &input.context_items {
             builder.add_item(item.clone());
         }
+        for item in self.attachment_context_items(input)? {
+            builder.add_item(item);
+        }
 
         Ok(builder.build()?)
+    }
+
+    fn attachment_context_items(
+        &self,
+        input: &AgentTurnInput,
+    ) -> Result<Vec<ContextItem>, AgentTurnLoopError> {
+        if input.attachments.len() > self.config.max_attachments {
+            return Err(AgentTurnLoopError::TooManyAttachments {
+                count: input.attachments.len(),
+                max_attachments: self.config.max_attachments,
+            });
+        }
+
+        let mut items = Vec::new();
+        let mut seen = HashSet::new();
+        for (index, attachment) in input.attachments.iter().enumerate() {
+            input.cancellation_token.check()?;
+            let key = attachment.dedup_key(index);
+            if !seen.insert(key.clone()) {
+                return Err(AgentTurnLoopError::DuplicateAttachment {
+                    index,
+                    signature: attachment_dedup_signature(&key),
+                });
+            }
+
+            let item = match attachment.kind {
+                TurnAttachmentKind::File => {
+                    self.file_attachment_context_item(index, attachment, &input.cancellation_token)?
+                }
+                TurnAttachmentKind::Selection => self.text_attachment_context_item(
+                    index,
+                    attachment,
+                    ContextItemKind::Selection,
+                    "selection attachment",
+                    "attached editor selection from agent.sendTurn",
+                )?,
+                TurnAttachmentKind::ExplicitContent => self.text_attachment_context_item(
+                    index,
+                    attachment,
+                    ContextItemKind::ExplicitContent,
+                    "explicit content attachment",
+                    "explicit content supplied with agent.sendTurn",
+                )?,
+                TurnAttachmentKind::Diagnostic => self.text_attachment_context_item(
+                    index,
+                    attachment,
+                    ContextItemKind::Diagnostic,
+                    "diagnostic attachment",
+                    "diagnostic supplied with agent.sendTurn",
+                )?,
+            };
+            items.push(item);
+        }
+
+        Ok(items)
+    }
+
+    fn file_attachment_context_item(
+        &self,
+        index: usize,
+        attachment: &TurnAttachment,
+        cancellation_token: &CancellationToken,
+    ) -> Result<ContextItem, AgentTurnLoopError> {
+        let path = attachment_path(index, attachment)?;
+        if attachment.text.is_some() {
+            return Err(AgentTurnLoopError::InvalidAttachment {
+                index,
+                detail: "file attachments must not include inline text".to_owned(),
+            });
+        }
+
+        let result = self.tools.read_file_with_cancellation(
+            ReadFileArgs {
+                path: path.clone(),
+                start_line: attachment
+                    .range
+                    .map(|range| validate_text_range(index, range))
+                    .transpose()?
+                    .map(|range| range.start_line as usize),
+                end_line: attachment.range.map(|range| range.end_line as usize),
+            },
+            cancellation_token,
+        )?;
+        ensure_attachment_size(
+            index,
+            result.content.len() as u64,
+            self.config.max_attachment_bytes,
+        )?;
+
+        let mut content = String::new();
+        content.push_str("Attachment-Kind: file\n");
+        content.push_str("SHA-256: ");
+        content.push_str(&result.sha256);
+        content.push('\n');
+        content.push_str("Size-Bytes: ");
+        content.push_str(&result.size_bytes.to_string());
+        content.push('\n');
+        content.push_str("Line-Count: ");
+        content.push_str(&result.line_count.to_string());
+        content.push('\n');
+        if let Some(range) = attachment.range {
+            content.push_str("Range: ");
+            content.push_str(&range.label());
+            content.push('\n');
+        }
+        content.push('\n');
+        content.push_str(&result.content);
+
+        Ok(
+            ContextItem::file(path, content, "attached file from agent.sendTurn")
+                .with_title(attachment_title(index, "file", attachment.range)),
+        )
+    }
+
+    fn text_attachment_context_item(
+        &self,
+        index: usize,
+        attachment: &TurnAttachment,
+        kind: ContextItemKind,
+        label: &str,
+        reason: &str,
+    ) -> Result<ContextItem, AgentTurnLoopError> {
+        let text = attachment_text(index, attachment)?;
+        ensure_attachment_size(index, text.len() as u64, self.config.max_attachment_bytes)?;
+
+        match kind {
+            ContextItemKind::Selection | ContextItemKind::Diagnostic => {
+                let _ = attachment_path(index, attachment)?;
+                let range =
+                    attachment
+                        .range
+                        .ok_or_else(|| AgentTurnLoopError::InvalidAttachment {
+                            index,
+                            detail: "selection and diagnostic attachments require a range"
+                                .to_owned(),
+                        })?;
+                validate_text_range(index, range)?;
+            }
+            ContextItemKind::ExplicitContent
+                if attachment.path.is_some() || attachment.range.is_some() =>
+            {
+                return Err(AgentTurnLoopError::InvalidAttachment {
+                    index,
+                    detail: "explicit_content attachments must not include path or range"
+                        .to_owned(),
+                });
+            }
+            ContextItemKind::ExplicitContent => {}
+            _ => {}
+        }
+
+        let mut content = String::new();
+        content.push_str("Attachment-Kind: ");
+        content.push_str(kind_name_for_attachment(kind));
+        content.push('\n');
+        if let Some(range) = attachment.range {
+            content.push_str("Range: ");
+            content.push_str(&range.label());
+            content.push('\n');
+        }
+        content.push('\n');
+        content.push_str(text);
+
+        let mut item = ContextItem::required(kind, content, reason).with_title(attachment_title(
+            index,
+            label,
+            attachment.range,
+        ));
+        if let Some(path) = attachment.path.as_deref() {
+            item = item.with_path(path);
+        }
+        Ok(item)
     }
 
     fn execute_tool_call(
@@ -378,6 +604,7 @@ where
                 name: tool_name.to_owned(),
             })?;
         let arguments_preview = parse_tool_arguments_value(tool_call)?;
+        validate_tool_call_arguments(definition, tool_call, &arguments_preview)?;
 
         append_turn_event(
             run_log,
@@ -393,12 +620,23 @@ where
         )?;
 
         match definition.name {
-            ToolName::WorkspaceManifest => Err(AgentTurnLoopError::UnsupportedTool {
-                tool_call_id: tool_call.id.clone(),
-                name: tool_name.to_owned(),
-            }),
+            ToolName::WorkspaceManifest => {
+                let args = parse_tool_arguments(tool_call, &arguments_preview)?;
+                self.execute_without_approval(
+                    tool_call,
+                    context,
+                    args,
+                    run_log,
+                    event_sink,
+                    |tools, args, cancellation_token| {
+                        let result =
+                            tools.workspace_manifest_with_cancellation(args, cancellation_token)?;
+                        tool_record(result.status, result.summary.clone(), Vec::new(), &result)
+                    },
+                )
+            }
             ToolName::ReadFile => {
-                let args = parse_tool_arguments(tool_call)?;
+                let args = parse_tool_arguments(tool_call, &arguments_preview)?;
                 self.execute_without_approval(
                     tool_call,
                     context,
@@ -412,7 +650,7 @@ where
                 )
             }
             ToolName::Search => {
-                let args = parse_tool_arguments(tool_call)?;
+                let args = parse_tool_arguments(tool_call, &arguments_preview)?;
                 self.execute_without_approval(
                     tool_call,
                     context,
@@ -426,7 +664,7 @@ where
                 )
             }
             ToolName::ApplyPatch => {
-                let args: ApplyPatchArgs = parse_tool_arguments(tool_call)?;
+                let args: ApplyPatchArgs = parse_tool_arguments(tool_call, &arguments_preview)?;
                 self.ensure_approval(
                     definition,
                     tool_call,
@@ -457,7 +695,7 @@ where
                 )
             }
             ToolName::Shell => {
-                let args: ShellArgs = parse_tool_arguments(tool_call)?;
+                let args: ShellArgs = parse_tool_arguments(tool_call, &arguments_preview)?;
                 self.ensure_approval(
                     definition,
                     tool_call,
@@ -482,7 +720,7 @@ where
                 )
             }
             ToolName::GitStatus => {
-                let args = parse_tool_arguments(tool_call)?;
+                let args = parse_tool_arguments(tool_call, &arguments_preview)?;
                 self.execute_without_approval(
                     tool_call,
                     context,
@@ -497,7 +735,7 @@ where
                 )
             }
             ToolName::GitDiff => {
-                let args = parse_tool_arguments(tool_call)?;
+                let args = parse_tool_arguments(tool_call, &arguments_preview)?;
                 self.execute_without_approval(
                     tool_call,
                     context,
@@ -708,11 +946,122 @@ where
     Ok(event)
 }
 
+fn append_provider_completed_event<L>(
+    run_log: &mut L,
+    event_sink: &mut (impl TurnEventSink + ?Sized),
+    turn_id: &str,
+    iteration: usize,
+    duration_ms: u128,
+    completion: &TurnProviderCompletion,
+) -> Result<RunLogEvent, AgentTurnLoopError>
+where
+    L: RunLogWriter + ?Sized,
+{
+    let duration_ms = u64::try_from(duration_ms).unwrap_or(u64::MAX);
+    let mut payload = serde_json::to_value(completion)?;
+    if let Value::Object(payload) = &mut payload {
+        payload.insert("iteration".to_owned(), json!(iteration));
+        payload.insert("durationMs".to_owned(), json!(duration_ms));
+    }
+    append_turn_event(
+        run_log,
+        event_sink,
+        "provider.completed",
+        Some(turn_id.to_owned()),
+        payload,
+    )
+}
+
+fn attachment_path(
+    index: usize,
+    attachment: &TurnAttachment,
+) -> Result<String, AgentTurnLoopError> {
+    let path = attachment
+        .path
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .ok_or_else(|| AgentTurnLoopError::InvalidAttachment {
+            index,
+            detail: "attachment path is required".to_owned(),
+        })?;
+    Ok(path.to_owned())
+}
+
+fn attachment_text(index: usize, attachment: &TurnAttachment) -> Result<&str, AgentTurnLoopError> {
+    attachment
+        .text
+        .as_deref()
+        .filter(|text| !text.trim().is_empty())
+        .ok_or_else(|| AgentTurnLoopError::InvalidAttachment {
+            index,
+            detail: "attachment text is required".to_owned(),
+        })
+}
+
+fn ensure_attachment_size(
+    index: usize,
+    size_bytes: u64,
+    max_bytes: u64,
+) -> Result<(), AgentTurnLoopError> {
+    if size_bytes > max_bytes {
+        return Err(AgentTurnLoopError::AttachmentTooLarge {
+            index,
+            size_bytes,
+            max_bytes,
+        });
+    }
+    Ok(())
+}
+
+fn validate_text_range(index: usize, range: TextRange) -> Result<TextRange, AgentTurnLoopError> {
+    if range.start_line == 0
+        || range.start_column == 0
+        || range.end_line == 0
+        || range.end_column == 0
+        || range.end_line < range.start_line
+        || (range.end_line == range.start_line && range.end_column < range.start_column)
+    {
+        return Err(AgentTurnLoopError::InvalidAttachment {
+            index,
+            detail: format!("invalid text range {}", range.label()),
+        });
+    }
+
+    Ok(range)
+}
+
+fn attachment_title(index: usize, label: &str, range: Option<TextRange>) -> String {
+    match range {
+        Some(range) => format!("{label} #{} ({})", index + 1, range.label()),
+        None => format!("{label} #{}", index + 1),
+    }
+}
+
+fn kind_name_for_attachment(kind: ContextItemKind) -> &'static str {
+    match kind {
+        ContextItemKind::Selection => "selection",
+        ContextItemKind::ExplicitContent => "explicit_content",
+        ContextItemKind::Diagnostic => "diagnostic",
+        ContextItemKind::File => "file",
+        _ => "attachment",
+    }
+}
+
+fn attachment_dedup_signature(key: &str) -> String {
+    crate::hashing::sha256_hex(key.as_bytes())
+        .chars()
+        .take(16)
+        .collect()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AgentTurnLoopConfig {
     pub max_input_tokens: u64,
     pub max_model_turns: usize,
     pub reasoning_mode: ReasoningContentMode,
+    pub max_attachments: usize,
+    pub max_attachment_bytes: u64,
 }
 
 impl Default for AgentTurnLoopConfig {
@@ -721,6 +1070,8 @@ impl Default for AgentTurnLoopConfig {
             max_input_tokens: 1_000_000,
             max_model_turns: 8,
             reasoning_mode: ReasoningContentMode::ThinkingEnabled,
+            max_attachments: DEFAULT_MAX_ATTACHMENTS,
+            max_attachment_bytes: DEFAULT_MAX_ATTACHMENT_BYTES,
         }
     }
 }
@@ -731,6 +1082,7 @@ pub struct AgentTurnInput {
     pub user_task: String,
     pub mode: AgentRunMode,
     pub context_items: Vec<ContextItem>,
+    pub attachments: Vec<TurnAttachment>,
     pub cancellation_token: CancellationToken,
 }
 
@@ -741,6 +1093,7 @@ impl AgentTurnInput {
             user_task: user_task.into(),
             mode: AgentRunMode::Edit,
             context_items: Vec::new(),
+            attachments: Vec::new(),
             cancellation_token: CancellationToken::new(),
         }
     }
@@ -755,9 +1108,121 @@ impl AgentTurnInput {
         self
     }
 
+    pub fn with_attachment(mut self, attachment: TurnAttachment) -> Self {
+        self.attachments.push(attachment);
+        self
+    }
+
+    pub fn with_attachments(mut self, attachments: Vec<TurnAttachment>) -> Self {
+        self.attachments = attachments;
+        self
+    }
+
     pub fn with_cancellation_token(mut self, cancellation_token: CancellationToken) -> Self {
         self.cancellation_token = cancellation_token;
         self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TurnAttachment {
+    pub kind: TurnAttachmentKind,
+    pub path: Option<String>,
+    pub range: Option<TextRange>,
+    pub text: Option<String>,
+}
+
+impl TurnAttachment {
+    pub fn file(path: impl Into<String>) -> Self {
+        Self {
+            kind: TurnAttachmentKind::File,
+            path: Some(path.into()),
+            range: None,
+            text: None,
+        }
+    }
+
+    pub fn selection(path: impl Into<String>, range: TextRange, text: impl Into<String>) -> Self {
+        Self {
+            kind: TurnAttachmentKind::Selection,
+            path: Some(path.into()),
+            range: Some(range),
+            text: Some(text.into()),
+        }
+    }
+
+    pub fn explicit_content(text: impl Into<String>) -> Self {
+        Self {
+            kind: TurnAttachmentKind::ExplicitContent,
+            path: None,
+            range: None,
+            text: Some(text.into()),
+        }
+    }
+
+    pub fn diagnostic(path: impl Into<String>, range: TextRange, text: impl Into<String>) -> Self {
+        Self {
+            kind: TurnAttachmentKind::Diagnostic,
+            path: Some(path.into()),
+            range: Some(range),
+            text: Some(text.into()),
+        }
+    }
+
+    fn dedup_key(&self, index: usize) -> String {
+        let mut key = format!("{:?}|", self.kind);
+        key.push_str(self.path.as_deref().unwrap_or("<no-path>"));
+        key.push('|');
+        if let Some(range) = self.range {
+            key.push_str(&range.label());
+        } else {
+            key.push_str("<no-range>");
+        }
+        key.push('|');
+        if let Some(text) = self.text.as_deref() {
+            key.push_str(&crate::hashing::sha256_hex(text.as_bytes()));
+        } else {
+            key.push_str("<no-text>");
+        }
+        if self.kind == TurnAttachmentKind::ExplicitContent && self.text.is_none() {
+            key.push('|');
+            key.push_str(&index.to_string());
+        }
+        key
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TurnAttachmentKind {
+    File,
+    Selection,
+    ExplicitContent,
+    Diagnostic,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TextRange {
+    pub start_line: u32,
+    pub start_column: u32,
+    pub end_line: u32,
+    pub end_column: u32,
+}
+
+impl TextRange {
+    pub const fn new(start_line: u32, start_column: u32, end_line: u32, end_column: u32) -> Self {
+        Self {
+            start_line,
+            start_column,
+            end_line,
+            end_column,
+        }
+    }
+
+    fn label(self) -> String {
+        format!(
+            "{}:{}-{}:{}",
+            self.start_line, self.start_column, self.end_line, self.end_column
+        )
     }
 }
 
@@ -808,6 +1273,7 @@ pub struct TurnProviderResponse {
     pub content: Option<String>,
     pub reasoning_content: Option<String>,
     pub tool_calls: Vec<ChatToolCall>,
+    pub completion: TurnProviderCompletion,
 }
 
 impl TurnProviderResponse {
@@ -816,6 +1282,7 @@ impl TurnProviderResponse {
             content: Some(content.into()),
             reasoning_content: None,
             tool_calls: Vec::new(),
+            completion: TurnProviderCompletion::fixture(TurnProviderFinishReason::Stop),
         }
     }
 
@@ -828,7 +1295,13 @@ impl TurnProviderResponse {
             content,
             reasoning_content,
             tool_calls,
+            completion: TurnProviderCompletion::fixture(TurnProviderFinishReason::ToolCalls),
         }
+    }
+
+    pub fn with_completion(mut self, completion: TurnProviderCompletion) -> Self {
+        self.completion = completion;
+        self
     }
 }
 
@@ -875,6 +1348,76 @@ impl TurnProviderDelta {
                 .as_deref()
                 .is_none_or(|reasoning_content| reasoning_content.is_empty())
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnProviderCompletion {
+    pub model: String,
+    pub finish_reason: TurnProviderFinishReason,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<TurnProviderUsage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub streaming: Option<TurnProviderStreamingSummary>,
+}
+
+impl TurnProviderCompletion {
+    pub fn new(model: impl Into<String>, finish_reason: TurnProviderFinishReason) -> Self {
+        Self {
+            model: model.into(),
+            finish_reason,
+            usage: None,
+            streaming: None,
+        }
+    }
+
+    pub fn fixture(finish_reason: TurnProviderFinishReason) -> Self {
+        Self::new("fixture", finish_reason)
+    }
+
+    pub fn with_usage(mut self, usage: TurnProviderUsage) -> Self {
+        self.usage = Some(usage);
+        self
+    }
+
+    pub fn with_streaming(mut self, streaming: TurnProviderStreamingSummary) -> Self {
+        self.streaming = Some(streaming);
+        self
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnProviderFinishReason {
+    Stop,
+    Length,
+    ToolCalls,
+    ContentFilter,
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnProviderUsage {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_hit_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_miss_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnProviderStreamingSummary {
+    pub chunk_count: u64,
+    pub tool_call_delta_count: u64,
 }
 
 pub type TurnProviderStream =
@@ -1015,8 +1558,29 @@ pub enum AgentTurnLoopError {
         name: String,
         source: serde_json::Error,
     },
+    #[error("tool call `{tool_call_id}` for `{name}` failed JSON Schema validation: {source}")]
+    InvalidToolArgumentSchema {
+        tool_call_id: String,
+        name: String,
+        source: ToolArgumentSchemaError,
+    },
     #[error("tool result serialization failed: {0}")]
     Serialization(#[from] serde_json::Error),
+    #[error("too many attachments: got {count}, max {max_attachments}")]
+    TooManyAttachments {
+        count: usize,
+        max_attachments: usize,
+    },
+    #[error("duplicate attachment at index {index}: signature {signature}")]
+    DuplicateAttachment { index: usize, signature: String },
+    #[error("invalid attachment at index {index}: {detail}")]
+    InvalidAttachment { index: usize, detail: String },
+    #[error("attachment at index {index} is too large: {size_bytes} bytes, max {max_bytes}")]
+    AttachmentTooLarge {
+        index: usize,
+        size_bytes: u64,
+        max_bytes: u64,
+    },
     #[error("assistant tool call response is missing reasoning_content while thinking is enabled")]
     MissingAssistantReasoningContent,
     #[error("approval `{approval_id}` rejected for tool call `{tool_call_id}`: {reason}")]
@@ -1059,8 +1623,14 @@ impl AgentTurnLoopError {
             Self::Canceled { .. } => "E_RUN_CANCELED",
             Self::UnknownTool { .. } => "E_UNKNOWN_TOOL",
             Self::UnsupportedTool { .. } => "E_UNSUPPORTED_TOOL",
-            Self::InvalidToolArguments { .. } => "E_INVALID_TOOL_ARGUMENTS",
+            Self::InvalidToolArguments { .. } | Self::InvalidToolArgumentSchema { .. } => {
+                "E_INVALID_TOOL_ARGUMENTS"
+            }
             Self::Serialization(_) => "E_SERIALIZATION",
+            Self::TooManyAttachments { .. }
+            | Self::DuplicateAttachment { .. }
+            | Self::InvalidAttachment { .. }
+            | Self::AttachmentTooLarge { .. } => "E_INVALID_ATTACHMENT",
             Self::MissingAssistantReasoningContent => "E_MISSING_REASONING_CONTENT",
             Self::ApprovalRejected { .. } => "E_APPROVAL_REJECTED",
             Self::ApprovalCanceled { .. } => "E_APPROVAL_CANCELED",
@@ -1123,10 +1693,25 @@ fn parse_tool_arguments_value(tool_call: &ChatToolCall) -> Result<Value, AgentTu
     })
 }
 
+fn validate_tool_call_arguments(
+    definition: &ToolDefinition,
+    tool_call: &ChatToolCall,
+    arguments: &Value,
+) -> Result<(), AgentTurnLoopError> {
+    validate_tool_arguments(definition, arguments).map_err(|source| {
+        AgentTurnLoopError::InvalidToolArgumentSchema {
+            tool_call_id: tool_call.id.clone(),
+            name: tool_call.function.name.clone(),
+            source,
+        }
+    })
+}
+
 fn parse_tool_arguments<T: DeserializeOwned>(
     tool_call: &ChatToolCall,
+    arguments: &Value,
 ) -> Result<T, AgentTurnLoopError> {
-    serde_json::from_str(&tool_call.function.arguments).map_err(|source| {
+    serde_json::from_value(arguments.clone()).map_err(|source| {
         AgentTurnLoopError::InvalidToolArguments {
             tool_call_id: tool_call.id.clone(),
             name: tool_call.function.name.clone(),
@@ -1317,10 +1902,11 @@ mod tests {
 
     use super::{
         AgentRunMode, AgentTurnInput, AgentTurnLoop, AgentTurnLoopConfig, AgentTurnLoopError,
-        AutoApprovePolicy, CancellationToken, TurnEventSink, TurnEventSinkError, TurnProvider,
-        TurnProviderDelta, TurnProviderError, TurnProviderEvent, TurnProviderFuture,
+        AutoApprovePolicy, CancellationToken, TextRange, TurnAttachment, TurnEventSink,
+        TurnEventSinkError, TurnProvider, TurnProviderCompletion, TurnProviderDelta,
+        TurnProviderError, TurnProviderEvent, TurnProviderFinishReason, TurnProviderFuture,
         TurnProviderRequest, TurnProviderResponse, TurnProviderStream,
-        turn_provider_response_stream,
+        TurnProviderStreamingSummary, TurnProviderUsage, turn_provider_response_stream,
     };
 
     #[tokio::test]
@@ -1394,19 +1980,249 @@ mod tests {
                 "turn.started",
                 "context.built",
                 "provider.requested",
+                "provider.completed",
                 "tool.requested",
                 "tool.started",
                 "tool.completed",
                 "provider.requested",
+                "provider.completed",
                 "assistant.delta",
                 "run.completed",
             ]
         );
         assert_eq!(events[0].payload["workspaceRoot"], workspace_root);
-        assert_eq!(events[6].payload["name"], "read_file");
+        assert!(
+            events[2].payload["includedSources"]
+                .as_array()
+                .expect("includedSources should be array")
+                .iter()
+                .any(|source| source["kind"] == json!("workspace_manifest"))
+        );
+        assert!(
+            events[2].payload["manifest"]["manifestHash"]
+                .as_str()
+                .is_some_and(|hash| hash.starts_with("sha256:"))
+        );
+        assert!(
+            events[2].payload["stablePrefixTokens"]
+                .as_u64()
+                .unwrap_or_default()
+                > 0
+        );
+        assert!(
+            events[2].payload["turnSuffixTokens"]
+                .as_u64()
+                .unwrap_or_default()
+                > 0
+        );
+        assert_eq!(events[4].payload["model"], "fixture");
+        assert_eq!(events[4].payload["finishReason"], "tool_calls");
+        assert_eq!(events[9].payload["finishReason"], "stop");
+        assert_eq!(events[7].payload["name"], "read_file");
         assert_eq!(
-            events[6].payload["result"]["content"],
+            events[7].payload["result"]["content"],
             "hello from README\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn turn_loop_includes_attachments_in_context() {
+        let workspace = TestWorkspace::new("turn-loop");
+        workspace.write("README.md", "attached README\nsecond line\n");
+        workspace.write("src/lib.rs", "pub fn demo() {}\n");
+        let store = RunLogStore::new(workspace.path()).expect("run log store should open");
+        let mut run = store
+            .create_run("run_turn_attachments")
+            .expect("run should be created");
+        let provider = ScriptedProvider::new(vec![TurnProviderResponse::final_text(
+            "attachments received.",
+        )]);
+        let mut loop_runner =
+            AgentTurnLoop::new(workspace.path(), provider).expect("turn loop should initialize");
+
+        let range = TextRange::new(1, 1, 1, 18);
+        let outcome = loop_runner
+            .run_turn(
+                AgentTurnInput::new("turn_1", "Use the attached context")
+                    .with_attachment(TurnAttachment::file("README.md"))
+                    .with_attachment(TurnAttachment::selection(
+                        "src/lib.rs",
+                        range,
+                        "pub fn demo() {}",
+                    ))
+                    .with_attachment(TurnAttachment::explicit_content(
+                        "acceptance: mention attachments",
+                    ))
+                    .with_attachment(TurnAttachment::diagnostic(
+                        "src/lib.rs",
+                        range,
+                        "warning: demo is unused",
+                    )),
+                &mut run,
+            )
+            .await
+            .expect("turn should complete with attachments");
+
+        assert_eq!(outcome.final_message, "attachments received.");
+        let prompt = loop_runner.provider.requests[0].messages[0]
+            .content
+            .as_deref()
+            .expect("provider prompt should include context");
+        assert!(prompt.contains("Attachment-Kind: file"));
+        assert!(prompt.contains("attached README"));
+        assert!(prompt.contains("Kind: selection"));
+        assert!(prompt.contains("Attachment-Kind: selection"));
+        assert!(prompt.contains("Kind: explicit_content"));
+        assert!(prompt.contains("acceptance: mention attachments"));
+        assert!(prompt.contains("Kind: diagnostic"));
+        assert!(prompt.contains("warning: demo is unused"));
+
+        let events = store
+            .load_run("run_turn_attachments")
+            .expect("events should load");
+        let context_built = events
+            .iter()
+            .find(|event| event.event_type == "context.built")
+            .expect("context.built should be emitted");
+        for kind in ["file", "selection", "explicit_content", "diagnostic"] {
+            assert!(
+                context_built.payload["includedSources"]
+                    .as_array()
+                    .expect("includedSources should be an array")
+                    .iter()
+                    .any(|source| source["kind"] == json!(kind)),
+                "context should include {kind} attachment source"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn turn_loop_rejects_duplicate_attachments_before_provider_call() {
+        let workspace = TestWorkspace::new("turn-loop");
+        let store = RunLogStore::new(workspace.path()).expect("run log store should open");
+        let mut run = store
+            .create_run("run_turn_duplicate_attachment")
+            .expect("run should be created");
+        let provider = ScriptedProvider::new(vec![TurnProviderResponse::final_text(
+            "should not be called",
+        )]);
+        let mut loop_runner =
+            AgentTurnLoop::new(workspace.path(), provider).expect("turn loop should initialize");
+
+        let error = loop_runner
+            .run_turn(
+                AgentTurnInput::new("turn_1", "Use duplicated attachments")
+                    .with_attachment(TurnAttachment::explicit_content("same"))
+                    .with_attachment(TurnAttachment::explicit_content("same")),
+                &mut run,
+            )
+            .await
+            .expect_err("duplicate attachment should fail");
+
+        assert!(matches!(
+            error,
+            AgentTurnLoopError::DuplicateAttachment { .. }
+        ));
+        assert!(loop_runner.provider.requests.is_empty());
+        let events = store
+            .load_run("run_turn_duplicate_attachment")
+            .expect("events should load");
+        assert!(events.iter().any(|event| {
+            event.event_type == "run.failed" && event.payload["code"] == "E_INVALID_ATTACHMENT"
+        }));
+    }
+
+    #[tokio::test]
+    async fn turn_loop_rejects_oversized_attachment_before_provider_call() {
+        let workspace = TestWorkspace::new("turn-loop");
+        let store = RunLogStore::new(workspace.path()).expect("run log store should open");
+        let mut run = store
+            .create_run("run_turn_oversized_attachment")
+            .expect("run should be created");
+        let provider = ScriptedProvider::new(vec![TurnProviderResponse::final_text(
+            "should not be called",
+        )]);
+        let config = AgentTurnLoopConfig {
+            max_attachment_bytes: 4,
+            ..AgentTurnLoopConfig::default()
+        };
+        let mut loop_runner = AgentTurnLoop::new(workspace.path(), provider)
+            .expect("turn loop should initialize")
+            .with_config(config);
+
+        let error = loop_runner
+            .run_turn(
+                AgentTurnInput::new("turn_1", "Use oversized attachment")
+                    .with_attachment(TurnAttachment::explicit_content("too large")),
+                &mut run,
+            )
+            .await
+            .expect_err("oversized attachment should fail");
+
+        assert!(matches!(
+            error,
+            AgentTurnLoopError::AttachmentTooLarge { .. }
+        ));
+        assert!(loop_runner.provider.requests.is_empty());
+    }
+
+    #[tokio::test]
+    async fn turn_loop_logs_provider_completed_usage_cache_and_stream_summary() {
+        let workspace = TestWorkspace::new("turn-loop");
+        let store = RunLogStore::new(workspace.path()).expect("run log store should open");
+        let mut run = store
+            .create_run("run_turn_provider_summary")
+            .expect("run should be created");
+        let completion =
+            TurnProviderCompletion::new("deepseek-v4-pro", TurnProviderFinishReason::Stop)
+                .with_usage(TurnProviderUsage {
+                    prompt_tokens: Some(100),
+                    completion_tokens: Some(20),
+                    total_tokens: Some(120),
+                    prompt_cache_hit_tokens: Some(64),
+                    prompt_cache_miss_tokens: Some(36),
+                    reasoning_tokens: Some(8),
+                })
+                .with_streaming(TurnProviderStreamingSummary {
+                    chunk_count: 3,
+                    tool_call_delta_count: 0,
+                });
+        let provider = ScriptedProvider::new(vec![
+            TurnProviderResponse::final_text("done").with_completion(completion),
+        ]);
+        let mut loop_runner =
+            AgentTurnLoop::new(workspace.path(), provider).expect("turn loop should initialize");
+
+        loop_runner
+            .run_turn(AgentTurnInput::new("turn_1", "Say done"), &mut run)
+            .await
+            .expect("turn should complete");
+
+        let events = store
+            .load_run("run_turn_provider_summary")
+            .expect("events should load");
+        let provider_completed = events
+            .iter()
+            .find(|event| event.event_type == "provider.completed")
+            .expect("provider.completed should be emitted");
+        assert_eq!(provider_completed.payload["iteration"], 1);
+        assert_eq!(provider_completed.payload["model"], "deepseek-v4-pro");
+        assert_eq!(provider_completed.payload["finishReason"], "stop");
+        assert!(provider_completed.payload["durationMs"].as_u64().is_some());
+        assert_eq!(provider_completed.payload["usage"]["promptTokens"], 100);
+        assert_eq!(
+            provider_completed.payload["usage"]["promptCacheHitTokens"],
+            64
+        );
+        assert_eq!(
+            provider_completed.payload["usage"]["promptCacheMissTokens"],
+            36
+        );
+        assert_eq!(provider_completed.payload["usage"]["reasoningTokens"], 8);
+        assert_eq!(provider_completed.payload["streaming"]["chunkCount"], 3);
+        assert_eq!(
+            provider_completed.payload["streaming"]["toolCallDeltaCount"],
+            0
         );
     }
 
@@ -1449,6 +2265,48 @@ mod tests {
                 .any(|event| event.event_type == "tool.started")
         );
         assert!(events.iter().any(|event| event.event_type == "run.failed"));
+    }
+
+    #[tokio::test]
+    async fn turn_loop_rejects_tool_arguments_before_typed_deserialization() {
+        let workspace = TestWorkspace::new("turn-loop");
+        workspace.write("README.md", "hello\n");
+        let store = RunLogStore::new(workspace.path()).expect("run log store should open");
+        let mut run = store
+            .create_run("run_turn_schema_reject")
+            .expect("run should be created");
+        let provider = ScriptedProvider::new(vec![TurnProviderResponse::tool_calls(
+            None,
+            Some("I should read the README.".to_owned()),
+            vec![ChatToolCall::function(
+                "call_1",
+                "read_file",
+                r#"{"path":"README.md","unexpected":true}"#,
+            )],
+        )]);
+        let mut loop_runner =
+            AgentTurnLoop::new(workspace.path(), provider).expect("turn loop should initialize");
+
+        let error = loop_runner
+            .run_turn(AgentTurnInput::new("turn_1", "Read README"), &mut run)
+            .await
+            .expect_err("schema validation should reject unexpected properties");
+
+        assert!(matches!(
+            error,
+            AgentTurnLoopError::InvalidToolArgumentSchema { .. }
+        ));
+        let events = store
+            .load_run("run_turn_schema_reject")
+            .expect("events should load");
+        assert!(
+            !events
+                .iter()
+                .any(|event| event.event_type == "tool.requested")
+        );
+        assert!(events.iter().any(|event| {
+            event.event_type == "run.failed" && event.payload["code"] == "E_INVALID_TOOL_ARGUMENTS"
+        }));
     }
 
     #[tokio::test]
@@ -1694,7 +2552,6 @@ mod tests {
                 "shell",
                 json!({
                     "command": command,
-                    "cwd": null,
                     "timeoutMs": 10_000
                 })
                 .to_string(),

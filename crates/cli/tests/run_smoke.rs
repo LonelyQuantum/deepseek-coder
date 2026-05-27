@@ -5,8 +5,8 @@ use std::{
     process::{Command, Stdio},
 };
 
-use deepseek_coder_agent_core::{run_log::RunLogStore, test_helpers::TestWorkspace};
-use deepseek_coder_agent_rpc::{JSON_RPC_INVALID_PARAMS, PROTOCOL_VERSION};
+use prole_coder_agent_core::{run_log::RunLogStore, test_helpers::TestWorkspace};
+use prole_coder_agent_rpc::{JSON_RPC_INVALID_PARAMS, PROTOCOL_VERSION};
 use serde_json::{Value, json};
 
 #[test]
@@ -14,7 +14,7 @@ fn fixture_readme_json_smoke_from_binary() {
     let workspace = TestWorkspace::new("cli-process");
     workspace.write("README.md", "hello from process smoke\n");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_deepseek-coder"))
+    let output = Command::new(env!("CARGO_BIN_EXE_prole"))
         .args([
             "run",
             "--provider",
@@ -100,7 +100,7 @@ fn fixture_readme_json_smoke_from_binary() {
 
 #[test]
 fn run_json_usage_error_from_binary_is_json_rpc_error() {
-    let output = Command::new(env!("CARGO_BIN_EXE_deepseek-coder"))
+    let output = Command::new(env!("CARGO_BIN_EXE_prole"))
         .args(["run", "--json", "--provider", "fixture"])
         .output()
         .expect("CLI binary should run");
@@ -162,7 +162,7 @@ fn rpc_fixture_smoke_from_binary() {
         .to_string(),
     ]
     .join("\n");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_deepseek-coder"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_prole"))
         .args(["rpc", "--provider", "fixture", "--fixture", "readme"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

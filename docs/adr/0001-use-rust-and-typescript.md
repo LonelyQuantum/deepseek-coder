@@ -4,7 +4,7 @@
 
 ## 背景
 
-`deepseek-coder` 需要可靠的本地执行核心，也需要 VS Code 插件前端。
+`ProleCoder` 需要可靠的本地执行核心，也需要 VS Code 插件前端。
 
 ## 决策
 

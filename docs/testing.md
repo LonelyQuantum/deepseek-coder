@@ -26,7 +26,7 @@
 
 ### 真实联网测试
 
-用于验证 DeepSeek API、真实 streaming、真实 tool call delta 或真实模型工具调用。测试代码可以进仓库，但必须使用 `#[ignore]`，并通过 `DEEPSEEK_CODER_LIVE_TESTS=1` 这类环境开关显式启用。
+用于验证 DeepSeek API、真实 streaming、真实 tool call delta 或真实模型工具调用。测试代码可以进仓库，但必须使用 `#[ignore]`，并通过 `PROLE_CODER_LIVE_TESTS=1` 这类环境开关显式启用。
 
 ### 结果展示测试
 
@@ -42,7 +42,7 @@
 | --- | --- | --- | --- |
 | 默认 CI | `push`、`pull_request` | fmt、clippy、离线 Rust/TypeScript 测试、确定性 fixture | API key、真实网络、长耗时、人工观察 |
 | 本地开发检查 | `pnpm run check` | 与默认 CI 尽量一致 | 私有路径、隐式依赖 `.secrets/` |
-| 本地展示 | `cargo demo`、`cargo demo-live` | 人类可读 transcript、临时工作区输出 | 作为普通 CI 必跑项 |
+| 本地展示 | `cargo demo`、`cargo demo-live` 以及 `docs/demos.md` 中登记的离线展示命令 | 人类可读 transcript、临时工作区输出 | 作为普通 CI 必跑项 |
 | 真实验收 | ignored live test 或 manual workflow | DeepSeek API、真实 streaming、真实模型工具调用 | 无开关自动运行 |
 | 压力/长上下文 | ignored test、manual/nightly | 大上下文、大仓库、长时间任务 | PR 默认阻塞 |
 
@@ -56,7 +56,7 @@
 - live 测试必须同时满足 `#[ignore]` 和环境变量开关，避免误触发 token 消耗。
 - demo 测试必须默认 `#[ignore]`，输出服务于阅读，不承担唯一正确性证明。
 - 新 fixture 应优先放在可复用 helper 中；只有某个测试独有的数据才放在测试本地。
-- 真实联网测试读取 API key 时应复用 `agent-core::test_helpers::live_api_key`；测试侧优先级为 `DEEPSEEK_CODER_API_KEY`、`DEEPSEEK_API_KEY`、`.secrets/deepseek-api-key`。
+- 真实联网测试读取 API key 时应复用 `agent-core::test_helpers::live_api_key`；测试侧优先级为 `PROLE_CODER_DEEPSEEK_API_KEY`、`DEEPSEEK_API_KEY`、`.secrets/deepseek-api-key`。
 
 ## 合并主线前测试清单
 
@@ -96,16 +96,50 @@ cargo demo
 
 ### 建议：真实 DeepSeek 联网验收
 
-联网验收需要 API key 和 `DEEPSEEK_CODER_LIVE_TESTS=1`。阶段合并前建议至少跑以下几类：
+联网验收需要 API key 和 `PROLE_CODER_LIVE_TESTS=1`。阶段合并前建议至少跑以下几类：
 
 ```powershell
-$env:DEEPSEEK_CODER_LIVE_TESTS = "1"
-cargo test -p deepseek-coder-agent-core --test deepseek_api_live -- --ignored --nocapture
-cargo test -p deepseek-coder-cli --test deepseek_cli_live -- --ignored --nocapture
+$env:PROLE_CODER_LIVE_TESTS = "1"
+cargo test -p prole-coder-agent-core --test deepseek_api_live -- --ignored --nocapture
+cargo test -p prole-coder-cli --test deepseek_cli_live -- --ignored --nocapture
 cargo demo-live
 ```
 
 如果上游服务返回 5xx、524 或限流，应记录为外部服务不稳定，不直接等同于代码回归；同一 commit 可在服务恢复后重跑。
+
+## Phase 2 Context Capsule 验收分层
+
+Phase 2 的默认 CI 应优先覆盖离线、确定性测试：
+
+- `read_file` 摘要元数据：验证完整文件 `sha256`、`sizeBytes`、行范围读取和 JSON camelCase 序列化。
+- Context Capsule renderer：验证 `StablePrefix`、`DynamicPrelude`、`TurnSuffix` 三层分组、显式 placement override、`content == rendered` 兼容字段，以及修改 `TurnSuffix` 不改变 `StablePrefix`。
+- manifest fixture：固定工作区结构、ignore 规则、`sha256`、`manifestHash`、`maxEntries` 和 omitted reason。
+- Context Builder manifest 接入：验证 Turn Loop 自动注入 manifest summary、`context.built` 输出 stable/dynamic/suffix section token、manifest hash 和 omitted reason。
+- token estimator metadata：`utf8_bytes` 和校准估算器都必须明确 `exact=false`，不能误报为真实 tokenizer；校准 fixture 覆盖系数、误差和不保存 prompt 原文的边界。
+- attachment fixture：file、selection、explicit_content、diagnostic 都能进入 Context Capsule；路径越界、重复 attachment、超大小 selection / explicit content 和 diagnostic 形状错误均有稳定错误。
+- provider summary：`provider.completed` 独立记录模型、duration、usage、cache hit/miss 和 streaming 摘要；DeepSeek streaming wrapper 从 include_usage chunk 填充这些字段。
+- JSON Schema validation：tool call arguments 在 typed deserialization 前通过 schema validator，未知字段、错误类型、空字符串/空数组等会稳定失败。
+- Run Log 体积边界：工具结果、verification 输出和 Run Log payload 共用脱敏/截断函数，并记录 `runLogTruncation`。
+
+以下验收必须保持 ignored/manual，不进入普通 CI：
+
+- DeepSeek cache hit/miss 实验：相同 `StablePrefix` + 不同 user task 的两次请求应记录 cache hit/miss。
+- 200K、500K、900K 样例仓库 Context Capsule 生成和 token 预算报告。
+- 真实多文件任务展示 manifest、选中文件/诊断、token 预算、provider usage/cache 和最终验证结果。
+
+Phase 2d 的大上下文手动入口：
+
+```powershell
+cargo test -p prole-coder-agent-core --test context_capsule_benchmark context_capsule_large_repository_budget_benchmark -- --ignored --exact --nocapture
+```
+
+该测试生成 200K、500K、900K 三档确定性样例 Context Capsule，输出 `inputTokens`、section tokens 和 omitted source 数量；默认 CI 只编译 ignored test，不自动执行。
+
+Phase 2c/2d 的 cache usage 手动入口：
+
+```powershell
+cargo test -p prole-coder-agent-core --test deepseek_api_live live_cache_usage_summary_smoke_test -- --ignored --exact --nocapture
+```
 
 ### 可选：合并前人工检查
 
@@ -128,11 +162,13 @@ rg -n "sk-[A-Za-z0-9_-]+|C:\\User[s]\\|/Users/[^/]+/|/home/[^/]+/|DEEPSEEK_(CODE
 
 - Rust 单元测试放在对应模块的 `#[cfg(test)]` 中。
 - Rust 集成测试放在对应 crate 的 `tests/` 目录。
-- 共享 Rust 测试 helper 放在 `crates/agent-core/src/test_helpers/`，跨 crate 测试通过 `deepseek_coder_agent_core::test_helpers` 复用。
+- 共享 Rust 测试 helper 放在 `crates/agent-core/src/test_helpers/`，跨 crate 测试通过 `prole_coder_agent_core::test_helpers` 复用。
 - CLI 展示测试放在 `crates/cli/tests/agent_interaction_demo.rs`。
 - TypeScript 单元或协议测试放在对应 package 的 `src/**/*.test.ts` 或现有测试目录。
 - 跨语言协议 fixture 放在 `docs/protocol/`，并由 Rust 与 TypeScript 共同校验。
 
 ## 展示型 Demo
 
-展示型 demo 的完整清单、运行命令和预期输出见 `demos.md`。`cargo demo` 与 `cargo demo-live` 来自 `.cargo/config.toml`；新增或调整展示命令时，应同时更新 Cargo alias 和 `demos.md`。
+展示型 demo 的完整清单、运行命令和预期输出见 `demos.md`。`cargo demo`、`cargo demo-live`、`cargo demo-context`、`cargo demo-context-visual`、`cargo demo-truncation`、`cargo demo-schema` 和 `cargo demo-attachment` 均来自 `.cargo/config.toml`；新增或调整展示命令时，应先更新 `demos.md`，并且只在 demo 已实现、可运行后再加入 Cargo alias。
+
+Phase 2e 已补齐 context、truncation、schema、context-visual、attachment，并增强 `demo-live` 的 provider summary 展示。它们仍应默认 ignored，不进入普通 CI 自动执行，作为人工观察和阶段合并前验收入口。
