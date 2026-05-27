@@ -81,11 +81,11 @@
 | [ ] | Sidebar Chat 和 `agent.event` 渲染 | `README.md`、`docs/vscode-extension.md` | 当前 manager 能转发事件，但 UI 尚未消费。 |
 | [ ] | 文本输入发送 turn 并接收真实 Agent 响应 | `README.md`、`docs/vscode-extension.md`、`docs/json-rpc-protocol.md` | UI 层调用 `agent.sendTurn`，通过事件流渲染进度和最终结果。 |
 | [ ] | VS Code 审批 UI 接入真实 RPC pending queue | `docs/approval-model.md`、`docs/vscode-extension.md` | modal adapter 已有，仍需消费 `tool.approvalRequired` 并发送 approve/reject。 |
+| [ ] | 命令风险分类器和动态风险升级 | `README.md`、`docs/approval-model.md`、`docs/tool-system.md`、`docs/turn-loop.md` | 识别依赖安装、网络访问、远程 git、删除和发布命令。 |
+| [ ] | 更强进程树清理策略 | `docs/tool-system.md`、`docs/security-model.md`、`docs/roadmap.md` | 当前 shell/search/git 等只做基础协作式取消和 child kill。 |
 | [ ] | Native diff editor 与 hunk 级审批边界 | `README.md`、`docs/vscode-extension.md` | 需要和 patch/apply result、审批模型联动；hunk 级批准可在首版只预留结构。 |
 | [ ] | Run List / resume | `README.md`、`docs/vscode-extension.md`、`docs/rpc-server.md` | 复用 `agent.listRuns` 与 run summary metadata。 |
 | [ ] | Context Capsule 可视化 | `README.md`、`docs/context-capsule.md`、`docs/vscode-extension.md` | 基于 `context.built` 的 included/omitted sources、三层 token 预算和 cache placement。 |
-| [ ] | 命令风险分类器和动态风险升级 | `docs/approval-model.md`、`docs/tool-system.md`、`docs/turn-loop.md` | 识别依赖安装、网络访问、远程 git、删除和发布命令。 |
-| [ ] | 更强进程树清理策略 | `docs/tool-system.md`、`docs/security-model.md`、`docs/roadmap.md` | 当前 shell/search/git 等只做基础协作式取消和 child kill。 |
 
 ## Phase 4：VS Code 深度集成
 
@@ -95,7 +95,7 @@
 | [ ] | Terminal command approval | `README.md`、`docs/vscode-extension.md`、`docs/approval-model.md` | 展示命令、cwd、风险等级、输出摘要和持久化选项。 |
 | [ ] | provider、model、预算、审批策略和 RPC 命令配置界面 | `README.md`、`docs/vscode-extension.md` | 避免保存 API Key，配置只管理非敏感选项。 |
 | [ ] | FIM completion preview | `README.md`、`docs/deepseek-api-adapter.md`、`docs/vscode-extension.md` | 需要 provider capability model 与编辑器 UI。 |
-| [ ] | Provider capability model | `docs/roadmap.md`、`docs/deepseek-api-adapter.md` | 显式表达 thinking、tool choice、FIM、stream usage、cache usage、上下文和输出限制。 |
+| [ ] | Provider capability model | `README.md`、`docs/roadmap.md`、`docs/deepseek-api-adapter.md` | 显式表达 thinking、tool choice、FIM、stream usage、cache usage、上下文和输出限制。 |
 | [ ] | VSIX alpha / pre-release 打包与安装说明 | `docs/release.md`、`docs/vscode-extension.md` | Marketplace 上架不阻塞 Phase 4 完成，但需要可安装产物和文档。 |
 
 ## Phase 5：TUI 与生态扩展

@@ -642,15 +642,25 @@ extension.ts
 - [ ] Sidebar Chat 与 `agent.event` 渲染。
 - [ ] 文本输入发送 turn，并通过 `agent.sendTurn` 驱动真实 Agent 回合。
 - [ ] VS Code 审批 UI 接入真实 RPC pending queue。
+- [ ] 命令风险分类器和动态风险升级：识别依赖安装、网络访问、远程 git、删除和发布命令，并在审批 UI 中展示升级后的风险。
 - [ ] Native diff editor 展示 patch，并为 hunk 级审批预留交互边界。
 - [ ] Run List / resume。
 - [ ] Context Capsule 可视化。
+
+验收标准：
+
+- `agent.sendTurn` 创建 run 后返回 accepted，不等待 `assistant.delta`、审批或终端事件。
+- 同一 run 的 live `agent.event` notification 与 `agent.resume` replay 都使用 Run Log `seq` 顺序和同一 envelope。
+- 关闭 stdin、writer 失败或插件停用会取消 active run，并在 run log 中收口到 terminal event。
+- Sidebar Chat 能展示 `assistant.delta`、tool lifecycle 和 terminal event；Chat 输入能发送真实 `agent.sendTurn` 并收到最终结果。
+- VS Code 审批弹窗能消费 `tool.approvalRequired`，并把 approve/reject 回传到 `agent.approve` / `agent.reject`。
 
 ### Phase 4：VS Code 深度集成
 
 - [ ] Problems 面板 diagnostics 进入 Context Builder。
 - [ ] Terminal command approval。
 - [ ] provider、model、预算、审批策略和 RPC 命令配置界面。
+- [ ] Provider capability model：显式表达 thinking、tool choice、FIM、stream usage、cache usage、上下文和输出限制。
 - [ ] FIM completion preview。
 - [ ] VSIX alpha / pre-release 打包与插件安装说明。
 
