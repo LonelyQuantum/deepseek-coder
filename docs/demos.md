@@ -24,6 +24,7 @@ $env:PROLE_CODER_KEEP_DEMO_WORKSPACE = "1"
 | Context Capsule ASCII 可视化 | `cargo demo-context-visual` | 否 | 用纯文本条形图展示 StablePrefix、DynamicPrelude、TurnSuffix token 分布，并输出原始 JSON。 |
 | Attachment 上下文展示 | `cargo demo-attachment` | 否 | 展示 file、selection、explicit_content、diagnostic attachments 如何进入 Context Builder。 |
 | Live DeepSeek Agent 交互转录 | `cargo demo-live` | 是 | 使用真实 DeepSeek provider 展示读取文件、应用补丁、运行验证和最终总结。 |
+| Live DeepSeek 随机场景长对话 | `cargo demo-live-random` | 是 | 使用随机 seed 生成更长任务，展示多文件读取、搜索、双文件 patch、验证和最终总结。 |
 
 ## Fixture Agent 交互转录
 
@@ -135,6 +136,29 @@ $env:PROLE_CODER_DEMO_MODEL = "deepseek-v4-pro"
 
 输出摘要中应包含 `provider.completed`，展示模型、duration、usage、cache hit/miss 和 stream 统计字段；具体字段是否有数值取决于 provider 响应是否返回对应 usage/cache 数据。
 
+
+## Live DeepSeek 随机场景长对话
+
+该 demo 会调用真实 DeepSeek API。它比 `cargo demo-live` 更长，并且默认每次运行会根据当前时间生成一个随机 seed，进而改变任务主题、关键词、期望字符串和 changelog 内容。需要复盘同一场景时，可以固定：
+
+```powershell
+$env:PROLE_CODER_DEMO_SEED = "20260527"
+```
+
+推荐命令：
+
+```powershell
+$env:PROLE_CODER_LIVE_TESTS = "1"
+cargo demo-live-random
+```
+
+预期过程：模型需要读取 `README.md`、`docs/task.md`、`Cargo.toml`、`src/lib.rs`、`tests/behavior.rs` 和 `CHANGELOG.md`，搜索 `RANDOM_DEMO_TARGET`，然后修改 `src/lib.rs` 与 `CHANGELOG.md`，最后由 harness 运行 `cargo test --quiet`。最终回答应包含 `OK_RANDOM_AGENT_DEMO` 和 seed。
+
+底层测试：
+
+```powershell
+cargo test -p prole-coder-cli --test agent_interaction_demo live_deepseek_agent_random_story_demo -- --ignored --exact --nocapture
+```
 ## 新增 Demo 登记模板
 
 新增展示型 demo 时，在上方清单增加一行，并补充一个同名小节：

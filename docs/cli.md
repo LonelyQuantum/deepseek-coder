@@ -166,6 +166,8 @@ cargo demo
 ```powershell
 $env:PROLE_CODER_LIVE_TESTS = "1"
 cargo demo-live
+# 更长且带随机 seed 的真实对话展示：
+cargo demo-live-random
 ```
 
 该演示默认使用项目默认模型 `deepseek-v4-pro`，以提高工具参数遵循度；需要临时改模型时可以设置 `PROLE_CODER_DEMO_MODEL`。

@@ -196,6 +196,99 @@ mod tests {
 }
 
 #[test]
+#[ignore = "requires PROLE_CODER_LIVE_TESTS=1, API key, network access, and local cargo"]
+fn live_deepseek_agent_random_story_demo() -> Result<(), Box<dyn Error>> {
+    if env::var(LIVE_TEST_FLAG).ok().as_deref() != Some("1") {
+        eprintln!("skipping random live DeepSeek agent demo: set {LIVE_TEST_FLAG}=1 to enable");
+        return Ok(());
+    }
+
+    let api_key = live_api_key(repo_root_from_crate_manifest(env!("CARGO_MANIFEST_DIR")))?;
+    let scenario = live_random_scenario();
+    let workspace = TestWorkspace::with_preserve("live-agent-random-story-demo");
+    write_live_random_workspace(&workspace, &scenario);
+    workspace.git_init();
+    workspace.git_commit_all("initial random story demo");
+
+    let base_url =
+        env::var("DEEPSEEK_BASE_URL").unwrap_or_else(|_| DEFAULT_API_BASE_URL.to_owned());
+    let model = env::var("PROLE_CODER_DEMO_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_owned());
+    let task = format!(
+        "This is a longer live ProleCoder random story demo. Scenario seed: {seed}. \
+         You MUST use tools before answering. First call read_file for README.md, docs/task.md, \
+         Cargo.toml, src/lib.rs, tests/behavior.rs, and CHANGELOG.md. Then call search for \
+         RANDOM_DEMO_TARGET. Then use apply_patch to edit exactly src/lib.rs and CHANGELOG.md. \
+         When calling apply_patch, expectedFiles MUST be a JSON array exactly like \
+         [\"src/lib.rs\",\"CHANGELOG.md\"], not a quoted string. Do not call shell; the harness \
+         will run cargo test. Make the tests pass, update the changelog bullet exactly as docs/task.md \
+         requests, and finish with a concise answer containing OK_RANDOM_AGENT_DEMO and seed {seed}.",
+        seed = scenario.seed
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_prole"))
+        .env("DEEPSEEK_API_KEY", &api_key)
+        .env("DEEPSEEK_BASE_URL", base_url)
+        .env("DEEPSEEK_MODEL", model)
+        .args([
+            "run",
+            "--provider",
+            "deepseek",
+            "--thinking",
+            "disabled",
+            "--mode",
+            "edit",
+            "--auto-approve",
+            "--json",
+            "--workspace",
+            workspace.path_str(),
+            "--run-id",
+            "demo_live_random_agent",
+            "--turn-id",
+            "demo_live_random_agent_turn",
+            "--max-model-turns",
+            "8",
+            "--max-output-tokens",
+            "1400",
+            "--verify",
+            "cargo test --quiet",
+            "--verify-timeout-ms",
+            "120000",
+            "--",
+        ])
+        .arg(task)
+        .output()?;
+
+    let demo_output = successful_agent_events(output, &workspace, "demo_live_random_agent")?;
+    assert!(!demo_output.stdout.contains(&api_key));
+    assert!(!demo_output.stderr.contains(&api_key));
+    print_agent_transcript(
+        "Live DeepSeek Agent Random Story Demo",
+        &workspace,
+        "demo_live_random_agent",
+        &demo_output.notifications,
+        &["docs/task.md", "src/lib.rs", "CHANGELOG.md"],
+    );
+
+    assert_event(&demo_output.notifications, "tool.completed");
+    assert_event(&demo_output.notifications, "provider.completed");
+    assert_event(&demo_output.notifications, "verification.completed");
+    assert_event(&demo_output.notifications, "run.completed");
+    assert_final_text_contains(&demo_output.notifications, "OK_RANDOM_AGENT_DEMO");
+    assert!(workspace.read("src/lib.rs").contains(&scenario.greeting));
+    assert!(
+        workspace
+            .read("src/lib.rs")
+            .contains(scenario.release_keyword)
+    );
+    assert!(
+        workspace
+            .read("CHANGELOG.md")
+            .contains(&scenario.changelog_line)
+    );
+
+    Ok(())
+}
+#[test]
 #[ignore = "result display test; run `cargo demo-context`"]
 fn context_capsule_structure_demo() -> Result<(), Box<dyn Error>> {
     let workspace = context_demo_workspace("context-capsule-demo");
@@ -437,6 +530,144 @@ fn attachment_context_demo() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+#[derive(Debug, Clone)]
+struct LiveRandomScenario {
+    seed: u64,
+    theme: &'static str,
+    release_keyword: &'static str,
+    greeting: String,
+    release_note: String,
+    changelog_line: String,
+}
+
+fn live_random_scenario() -> LiveRandomScenario {
+    let seed = env::var("PROLE_CODER_DEMO_SEED")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos() as u64)
+                .unwrap_or(0)
+                ^ u64::from(std::process::id())
+        });
+    let themes = [
+        "forge",
+        "harbor",
+        "observatory",
+        "workshop",
+        "archive",
+        "garden",
+    ];
+    let release_keywords = [
+        "steady",
+        "curious",
+        "auditable",
+        "bright",
+        "patient",
+        "useful",
+    ];
+    let theme = themes[(seed as usize) % themes.len()];
+    let release_keyword =
+        release_keywords[((seed / themes.len() as u64) as usize) % release_keywords.len()];
+    let short_seed = seed % 10_000;
+    let greeting = format!("Hello from the {theme} scenario #{short_seed}");
+    let release_note = format!(
+        "OK_RANDOM_AGENT_DEMO seed {short_seed}: {theme} scenario stays {release_keyword}."
+    );
+    let changelog_line = format!(
+        "- random live demo seed {short_seed}: {theme} / {release_keyword} / OK_RANDOM_AGENT_DEMO"
+    );
+
+    LiveRandomScenario {
+        seed,
+        theme,
+        release_keyword,
+        greeting,
+        release_note,
+        changelog_line,
+    }
+}
+
+fn write_live_random_workspace(workspace: &TestWorkspace, scenario: &LiveRandomScenario) {
+    workspace.write(
+        "Cargo.toml",
+        r#"[package]
+name = "prole-live-random-demo"
+version = "0.0.0"
+edition = "2024"
+
+[lib]
+path = "src/lib.rs"
+"#,
+    );
+    workspace.write(
+        "README.md",
+        "Small randomized repository used to demonstrate a longer real ProleCoder agent turn.\n",
+    );
+    workspace.write(
+        "docs/task.md",
+        &format!(
+            "# Random live demo task\n\n\
+             Seed: {seed}\n\
+             Theme: {theme}\n\
+             Release keyword: {keyword}\n\n\
+             Required source changes:\n\
+             - `greeting()` must return exactly `{greeting}`.\n\
+             - `selected_theme()` must return exactly `{theme}`.\n\
+             - `release_note()` must return exactly `{release_note}`.\n\n\
+             Required changelog change:\n\
+             - Replace the TODO bullet in `CHANGELOG.md` with exactly `{changelog_line}`.\n",
+            seed = scenario.seed,
+            theme = scenario.theme,
+            keyword = scenario.release_keyword,
+            greeting = scenario.greeting,
+            release_note = scenario.release_note,
+            changelog_line = scenario.changelog_line,
+        ),
+    );
+    workspace.write(
+        "src/lib.rs",
+        r#"// RANDOM_DEMO_TARGET: the live agent should find this marker before patching.
+
+pub fn greeting() -> &'static str {
+    "old randomized greeting"
+}
+
+pub fn selected_theme() -> &'static str {
+    "unset"
+}
+
+pub fn release_note() -> &'static str {
+    "TODO: release note"
+}
+"#,
+    );
+    workspace.write(
+        "tests/behavior.rs",
+        &format!(
+            r#"use prole_live_random_demo::{{greeting, release_note, selected_theme}};
+
+#[test]
+fn random_scenario_matches_task_document() {{
+    assert_eq!(greeting(), "{greeting}");
+    assert_eq!(selected_theme(), "{theme}");
+    assert_eq!(release_note(), "{release_note}");
+    assert!(release_note().contains("{keyword}"));
+    assert!(release_note().contains("OK_RANDOM_AGENT_DEMO"));
+}}
+"#,
+            greeting = scenario.greeting,
+            theme = scenario.theme,
+            release_note = scenario.release_note,
+            keyword = scenario.release_keyword,
+        ),
+    );
+    workspace.write(
+        "CHANGELOG.md",
+        "# Changelog\n\n- TODO: describe the random live demo result.\n",
+    );
+}
 struct AgentDemoOutput {
     notifications: Vec<Value>,
     stdout: String,
