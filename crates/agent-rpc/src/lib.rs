@@ -77,6 +77,8 @@ pub const RPC_RUN_CANCELED: i64 = -32050;
 pub const RPC_INTERNAL_INVARIANT: i64 = -32060;
 
 pub const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(300);
+const RPC_LOOP_QUEUE_BOUND: usize = 256;
+const RPC_LIVE_EVENT_QUEUE_BOUND: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JsonRpcRequest<TParams = Value> {
@@ -496,6 +498,14 @@ impl AgentRpcHandlerError {
 }
 
 pub trait AgentRpcRequestHandler {
+    fn attach_live_event_sender(&mut self, _sender: mpsc::SyncSender<RunLogEvent>) {}
+
+    fn detach_live_event_sender(&mut self) {}
+
+    fn attach_disconnect_handle(&mut self, _handle: RpcDisconnectHandle) {}
+
+    fn detach_disconnect_handle(&mut self) {}
+
     fn initialize(
         &mut self,
         params: AgentInitializeParams,
@@ -567,6 +577,8 @@ pub struct AgentTurnLoopRpcHandler<F> {
     workspace: Option<RpcWorkspace>,
     approval_queue: RpcApprovalQueue,
     active_run: Option<ActiveRpcRun>,
+    live_event_sender: Option<mpsc::SyncSender<RunLogEvent>>,
+    disconnect_handle: Option<RpcDisconnectHandle>,
 }
 
 impl<F> AgentTurnLoopRpcHandler<F> {
@@ -577,6 +589,8 @@ impl<F> AgentTurnLoopRpcHandler<F> {
             workspace: None,
             approval_queue: RpcApprovalQueue::default(),
             active_run: None,
+            live_event_sender: None,
+            disconnect_handle: None,
         }
     }
 
@@ -602,6 +616,22 @@ where
     F: RpcTurnProviderFactory,
     F::Provider: Send + 'static,
 {
+    fn attach_live_event_sender(&mut self, sender: mpsc::SyncSender<RunLogEvent>) {
+        self.live_event_sender = Some(sender);
+    }
+
+    fn detach_live_event_sender(&mut self) {
+        self.live_event_sender = None;
+    }
+
+    fn attach_disconnect_handle(&mut self, handle: RpcDisconnectHandle) {
+        self.disconnect_handle = Some(handle);
+    }
+
+    fn detach_disconnect_handle(&mut self) {
+        self.disconnect_handle = None;
+    }
+
     fn initialize(
         &mut self,
         params: AgentInitializeParams,
@@ -652,16 +682,26 @@ where
             .with_mode(params.mode.into())
             .with_attachments(attachments);
 
-        self.active_run = Some(spawn_active_run(
-            run_id.clone(),
+        let live_events = self.live_event_sender.clone();
+        let active_run = spawn_active_run(ActiveRunSpawn {
+            run_id: run_id.clone(),
             workspace_root,
             provider,
             run_log,
             input,
-            self.config,
-            self.approval_queue.clone(),
-        )?);
-        let events = self.collect_active_run_events_until_pause()?;
+            config: self.config,
+            approval_queue: self.approval_queue.clone(),
+            live_events,
+        })?;
+        if let Some(disconnect_handle) = &self.disconnect_handle {
+            disconnect_handle.register(&active_run)?;
+        }
+        self.active_run = Some(active_run);
+        let events = if self.live_events_enabled() {
+            Vec::new()
+        } else {
+            self.collect_active_run_events_until_pause()?
+        };
 
         Ok(AgentRpcHandlerOutput::new(SendTurnResult {
             run_id,
@@ -680,7 +720,11 @@ where
             self.drain_ready_active_run_events()?;
             return Err(error);
         }
-        let events = self.collect_active_run_events_until_pause()?;
+        let events = if self.live_events_enabled() {
+            Vec::new()
+        } else {
+            self.collect_active_run_events_until_pause()?
+        };
 
         Ok(AgentRpcHandlerOutput::new(ApproveResult {
             approval_id: params.approval_id,
@@ -704,7 +748,11 @@ where
             self.drain_ready_active_run_events()?;
             return Err(error);
         }
-        let events = self.collect_active_run_events_until_pause()?;
+        let events = if self.live_events_enabled() {
+            Vec::new()
+        } else {
+            self.collect_active_run_events_until_pause()?
+        };
 
         Ok(AgentRpcHandlerOutput::new(RejectResult {
             approval_id: params.approval_id,
@@ -744,7 +792,11 @@ where
         active_run.cancellation_token.cancel(reason.clone());
         self.approval_queue
             .cancel_run_pending_approvals(&params.run_id, reason.clone())?;
-        let events = self.collect_active_run_events_until_pause()?;
+        let events = if self.live_events_enabled() {
+            Vec::new()
+        } else {
+            self.collect_active_run_events_until_pause()?
+        };
 
         Ok(AgentRpcHandlerOutput::new(CancelResult {
             run_id: params.run_id,
@@ -832,6 +884,10 @@ where
 }
 
 impl<F> AgentTurnLoopRpcHandler<F> {
+    fn live_events_enabled(&self) -> bool {
+        self.live_event_sender.is_some()
+    }
+
     fn workspace(&self) -> Result<&RpcWorkspace, AgentRpcHandlerError> {
         self.workspace.as_ref().ok_or_else(|| {
             AgentRpcHandlerError::new(
@@ -849,6 +905,7 @@ impl<F> AgentTurnLoopRpcHandler<F> {
         &mut self,
     ) -> Result<Vec<RunLogEvent>, AgentRpcHandlerError> {
         let mut events = Vec::new();
+        let collect_events = !self.live_events_enabled();
         let Some(active_run) = self.active_run.as_mut() else {
             return Ok(events);
         };
@@ -858,7 +915,9 @@ impl<F> AgentTurnLoopRpcHandler<F> {
                 Ok(event) => {
                     let pauses_for_approval = is_approval_pause_event(&event);
                     let is_terminal = is_terminal_run_event(&event);
-                    events.push(event);
+                    if collect_events {
+                        events.push(event);
+                    }
                     if pauses_for_approval || is_terminal {
                         break is_terminal;
                     }
@@ -878,6 +937,7 @@ impl<F> AgentTurnLoopRpcHandler<F> {
 
     fn drain_ready_active_run_events(&mut self) -> Result<Vec<RunLogEvent>, AgentRpcHandlerError> {
         let mut events = Vec::new();
+        let collect_events = !self.live_events_enabled();
         let Some(active_run) = self.active_run.as_mut() else {
             return Ok(events);
         };
@@ -886,7 +946,9 @@ impl<F> AgentTurnLoopRpcHandler<F> {
             match active_run.events.try_recv() {
                 Ok(event) => {
                     let is_terminal = is_terminal_run_event(&event);
-                    events.push(event);
+                    if collect_events {
+                        events.push(event);
+                    }
                     if is_terminal {
                         break true;
                     }
@@ -907,6 +969,9 @@ impl<F> AgentTurnLoopRpcHandler<F> {
         let Some(active_run) = self.active_run.take() else {
             return Ok(());
         };
+        if let Some(disconnect_handle) = &self.disconnect_handle {
+            disconnect_handle.clear_run(&active_run.run_id)?;
+        }
 
         match active_run.join.join() {
             Ok(result) => result,
@@ -963,9 +1028,68 @@ struct RpcWorkspace {
 struct ActiveRpcRun {
     run_id: String,
     cancellation_token: CancellationToken,
+    approval_queue: RpcApprovalQueue,
     run_log: SerializedRunLog,
     events: mpsc::Receiver<RunLogEvent>,
     join: thread::JoinHandle<Result<(), AgentRpcHandlerError>>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RpcDisconnectHandle {
+    active_run: Arc<Mutex<Option<ActiveRunCancelHandle>>>,
+}
+
+#[derive(Debug, Clone)]
+struct ActiveRunCancelHandle {
+    run_id: String,
+    cancellation_token: CancellationToken,
+    approval_queue: RpcApprovalQueue,
+}
+
+impl RpcDisconnectHandle {
+    fn register(&self, active_run: &ActiveRpcRun) -> Result<(), AgentRpcHandlerError> {
+        let mut active = self.lock_active_run()?;
+        *active = Some(ActiveRunCancelHandle {
+            run_id: active_run.run_id.clone(),
+            cancellation_token: active_run.cancellation_token.clone(),
+            approval_queue: active_run.approval_queue.clone(),
+        });
+        Ok(())
+    }
+
+    fn clear_run(&self, run_id: &str) -> Result<(), AgentRpcHandlerError> {
+        let mut active = self.lock_active_run()?;
+        if active
+            .as_ref()
+            .is_some_and(|active_run| active_run.run_id == run_id)
+        {
+            *active = None;
+        }
+        Ok(())
+    }
+
+    fn cancel_active(&self, reason: String) -> Result<(), AgentRpcHandlerError> {
+        let active = self.lock_active_run()?.clone();
+        if let Some(active_run) = active {
+            active_run.cancellation_token.cancel(reason.clone());
+            active_run
+                .approval_queue
+                .cancel_run_pending_approvals(&active_run.run_id, reason)?;
+        }
+        Ok(())
+    }
+
+    fn lock_active_run(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, Option<ActiveRunCancelHandle>>, AgentRpcHandlerError>
+    {
+        self.active_run.lock().map_err(|_| {
+            AgentRpcHandlerError::new(
+                RPC_INTERNAL_INVARIANT,
+                "RPC disconnect handle lock was poisoned",
+            )
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1206,6 +1330,8 @@ impl ApprovalPolicy for RpcApprovalPolicy {
 struct RpcRunEventSink {
     events: mpsc::Sender<RunLogEvent>,
     approval_queue: RpcApprovalQueue,
+    live_events: Option<mpsc::SyncSender<RunLogEvent>>,
+    buffer_internal_events: bool,
 }
 
 impl TurnEventSink for RpcRunEventSink {
@@ -1227,14 +1353,21 @@ impl TurnEventSink for RpcRunEventSink {
                 })?;
         }
 
-        self.events
-            .send(event.clone())
-            .map_err(|_| TurnEventSinkError::new("RPC event receiver was dropped"))?;
+        if self.buffer_internal_events || is_terminal_run_event(event) {
+            self.events
+                .send(event.clone())
+                .map_err(|_| TurnEventSinkError::new("RPC event receiver was dropped"))?;
+        }
+        if let Some(live_events) = &self.live_events {
+            live_events
+                .send(event.clone())
+                .map_err(|_| TurnEventSinkError::new("RPC live event receiver was dropped"))?;
+        }
         Ok(())
     }
 }
 
-fn spawn_active_run<P>(
+struct ActiveRunSpawn<P> {
     run_id: String,
     workspace_root: PathBuf,
     provider: P,
@@ -1242,52 +1375,86 @@ fn spawn_active_run<P>(
     input: AgentTurnInput,
     config: AgentTurnLoopConfig,
     approval_queue: RpcApprovalQueue,
-) -> Result<ActiveRpcRun, AgentRpcHandlerError>
+    live_events: Option<mpsc::SyncSender<RunLogEvent>>,
+}
+
+struct ActiveTurnLoopWorker<P> {
+    workspace_root: PathBuf,
+    provider: P,
+    run_log: SerializedRunLog,
+    input: AgentTurnInput,
+    config: AgentTurnLoopConfig,
+    events: mpsc::Sender<RunLogEvent>,
+    approval_queue: RpcApprovalQueue,
+    live_events: Option<mpsc::SyncSender<RunLogEvent>>,
+    buffer_internal_events: bool,
+}
+
+fn spawn_active_run<P>(spawn: ActiveRunSpawn<P>) -> Result<ActiveRpcRun, AgentRpcHandlerError>
 where
     P: TurnProvider + Send + 'static,
 {
+    let ActiveRunSpawn {
+        run_id,
+        workspace_root,
+        provider,
+        run_log,
+        input,
+        config,
+        approval_queue,
+        live_events,
+    } = spawn;
+    let buffer_internal_events = live_events.is_none();
     let cancellation_token = CancellationToken::new();
     let worker_input = input.with_cancellation_token(cancellation_token.clone());
     let run_log = SerializedRunLog::new(run_log);
     let worker_run_log = run_log.clone();
+    let worker_approval_queue = approval_queue.clone();
     let (events_tx, events_rx) = mpsc::channel();
     let thread_name = format!("prole-coder-rpc-{run_id}");
     let join = thread::Builder::new()
         .name(thread_name)
         .spawn(move || {
-            run_active_turn_loop(
+            run_active_turn_loop(ActiveTurnLoopWorker {
                 workspace_root,
                 provider,
-                worker_run_log,
-                worker_input,
+                run_log: worker_run_log,
+                input: worker_input,
                 config,
-                events_tx,
-                approval_queue,
-            )
+                events: events_tx,
+                approval_queue: worker_approval_queue,
+                live_events,
+                buffer_internal_events,
+            })
         })
         .map_err(map_io_error)?;
 
     Ok(ActiveRpcRun {
         run_id,
         cancellation_token,
+        approval_queue,
         run_log,
         events: events_rx,
         join,
     })
 }
 
-fn run_active_turn_loop<P>(
-    workspace_root: PathBuf,
-    provider: P,
-    mut run_log: SerializedRunLog,
-    input: AgentTurnInput,
-    config: AgentTurnLoopConfig,
-    events: mpsc::Sender<RunLogEvent>,
-    approval_queue: RpcApprovalQueue,
-) -> Result<(), AgentRpcHandlerError>
+fn run_active_turn_loop<P>(worker: ActiveTurnLoopWorker<P>) -> Result<(), AgentRpcHandlerError>
 where
     P: TurnProvider,
 {
+    let ActiveTurnLoopWorker {
+        workspace_root,
+        provider,
+        mut run_log,
+        input,
+        config,
+        events,
+        approval_queue,
+        live_events,
+        buffer_internal_events,
+    } = worker;
+
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .thread_name("prole-coder-rpc-turn-loop-runtime")
@@ -1301,6 +1468,8 @@ where
         let mut event_sink = RpcRunEventSink {
             events,
             approval_queue,
+            live_events,
+            buffer_internal_events,
         };
         let mut loop_runner =
             AgentTurnLoop::with_approval_policy(&workspace_root, provider, approval_policy)
@@ -1877,22 +2046,129 @@ where
     }
 }
 
+#[derive(Debug)]
+enum RpcLoopMessage {
+    InputLine(Result<String, io::Error>),
+    ReaderEof,
+    RunEvent(RunLogEvent),
+}
+
 pub fn run_stdio_request_loop<R, W, H>(
     reader: R,
     writer: &mut W,
     handler: H,
 ) -> Result<H, AgentRpcError>
 where
-    R: BufRead,
+    R: BufRead + Send,
     W: Write,
     H: AgentRpcRequestHandler,
 {
+    let (loop_tx, loop_rx) = mpsc::sync_channel(RPC_LOOP_QUEUE_BOUND);
+    let (live_event_tx, live_event_rx) = mpsc::sync_channel(RPC_LIVE_EVENT_QUEUE_BOUND);
+    let disconnect_handle = RpcDisconnectHandle::default();
     let mut server = AgentRpcServer::new(handler);
-    for line in reader.lines() {
-        server.handle_line(&line?, writer)?;
-    }
-    server.shutdown(writer)?;
+    server.handler.attach_live_event_sender(live_event_tx);
+    server
+        .handler
+        .attach_disconnect_handle(disconnect_handle.clone());
+
+    thread::scope(|scope| -> Result<(), AgentRpcError> {
+        let reader_tx = loop_tx.clone();
+        scope.spawn(move || {
+            for line in reader.lines() {
+                if reader_tx.send(RpcLoopMessage::InputLine(line)).is_err() {
+                    return;
+                }
+            }
+            let _ = reader_tx.send(RpcLoopMessage::ReaderEof);
+        });
+
+        let event_tx = loop_tx.clone();
+        scope.spawn(move || {
+            for event in live_event_rx {
+                if event_tx.send(RpcLoopMessage::RunEvent(event)).is_err() {
+                    return;
+                }
+            }
+        });
+        drop(loop_tx);
+
+        let mut shutdown_started = false;
+        let mut pending_error = None;
+        while let Ok(message) = loop_rx.recv() {
+            match message {
+                RpcLoopMessage::InputLine(Ok(line)) if !shutdown_started => {
+                    let result = server.handle_line(&line, writer);
+                    handle_stdio_write_result(&mut server, result, &disconnect_handle)?;
+                }
+                RpcLoopMessage::InputLine(Err(error)) if !shutdown_started => {
+                    shutdown_started = true;
+                    pending_error = Some(AgentRpcError::Io(error));
+                    let result = server.shutdown(writer);
+                    handle_stdio_write_result(&mut server, result, &disconnect_handle)?;
+                    detach_stdio_loop_handler(&mut server);
+                }
+                RpcLoopMessage::ReaderEof if !shutdown_started => {
+                    shutdown_started = true;
+                    let result = server.shutdown(writer);
+                    handle_stdio_write_result(&mut server, result, &disconnect_handle)?;
+                    detach_stdio_loop_handler(&mut server);
+                }
+                RpcLoopMessage::RunEvent(event) => {
+                    let result = emit_run_log_events(writer, std::slice::from_ref(&event));
+                    handle_stdio_write_result(&mut server, result, &disconnect_handle)?;
+                }
+                RpcLoopMessage::InputLine(_) | RpcLoopMessage::ReaderEof => {}
+            }
+        }
+
+        if !shutdown_started {
+            let result = server.shutdown(writer);
+            handle_stdio_write_result(&mut server, result, &disconnect_handle)?;
+            detach_stdio_loop_handler(&mut server);
+        }
+
+        match pending_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    })?;
     Ok(server.into_inner())
+}
+
+fn detach_stdio_loop_handler<H>(server: &mut AgentRpcServer<H>)
+where
+    H: AgentRpcRequestHandler,
+{
+    server.handler.detach_live_event_sender();
+    server.handler.detach_disconnect_handle();
+}
+
+fn write_or_cancel_disconnect(
+    result: Result<(), AgentRpcError>,
+    disconnect_handle: &RpcDisconnectHandle,
+) -> Result<(), AgentRpcError> {
+    if result.is_err() {
+        let _ = disconnect_handle.cancel_active("RPC client disconnected".to_owned());
+    }
+    result
+}
+
+fn handle_stdio_write_result<H>(
+    server: &mut AgentRpcServer<H>,
+    result: Result<(), AgentRpcError>,
+    disconnect_handle: &RpcDisconnectHandle,
+) -> Result<(), AgentRpcError>
+where
+    H: AgentRpcRequestHandler,
+{
+    match write_or_cancel_disconnect(result, disconnect_handle) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            detach_stdio_loop_handler(server);
+            Err(error)
+        }
+    }
 }
 
 pub fn write_json_line<W, T>(writer: &mut W, message: &T) -> Result<(), AgentRpcError>
