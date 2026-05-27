@@ -640,7 +640,7 @@ extension.ts
 - [x] RPC server 管理：插件可启动 `prole rpc`，发送 `agent.initialize`，转发 `agent.event`，并在退出或错误时更新状态和提示。
 - [x] JSON-RPC request client：统一 request id、pending response、error response 和进程退出时的 pending request 清理。
 - [x] VS Code/protocol TypeScript 类型共享收敛：extension 已通过 workspace 依赖消费 `@prole-coder/protocol`，`rpcServer.ts` 的 `AgentEventEnvelope` 改为 protocol 类型 alias，并由 extension build/typecheck/test 脚本先构建 protocol 声明。
-- [ ] VS Code RPC/commands 边界测试补齐：覆盖 `RpcServerManager` 启动、stdio、无效 JSON、停止/订阅释放等路径，以及审批和 openChat 命令边界。
+- [x] VS Code RPC/commands 边界测试补齐：已覆盖 `RpcServerManager` 启动异常、stdio 缺失、无效 JSON、process error、stop、onEvent dispose、stderr preview、sendRequest 写入失败等路径，以及 openChat 启动失败、非 Error 错误、不可持久审批 approve 和审批消息 paths 拼接。
 - [ ] Sidebar Chat 与 `agent.event` 渲染。
 - [ ] 文本输入发送 turn，并通过 `agent.sendTurn` 驱动真实 Agent 回合。
 - [ ] VS Code 审批 UI 接入真实 RPC pending queue。

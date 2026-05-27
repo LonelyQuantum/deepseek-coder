@@ -1,6 +1,6 @@
 # 编辑器插件（VS Code Extension）
 
-状态：Phase 3 优先开发项。基础命令、审批弹窗 adapter、RPC server 启动监管、初始化握手、JSON-RPC request client、VS Code/protocol TypeScript 类型共享和共享 RPC 全双工事件管线已实现；尚未实现完整 Chat UI、事件渲染、真实审批回传和 diff editor 集成。
+状态：Phase 3 优先开发项。基础命令、审批弹窗 adapter、RPC server 启动监管、初始化握手、JSON-RPC request client、VS Code/protocol TypeScript 类型共享、RPC/commands 边界测试和共享 RPC 全双工事件管线已实现；尚未实现完整 Chat UI、事件渲染、真实审批回传和 diff editor 集成。
 
 VS Code 插件是 `ProleCoder` 的一等前端。它必须通过 JSON-RPC server 复用 Rust Agent Core，而不是在 TypeScript 侧重新实现 agent loop、context builder、provider 调用或 tool execution。
 
