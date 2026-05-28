@@ -1,12 +1,17 @@
 import { spawn } from "node:child_process";
 
-import type { AgentEventEnvelope as ProtocolAgentEventEnvelope } from "@prole-coder/protocol" with {
+import type {
+  AgentEventEnvelope as ProtocolAgentEventEnvelope,
+  SendTurnParams,
+  SendTurnResult,
+} from "@prole-coder/protocol" with {
   "resolution-mode": "import",
 };
 
 export const RPC_PROTOCOL_VERSION = "0.1.0";
 export const RPC_INITIALIZE_METHOD = "agent.initialize";
 export const RPC_EVENT_METHOD = "agent.event";
+export const RPC_SEND_TURN_METHOD = "agent.sendTurn";
 export const DEFAULT_RPC_COMMAND = "prole";
 export const DEFAULT_RPC_ARGS = ["rpc"] as const;
 
@@ -287,6 +292,10 @@ export class RpcServerManager implements DisposableLike {
     }
 
     return promise;
+  }
+
+  sendTurn(params: SendTurnParams): Promise<SendTurnResult> {
+    return this.sendRequest<SendTurnResult>(RPC_SEND_TURN_METHOD, params);
   }
 
   stop(): void {
