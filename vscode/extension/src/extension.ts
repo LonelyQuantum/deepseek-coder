@@ -3,9 +3,11 @@ import * as vscode from "vscode";
 import { ApprovalEventController } from "./approvalFlow";
 import { CHAT_VIEW_ID, ProleChatViewProvider } from "./chatView";
 import { registerOpenChatCommand } from "./commands";
+import { createPatchDiffPreviewController } from "./diffPreview";
 import { RpcServerManager, readRpcServerLaunchConfig } from "./rpcServer";
 
 export function activate(context: vscode.ExtensionContext): void {
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   const rpcServer = createRpcServerManager(context);
   const chatView = new ProleChatViewProvider(context.extensionUri, rpcServer);
   const openChat = registerOpenChatCommand(vscode.commands, vscode.window, rpcServer, chatView);
@@ -16,13 +18,20 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 
   context.subscriptions.push(openChat, chatView, chatViewRegistration);
-  if (rpcServer !== undefined) {
-    const approvalController = new ApprovalEventController(rpcServer, vscode.window, {
-      warn(message) {
-        return vscode.window.showWarningMessage(message);
+  if (rpcServer !== undefined && workspaceRoot !== undefined) {
+    const patchDiffPreviewController = createPatchDiffPreviewController(context, rpcServer, workspaceRoot);
+    const approvalController = new ApprovalEventController(
+      rpcServer,
+      vscode.window,
+      {
+        warn(message) {
+          return vscode.window.showWarningMessage(message);
+        },
       },
-    });
-    context.subscriptions.push(approvalController);
+      undefined,
+      patchDiffPreviewController,
+    );
+    context.subscriptions.push(patchDiffPreviewController, approvalController);
     context.subscriptions.push(rpcServer);
     if (rpcServer.autoStart) {
       void rpcServer.start().catch((error: unknown) => {
