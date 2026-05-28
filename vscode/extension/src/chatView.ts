@@ -271,6 +271,9 @@ function renderChatViewHtml(
     .events {
       display: grid;
       gap: 8px;
+      flex: 1;
+      align-content: start;
+      min-height: 0;
       padding: 10px;
       overflow: auto;
     }
@@ -342,6 +345,95 @@ function renderChatViewHtml(
       line-height: 1.4;
       overflow-wrap: anywhere;
     }
+
+    .composer {
+      display: grid;
+      gap: 8px;
+      padding: 10px;
+      border-top: 1px solid var(--vscode-sideBarSectionHeader-border);
+      background: var(--vscode-sideBar-background);
+    }
+
+    .prompt {
+      box-sizing: border-box;
+      width: 100%;
+      min-height: 72px;
+      max-height: 180px;
+      resize: vertical;
+      padding: 7px 8px;
+      color: var(--vscode-input-foreground);
+      background: var(--vscode-input-background);
+      border: 1px solid var(--vscode-input-border, transparent);
+      font: var(--vscode-font-size) var(--vscode-font-family);
+      line-height: 1.4;
+    }
+
+    .prompt:focus,
+    .mode:focus,
+    .send:focus {
+      outline: 1px solid var(--vscode-focusBorder);
+      outline-offset: 1px;
+    }
+
+    .composer-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .mode {
+      min-width: 92px;
+      height: 28px;
+      color: var(--vscode-dropdown-foreground);
+      background: var(--vscode-dropdown-background);
+      border: 1px solid var(--vscode-dropdown-border, transparent);
+      font: var(--vscode-font-size) var(--vscode-font-family);
+    }
+
+    .send {
+      flex: 0 0 auto;
+      min-width: 64px;
+      height: 28px;
+      padding: 0 10px;
+      color: var(--vscode-button-foreground);
+      background: var(--vscode-button-background);
+      border: 0;
+      font: var(--vscode-font-size) var(--vscode-font-family);
+      font-weight: 600;
+    }
+
+    .send:hover:enabled {
+      background: var(--vscode-button-hoverBackground);
+    }
+
+    .send:disabled,
+    .prompt:disabled,
+    .mode:disabled {
+      opacity: 0.65;
+    }
+
+    .submission {
+      min-width: 0;
+      flex: 1;
+      color: var(--vscode-descriptionForeground);
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .submission.failed {
+      color: var(--vscode-editorError-foreground);
+    }
+
+    .submission.canceled {
+      color: var(--vscode-editorWarning-foreground);
+    }
+
+    .submission.completed {
+      color: var(--vscode-testing-iconPassed);
+    }
   </style>
 </head>
 <body>
@@ -351,21 +443,80 @@ function renderChatViewHtml(
       <div id="status-subtitle" class="status-subtitle">No run events yet.</div>
     </section>
     <section id="events" class="events" aria-label="Run events"></section>
+    <form id="composer" class="composer">
+      <textarea id="prompt" class="prompt" rows="3" placeholder="Ask ProleCoder" aria-label="Chat message"></textarea>
+      <div class="composer-row">
+        <select id="mode" class="mode" aria-label="Run mode"></select>
+        <button id="send" class="send" type="submit">Send</button>
+        <div id="submission" class="submission" aria-live="polite"></div>
+      </div>
+    </form>
   </main>
   <script nonce="${nonce}">
     const initialSnapshot = ${initialSnapshot};
+    const initialSubmission = ${initialSubmission};
+    const runModes = ${safeScriptJson(CHAT_RUN_MODES)};
+    const defaultMode = ${safeScriptJson(DEFAULT_CHAT_MODE)};
+    const vscodeApi = acquireVsCodeApi();
     const eventsRoot = document.getElementById("events");
     const statusTitle = document.getElementById("status-title");
     const statusSubtitle = document.getElementById("status-subtitle");
+    const composer = document.getElementById("composer");
+    const promptInput = document.getElementById("prompt");
+    const modeInput = document.getElementById("mode");
+    const sendButton = document.getElementById("send");
+    const submissionRoot = document.getElementById("submission");
+
+    for (const mode of runModes) {
+      const option = document.createElement("option");
+      option.value = mode;
+      option.textContent = mode[0].toUpperCase() + mode.slice(1);
+      modeInput.append(option);
+    }
+    modeInput.value = defaultMode;
 
     window.addEventListener("message", (event) => {
       const message = event.data;
       if (message && message.type === "snapshot") {
         render(message.snapshot);
       }
+      if (message && message.type === "submission") {
+        renderSubmission(message.submission);
+      }
+    });
+
+    composer.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const message = promptInput.value.trim();
+      if (!message) {
+        renderSubmission({
+          busy: false,
+          status: "failed",
+          message: "Enter a message before sending.",
+        });
+        promptInput.focus();
+        return;
+      }
+
+      setComposerBusy(true);
+      submissionRoot.className = "submission sending";
+      submissionRoot.textContent = "Sending turn...";
+      vscodeApi.postMessage({
+        type: "submitTurn",
+        message,
+        mode: modeInput.value,
+      });
+    });
+
+    promptInput.addEventListener("keydown", (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+        event.preventDefault();
+        composer.requestSubmit();
+      }
     });
 
     render(initialSnapshot);
+    renderSubmission(initialSubmission);
 
     function render(snapshot) {
       const items = Array.isArray(snapshot.items) ? snapshot.items : [];
@@ -386,6 +537,24 @@ function renderChatViewHtml(
       for (const item of items) {
         eventsRoot.append(renderItem(item));
       }
+    }
+
+    function renderSubmission(submission) {
+      const state = submission && typeof submission === "object" ? submission : initialSubmission;
+      const status = typeof state.status === "string" ? state.status : "idle";
+      const busy = state.busy === true;
+      setComposerBusy(busy);
+      submissionRoot.className = "submission " + status;
+      submissionRoot.textContent = typeof state.message === "string" ? state.message : "";
+      if (status === "running") {
+        promptInput.value = "";
+      }
+    }
+
+    function setComposerBusy(busy) {
+      promptInput.disabled = busy;
+      modeInput.disabled = busy;
+      sendButton.disabled = busy;
     }
 
     function renderItem(item) {
