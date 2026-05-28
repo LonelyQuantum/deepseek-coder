@@ -1,13 +1,20 @@
 import * as vscode from "vscode";
 
+import { CHAT_VIEW_ID, ProleChatViewProvider } from "./chatView";
 import { registerOpenChatCommand } from "./commands";
 import { RpcServerManager, readRpcServerLaunchConfig } from "./rpcServer";
 
 export function activate(context: vscode.ExtensionContext): void {
   const rpcServer = createRpcServerManager(context);
-  const openChat = registerOpenChatCommand(vscode.commands, vscode.window, rpcServer);
+  const chatView = new ProleChatViewProvider(context.extensionUri, rpcServer);
+  const openChat = registerOpenChatCommand(vscode.commands, vscode.window, rpcServer, chatView);
+  const chatViewRegistration = vscode.window.registerWebviewViewProvider(CHAT_VIEW_ID, chatView, {
+    webviewOptions: {
+      retainContextWhenHidden: true,
+    },
+  });
 
-  context.subscriptions.push(openChat);
+  context.subscriptions.push(openChat, chatView, chatViewRegistration);
   if (rpcServer !== undefined) {
     context.subscriptions.push(rpcServer);
     if (rpcServer.autoStart) {

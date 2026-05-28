@@ -69,6 +69,7 @@ test("open chat command asks for a workspace when RPC server is unavailable", ()
 test("open chat command starts the RPC server and reports readiness", async () => {
   let callback: (() => unknown) | undefined;
   let message: string | undefined;
+  let chatOpened = false;
 
   const commands: CommandRegistry = {
     registerCommand(_command, registeredCallback) {
@@ -83,21 +84,31 @@ test("open chat command starts the RPC server and reports readiness", async () =
     },
   };
 
-  registerOpenChatCommand(commands, window, {
-    status: "stopped",
-    async start() {
-      return {
-        server: {
-          name: "prole-coder-agent-rpc",
-          version: "0.1.0",
-        },
-      };
+  registerOpenChatCommand(
+    commands,
+    window,
+    {
+      status: "stopped",
+      async start() {
+        return {
+          server: {
+            name: "prole-coder-agent-rpc",
+            version: "0.1.0",
+          },
+        };
+      },
     },
-  });
+    {
+      openChatView() {
+        chatOpened = true;
+      },
+    },
+  );
   assert.ok(callback);
 
   await callback();
 
+  assert.equal(chatOpened, true);
   assert.ok(message?.includes("RPC server ready"));
   assert.ok(message?.includes("prole-coder-agent-rpc"));
 });

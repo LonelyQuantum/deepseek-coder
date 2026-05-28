@@ -1,6 +1,6 @@
 # 编辑器插件（VS Code Extension）
 
-状态：Phase 3 优先开发项。基础命令、审批弹窗 adapter、RPC server 启动监管、初始化握手、JSON-RPC request client、VS Code/protocol TypeScript 类型共享、RPC/commands 边界测试和共享 RPC 全双工事件管线已实现；尚未实现完整 Chat UI、事件渲染、真实审批回传和 diff editor 集成。
+状态：Phase 3 优先开发项。基础命令、审批弹窗 adapter、RPC server 启动监管、初始化握手、JSON-RPC request client、VS Code/protocol TypeScript 类型共享、RPC/commands 边界测试、Sidebar Chat 事件渲染和共享 RPC 全双工事件管线已实现；尚未实现 Chat 输入发送 turn、真实审批回传和 diff editor 集成。
 
 VS Code 插件是 `ProleCoder` 的一等前端。它必须通过 JSON-RPC server 复用 Rust Agent Core，而不是在 TypeScript 侧重新实现 agent loop、context builder、provider 调用或 tool execution。
 
@@ -38,7 +38,15 @@ VS Code 插件是 `ProleCoder` 的一等前端。它必须通过 JSON-RPC server
 `vscode/extension/src/commands.ts` 当前注册 `prole-coder.openChat`：
 
 - 如果没有 workspace，则提示先打开 trusted workspace。
-- 如果有 RPC manager，则尝试启动或复用 RPC server，并提示 server ready 或启动失败。
+- 如果有 RPC manager，则聚焦 ProleCoder Chat view，尝试启动或复用 RPC server，并提示 server ready 或启动失败。
+
+`vscode/extension/src/chatView.ts` 当前注册 `prole-coder.chat` Webview view：
+
+- 在 Activity Bar 暴露 ProleCoder view container 和 Chat view。
+- 通过 `RpcServerManager.onEvent()` 订阅 live `agent.event`。
+- 使用 `ChatEventTimeline` 把 `assistant.delta`、tool lifecycle、approval、context/provider 和 terminal event 转换为 timeline item。
+- 同一 run/turn 的连续 `assistant.delta` 会合并为一条 assistant 消息，避免流式输出刷屏。
+- 当前只渲染事件流；文本输入发送 turn 仍归入下一项。
 
 `vscode/extension/src/commands.ts` 还提供 `requestApproval`：
 
@@ -77,7 +85,7 @@ Phase 3 P0 顺序：
 
 1. 启动并监管 Rust Agent RPC Server。已完成基础实现。
 2. 稳定共享 RPC 全双工事件管线。已完成：`agent.sendTurn` 早返回、后台持续推送事件，并在断连时取消 active run。
-3. 渲染 `agent.event` 事件流。当前 manager 已能转发事件，但 UI 尚未消费。
+3. 渲染 `agent.event` 事件流。已完成 Sidebar Chat 首版，能消费 manager 转发的事件。
 4. 支持文本输入并通过 `agent.sendTurn` 发送真实 turn。
 5. 通过 JSON-RPC request client 回传用户动作。当前已完成通用 `sendRequest()`，尚未接入具体 UI。
 6. 展示审批请求和命令输出摘要。当前已有 modal approval adapter，尚未接入真实 RPC 事件。
@@ -91,7 +99,7 @@ Phase 3 P0 验收标准：
 - 同一 run 的 live `agent.event` notification 按 Run Log `seq` 顺序输出。
 - `agent.resume` 从指定 `replayFromSeq` 回放事件，且回放结果与 live notification 使用相同 envelope。
 - stdin EOF、writer BrokenPipe 或插件停用会取消 active run；run log 最终出现 `run.canceled` 或已有 terminal event。
-- Sidebar Chat 能消费 `agent.event` 并展示 `assistant.delta`、tool lifecycle 和 terminal event。
+- Sidebar Chat 能消费 `agent.event` 并展示 `assistant.delta`、tool lifecycle 和 terminal event。已完成首版事件渲染。
 - Chat 输入能发送真实 `agent.sendTurn`，并通过事件流收到最终结果。
 - `tool.approvalRequired` 触发 VS Code modal，approve/reject 能回传到 `agent.approve` / `agent.reject`。
 

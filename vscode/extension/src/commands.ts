@@ -27,6 +27,10 @@ export interface RpcServerStarter {
   }>;
 }
 
+export interface ChatViewOpener {
+  openChatView(): unknown;
+}
+
 export interface ApprovalWindowMessenger {
   showWarningMessage(
     message: string,
@@ -69,8 +73,11 @@ export function registerOpenChatCommand(
   commands: CommandRegistry,
   window: WindowMessenger,
   rpcServer?: RpcServerStarter,
+  chatView?: ChatViewOpener,
 ): DisposableLike {
   return commands.registerCommand(OPEN_CHAT_COMMAND, () => {
+    chatView?.openChatView();
+
     if (rpcServer === undefined) {
       return window.showInformationMessage(OPEN_CHAT_NO_WORKSPACE_MESSAGE);
     }

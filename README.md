@@ -566,7 +566,7 @@ extension.ts
 
 ## 开发计划
 
-当前进度：Phase 1 Agent Core MVP 功能闭环和 Phase 2 的 1M Context Capsule 核心收敛均已完成。DeepSeek provider、基础工具执行、Context Builder、Run Log、Turn Loop、CLI、RPC、审批、取消、真实 DeepSeek streaming/tool-call 验收、本地 fixture smoke、进程级 CLI smoke、小型真实仓库 CLI 联网验收、合并前测试收敛、Context Capsule、manifest、token estimator、attachments、provider summary、Run Log 体积控制、tool call JSON Schema 校验、200K/500K/900K 离线大上下文验收入口和 Phase 2e 展示型 demo 扩展均已完成；VS Code RPC server 启动监管与 JSON-RPC request client 已作为 Phase 3 前置项提前完成，RPC 全双工 reader/writer 与事件发送队列已完成。下一步继续 Phase 3 的 VS Code 插件核心 UI 和真实 RPC 事件消费。
+当前进度：Phase 1 Agent Core MVP 功能闭环和 Phase 2 的 1M Context Capsule 核心收敛均已完成。DeepSeek provider、基础工具执行、Context Builder、Run Log、Turn Loop、CLI、RPC、审批、取消、真实 DeepSeek streaming/tool-call 验收、本地 fixture smoke、进程级 CLI smoke、小型真实仓库 CLI 联网验收、合并前测试收敛、Context Capsule、manifest、token estimator、attachments、provider summary、Run Log 体积控制、tool call JSON Schema 校验、200K/500K/900K 离线大上下文验收入口和 Phase 2e 展示型 demo 扩展均已完成；VS Code RPC server 启动监管、JSON-RPC request client、RPC 全双工 reader/writer 与事件发送队列、Sidebar Chat 事件渲染均已完成。下一步继续 Phase 3 的 Chat 输入发送 turn 和真实审批回传。
 
 ### Phase 0：项目章程
 
@@ -641,7 +641,7 @@ extension.ts
 - [x] JSON-RPC request client：统一 request id、pending response、error response 和进程退出时的 pending request 清理。
 - [x] VS Code/protocol TypeScript 类型共享收敛：extension 已通过 workspace 依赖消费 `@prole-coder/protocol`，`rpcServer.ts` 的 `AgentEventEnvelope` 改为 protocol 类型 alias，并由 extension build/typecheck/test 脚本先构建 protocol 声明。
 - [x] VS Code RPC/commands 边界测试补齐：已覆盖 `RpcServerManager` 启动异常、stdio 缺失、无效 JSON、process error、stop、onEvent dispose、stderr preview、sendRequest 写入失败等路径，以及 openChat 启动失败、非 Error 错误、不可持久审批 approve 和审批消息 paths 拼接。
-- [ ] Sidebar Chat 与 `agent.event` 渲染。
+- [x] Sidebar Chat 与 `agent.event` 渲染：已贡献 ProleCoder Activity Bar view 和 Webview Sidebar Chat，订阅 `RpcServerManager.onEvent()` 并展示 assistant delta、tool lifecycle、审批、context/provider 和 terminal event；assistant delta 会按 run/turn 合并为一条消息。
 - [ ] 文本输入发送 turn，并通过 `agent.sendTurn` 驱动真实 Agent 回合。
 - [ ] VS Code 审批 UI 接入真实 RPC pending queue。
 - [ ] 命令风险分类器和动态风险升级：识别依赖安装、网络访问、远程 git、删除和发布命令，并在审批 UI 中展示升级后的风险。

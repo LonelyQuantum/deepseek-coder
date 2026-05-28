@@ -12,7 +12,11 @@
     "vscode": "^1.100.0"
   },
   "categories": ["Other"],
-  "activationEvents": ["onStartupFinished", "onCommand:prole-coder.openChat"],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:prole-coder.openChat",
+    "onView:prole-coder.chat"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
@@ -21,6 +25,24 @@
         "title": "ProleCoder: Open Chat"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "prole-coder",
+          "title": "ProleCoder",
+          "icon": "media/prole-coder-view.svg"
+        }
+      ]
+    },
+    "views": {
+      "prole-coder": [
+        {
+          "type": "webview",
+          "id": "prole-coder.chat",
+          "name": "Chat"
+        }
+      ]
+    },
     "configuration": {
       "title": "ProleCoder",
       "properties": {
