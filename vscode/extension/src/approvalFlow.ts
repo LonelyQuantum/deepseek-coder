@@ -57,6 +57,10 @@ export type ApprovalRequester = (
   request: ApprovalPromptRequest,
 ) => Promise<ApprovalPromptDecision>;
 
+export interface ApprovalPreviewer {
+  prepareApproval(event: AgentEventEnvelope, request: ApprovalPromptRequest): Promise<unknown>;
+}
+
 export class ApprovalEventController implements DisposableLike {
   private readonly activeApprovalKeys = new Set<string>();
   private readonly rememberedApprovalKeys = new Set<string>();
@@ -69,6 +73,7 @@ export class ApprovalEventController implements DisposableLike {
     private readonly window: ApprovalWindowMessenger,
     private readonly notifier: ApprovalNotifier,
     private readonly requester: ApprovalRequester = requestApproval,
+    private readonly previewer?: ApprovalPreviewer,
   ) {
     this.approvalSubscription = rpcClient.onEvent((event) => {
       this.handleEvent(event);
@@ -103,13 +108,21 @@ export class ApprovalEventController implements DisposableLike {
     this.remember(approvalKey);
     this.queue = this.queue
       .catch(() => undefined)
-      .then(() => this.promptAndResolve(request))
+      .then(() => this.promptAndResolve(event, request))
       .finally(() => {
         this.activeApprovalKeys.delete(approvalKey);
       });
   }
 
-  private async promptAndResolve(request: ApprovalPromptRequest): Promise<void> {
+  private async promptAndResolve(event: AgentEventEnvelope, request: ApprovalPromptRequest): Promise<void> {
+    if (this.previewer !== undefined) {
+      try {
+        await this.previewer.prepareApproval(event, request);
+      } catch (error) {
+        this.notifier.warn(`prole-coder approval preview failed: ${errorMessage(error)}`);
+      }
+    }
+
     try {
       const decision = await this.requester(this.window, request);
       await this.sendDecision(decision);
