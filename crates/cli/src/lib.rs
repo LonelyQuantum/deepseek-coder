@@ -655,6 +655,13 @@ where
         writeln!(self.output, "  id: {}", request.approval_id)?;
         writeln!(self.output, "  tool: {}", request.tool_name)?;
         writeln!(self.output, "  risk: {}", request.risk.as_str())?;
+        if !request.risk_reasons.is_empty() {
+            writeln!(
+                self.output,
+                "  risk reasons: {}",
+                request.risk_reasons.join(", ")
+            )?;
+        }
         writeln!(self.output, "  title: {}", request.title)?;
         writeln!(self.output, "  detail: {}", request.detail)?;
         if let Some(command) = &request.command {

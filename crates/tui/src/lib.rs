@@ -46,6 +46,13 @@ impl ApprovalPromptModel {
             format!("detail: {}", self.request.detail),
         ];
 
+        if !self.request.risk_reasons.is_empty() {
+            lines.push(format!(
+                "risk reasons: {}",
+                self.request.risk_reasons.join(", ")
+            ));
+        }
+
         if let Some(command) = &self.request.command {
             lines.push(format!("command: {command}"));
         }
@@ -187,6 +194,7 @@ mod tests {
             detail: "Run verification".to_owned(),
             command: Some("cargo test".to_owned()),
             paths: Some(vec!["crates/cli/src/lib.rs".to_owned()]),
+            risk_reasons: Vec::new(),
             persistable,
         }
     }
