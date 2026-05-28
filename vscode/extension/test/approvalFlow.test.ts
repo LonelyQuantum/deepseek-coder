@@ -103,6 +103,70 @@ test("approval controller treats the same approval id in different runs as disti
   );
 });
 
+test("approval controller prepares approval preview before prompting", async () => {
+  const rpc = new FakeApprovalRpcClient();
+  const order: string[] = [];
+  const controller = new ApprovalEventController(
+    rpc,
+    fakeWindow,
+    fakeNotifier(),
+    async (_window, request) => {
+      order.push(`prompt:${request.approvalId}`);
+      return {
+        kind: "approve",
+        approvalId: request.approvalId,
+        persist: "never",
+      };
+    },
+    {
+      async prepareApproval(_event, request) {
+        order.push(`preview:${request.approvalId}`);
+      },
+    },
+  );
+
+  rpc.emit(approvalEvent({ toolName: "apply_patch" }));
+  await controller.whenIdle();
+
+  assert.deepEqual(order, ["preview:approval_1", "prompt:approval_1"]);
+  assert.equal(rpc.approvals.length, 1);
+});
+
+test("approval controller still prompts when approval preview fails", async () => {
+  const rpc = new FakeApprovalRpcClient();
+  const warnings: string[] = [];
+  let prompted = false;
+  const controller = new ApprovalEventController(
+    rpc,
+    fakeWindow,
+    {
+      warn(message) {
+        warnings.push(message);
+      },
+    },
+    async (_window, request) => {
+      prompted = true;
+      return {
+        kind: "approve",
+        approvalId: request.approvalId,
+        persist: "never",
+      };
+    },
+    {
+      async prepareApproval() {
+        throw new Error("preview unavailable");
+      },
+    },
+  );
+
+  rpc.emit(approvalEvent({ toolName: "apply_patch" }));
+  await controller.whenIdle();
+
+  assert.equal(prompted, true);
+  assert.ok(warnings[0]?.includes("approval preview failed"));
+  assert.equal(rpc.approvals.length, 1);
+});
+
 test("approval controller reports malformed approval events without prompting", async () => {
   const rpc = new FakeApprovalRpcClient();
   const warnings: string[] = [];
@@ -169,7 +233,7 @@ function fakeNotifier(): { warn(message: string): unknown } {
   };
 }
 
-function approvalEvent(options: { readonly runId?: string } = {}): AgentEventEnvelope {
+function approvalEvent(options: { readonly runId?: string; readonly toolName?: string } = {}): AgentEventEnvelope {
   return {
     seq: 1,
     time: "1970-01-01T00:00:00.000Z",
@@ -179,7 +243,7 @@ function approvalEvent(options: { readonly runId?: string } = {}): AgentEventEnv
     payload: {
       approvalId: "approval_1",
       toolCallId: "tool_call_1",
-      toolName: "shell",
+      toolName: options.toolName ?? "shell",
       risk: "exec",
       title: "Execute shell command",
       detail: "Run verification",
