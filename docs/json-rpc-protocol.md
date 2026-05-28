@@ -605,6 +605,7 @@ interface ToolRequested {
   toolCallId: string;
   name: string;
   risk: RiskLevel;
+  riskReasons?: string[];
   argumentsPreview: unknown;
 }
 ```
@@ -622,6 +623,7 @@ interface ToolApprovalRequired {
   cwd?: string;
   command?: string;
   paths?: string[];
+  riskReasons?: string[];
   persistable: boolean;
 }
 ```
@@ -827,11 +829,13 @@ Server 请求命令审批：
     "payload": {
       "approvalId": "approval_01",
       "toolCallId": "tool_01",
-      "risk": "exec",
-      "title": "Run tests",
-      "detail": "Execute cargo test --workspace",
+      "toolName": "shell",
+      "risk": "network",
+      "title": "Run shell command",
+      "detail": "Execute npm install; risk upgrade: dependency install/update",
       "cwd": "C:/workspace/prole-coder",
-      "command": "cargo test --workspace",
+      "command": "npm install",
+      "riskReasons": ["dependency install/update"],
       "persistable": false
     }
   }
