@@ -34,7 +34,13 @@ test("chat timeline keeps assistant delta events for different turns separate", 
 test("chat timeline renders tool lifecycle and terminal events", () => {
   const timeline = new ChatEventTimeline();
 
-  timeline.append(agentEvent(1, "tool.requested", { name: "shell", risk: "exec" }));
+  timeline.append(
+    agentEvent(1, "tool.requested", {
+      name: "shell",
+      risk: "network",
+      riskReasons: ["dependency install/update"],
+    }),
+  );
   timeline.append(agentEvent(2, "tool.started", { name: "shell", toolCallId: "call_1" }));
   timeline.append(
     agentEvent(3, "tool.completed", {
@@ -67,6 +73,7 @@ test("chat timeline renders approval and failure events with warning or danger t
       title: "Apply patch",
       detail: "Modify README.md",
       paths: ["README.md"],
+      riskReasons: ["file deletion"],
     }),
   );
   const failure = createTimelineItem(
@@ -79,6 +86,7 @@ test("chat timeline renders approval and failure events with warning or danger t
   assert.equal(approval.kind, "approval");
   assert.equal(approval.tone, "warning");
   assert.ok(approval.body?.includes("Paths: README.md"));
+  assert.ok(approval.body?.includes("Reasons: file deletion"));
   assert.equal(failure.kind, "terminal");
   assert.equal(failure.tone, "danger");
   assert.ok(failure.body?.includes("invalid tool call"));

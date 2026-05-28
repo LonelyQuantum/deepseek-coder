@@ -153,6 +153,7 @@ test("approvalPromptRequestFromEvent maps protocol payloads to modal requests", 
     persistable: true,
     command: "cargo test",
     paths: ["crates/cli/src/lib.rs"],
+    riskReasons: ["dependency install/update"],
   });
 });
 
@@ -184,6 +185,7 @@ function approvalEvent(options: { readonly runId?: string } = {}): AgentEventEnv
       detail: "Run verification",
       command: "cargo test",
       paths: ["crates/cli/src/lib.rs"],
+      riskReasons: ["dependency install/update"],
       persistable: true,
     },
   };

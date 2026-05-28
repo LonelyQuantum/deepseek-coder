@@ -238,12 +238,14 @@ test("requestApproval includes command and joined paths in the modal message", a
     ...sampleApprovalRequest(false),
     command: "cargo test -p prole-coder-cli",
     paths: ["crates/cli/src/lib.rs", "crates/cli/tests/run_smoke.rs"],
+    riskReasons: ["dependency install/update"],
   });
 
   assert.ok(message.includes("Command: cargo test -p prole-coder-cli"));
   assert.ok(
     message.includes("Paths: crates/cli/src/lib.rs, crates/cli/tests/run_smoke.rs"),
   );
+  assert.ok(message.includes("Risk reasons: dependency install/update"));
 });
 
 test("requestApproval maps reject and dismiss to reject decisions", async () => {

@@ -55,6 +55,7 @@ export interface ApprovalPromptRequest {
   readonly persistable: boolean;
   readonly command?: string;
   readonly paths?: readonly string[];
+  readonly riskReasons?: readonly string[];
 }
 
 export type ApprovalPromptDecision =
@@ -151,6 +152,10 @@ function formatApprovalMessage(request: ApprovalPromptRequest): string {
     `Tool: ${request.toolName}`,
     `Risk: ${request.risk}`,
   ];
+
+  if (request.riskReasons !== undefined && request.riskReasons.length > 0) {
+    detail.push(`Risk reasons: ${request.riskReasons.join(", ")}`);
+  }
 
   if (request.command !== undefined) {
     detail.push(`Command: ${request.command}`);

@@ -210,7 +210,11 @@ export function createTimelineItem(event: AgentEventEnvelope): ChatTimelineItem 
         kind: "tool",
         tone: "neutral",
         title: `Tool requested: ${toolName(payload)}`,
-        body: joinParts([label("Risk", textField(payload, "risk")), label("Args", valueText(payload, "argumentsPreview"))]),
+        body: joinParts([
+          label("Risk", textField(payload, "risk")),
+          label("Reasons", arrayText(payload, "riskReasons")),
+          label("Args", valueText(payload, "argumentsPreview")),
+        ]),
       };
     case "tool.approvalRequired":
       return {
@@ -222,6 +226,7 @@ export function createTimelineItem(event: AgentEventEnvelope): ChatTimelineItem 
           textField(payload, "title"),
           textField(payload, "detail"),
           label("Risk", textField(payload, "risk")),
+          label("Reasons", arrayText(payload, "riskReasons")),
           label("Command", textField(payload, "command")),
           label("Paths", arrayText(payload, "paths")),
         ]),
