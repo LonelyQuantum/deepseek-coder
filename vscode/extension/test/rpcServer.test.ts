@@ -6,6 +6,7 @@ import {
   DEFAULT_RPC_COMMAND,
   RPC_INITIALIZE_METHOD,
   RPC_PROTOCOL_VERSION,
+  RPC_SEND_TURN_METHOD,
   RpcRequestError,
   RpcServerManager,
   type RpcChildProcess,
@@ -151,7 +152,7 @@ test("RPC server manager removes disposed event handlers", async () => {
   assert.deepEqual(received, []);
 });
 
-test("RPC server manager sends JSON-RPC requests and resolves matching responses", async () => {
+test("RPC server manager sends typed agent.sendTurn requests and resolves matching responses", async () => {
   const factory = new FakeProcessFactory();
   const manager = rpcManagerWithFactory(factory);
   const readyPromise = manager.start();
@@ -159,22 +160,31 @@ test("RPC server manager sends JSON-RPC requests and resolves matching responses
   child.stdout.pushJson(initializeResponse(child.initializeRequest().id));
   await readyPromise;
 
-  const responsePromise = manager.sendRequest<{ accepted: boolean }>("agent.sendTurn", {
-    prompt: "hello",
+  const responsePromise = manager.sendTurn({
+    message: "hello",
+    mode: "edit",
   });
   await flushMicrotasks();
   const request = child.requestAt(1);
 
-  assert.equal(request.method, "agent.sendTurn");
-  assert.deepEqual(request.params, { prompt: "hello" });
+  assert.equal(request.method, RPC_SEND_TURN_METHOD);
+  assert.deepEqual(request.params, { message: "hello", mode: "edit" });
 
   child.stdout.pushJson({
     jsonrpc: "2.0",
     id: request.id,
-    result: { accepted: true },
+    result: {
+      runId: "run_1",
+      turnId: "turn_1",
+      accepted: true,
+    },
   });
 
-  assert.deepEqual(await responsePromise, { accepted: true });
+  assert.deepEqual(await responsePromise, {
+    runId: "run_1",
+    turnId: "turn_1",
+    accepted: true,
+  });
 });
 
 test("RPC server manager rejects sendRequest when stdin write fails", async () => {
@@ -186,7 +196,10 @@ test("RPC server manager rejects sendRequest when stdin write fails", async () =
   await readyPromise;
   child.failStdinWritesWith(new Error("stdin closed"));
 
-  await assert.rejects(manager.sendRequest("agent.sendTurn", { prompt: "hello" }), /stdin closed/);
+  await assert.rejects(
+    manager.sendRequest(RPC_SEND_TURN_METHOD, { message: "hello", mode: "edit" }),
+    /stdin closed/,
+  );
 });
 
 test("RPC server manager rejects JSON-RPC error responses", async () => {
@@ -229,7 +242,10 @@ test("RPC server manager rejects pending requests when the server exits", async 
   child.stdout.pushJson(initializeResponse(child.initializeRequest().id));
   await readyPromise;
 
-  const responsePromise = manager.sendRequest("agent.sendTurn", { prompt: "hello" });
+  const responsePromise = manager.sendRequest(RPC_SEND_TURN_METHOD, {
+    message: "hello",
+    mode: "edit",
+  });
   await flushMicrotasks();
 
   child.exit(1, null);
