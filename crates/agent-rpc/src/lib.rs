@@ -1525,6 +1525,7 @@ fn approval_request_from_event(
         detail: payload.detail,
         command: payload.command,
         paths: payload.paths,
+        risk_reasons: payload.risk_reasons,
         persistable: payload.persistable,
     })
 }
@@ -1540,6 +1541,8 @@ struct ApprovalRequiredPayload {
     detail: String,
     command: Option<String>,
     paths: Option<Vec<String>>,
+    #[serde(default)]
+    risk_reasons: Vec<String>,
     persistable: bool,
 }
 
@@ -3550,6 +3553,7 @@ mod tests {
                 "title": "Apply patch",
                 "detail": "Modify README.md",
                 "paths": ["README.md"],
+                "riskReasons": ["file deletion"],
                 "persistable": true
             }),
         );
@@ -3565,6 +3569,7 @@ mod tests {
             prole_coder_agent_core::approval::RiskLevel::Write
         );
         assert_eq!(request.paths, Some(vec!["README.md".to_owned()]));
+        assert_eq!(request.risk_reasons, vec!["file deletion".to_owned()]);
         assert!(request.persistable);
     }
 
