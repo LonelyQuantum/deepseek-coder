@@ -2,6 +2,10 @@ import { spawn } from "node:child_process";
 
 import type {
   AgentEventEnvelope as ProtocolAgentEventEnvelope,
+  ApproveParams,
+  ApproveResult,
+  RejectParams,
+  RejectResult,
   SendTurnParams,
   SendTurnResult,
 } from "@prole-coder/protocol" with {
@@ -12,6 +16,8 @@ export const RPC_PROTOCOL_VERSION = "0.1.0";
 export const RPC_INITIALIZE_METHOD = "agent.initialize";
 export const RPC_EVENT_METHOD = "agent.event";
 export const RPC_SEND_TURN_METHOD = "agent.sendTurn";
+export const RPC_APPROVE_METHOD = "agent.approve";
+export const RPC_REJECT_METHOD = "agent.reject";
 export const DEFAULT_RPC_COMMAND = "prole";
 export const DEFAULT_RPC_ARGS = ["rpc"] as const;
 
@@ -296,6 +302,14 @@ export class RpcServerManager implements DisposableLike {
 
   sendTurn(params: SendTurnParams): Promise<SendTurnResult> {
     return this.sendRequest<SendTurnResult>(RPC_SEND_TURN_METHOD, params);
+  }
+
+  approve(params: ApproveParams): Promise<ApproveResult> {
+    return this.sendRequest<ApproveResult>(RPC_APPROVE_METHOD, params);
+  }
+
+  reject(params: RejectParams): Promise<RejectResult> {
+    return this.sendRequest<RejectResult>(RPC_REJECT_METHOD, params);
   }
 
   stop(): void {

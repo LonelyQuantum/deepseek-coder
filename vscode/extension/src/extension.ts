@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 
+import { ApprovalEventController } from "./approvalFlow";
 import { CHAT_VIEW_ID, ProleChatViewProvider } from "./chatView";
 import { registerOpenChatCommand } from "./commands";
 import { RpcServerManager, readRpcServerLaunchConfig } from "./rpcServer";
@@ -16,6 +17,12 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(openChat, chatView, chatViewRegistration);
   if (rpcServer !== undefined) {
+    const approvalController = new ApprovalEventController(rpcServer, vscode.window, {
+      warn(message) {
+        return vscode.window.showWarningMessage(message);
+      },
+    });
+    context.subscriptions.push(approvalController);
     context.subscriptions.push(rpcServer);
     if (rpcServer.autoStart) {
       void rpcServer.start().catch((error: unknown) => {

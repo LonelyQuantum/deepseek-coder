@@ -4,8 +4,10 @@ import test from "node:test";
 import {
   DEFAULT_RPC_ARGS,
   DEFAULT_RPC_COMMAND,
+  RPC_APPROVE_METHOD,
   RPC_INITIALIZE_METHOD,
   RPC_PROTOCOL_VERSION,
+  RPC_REJECT_METHOD,
   RPC_SEND_TURN_METHOD,
   RpcRequestError,
   RpcServerManager,
@@ -187,6 +189,67 @@ test("RPC server manager sends typed agent.sendTurn requests and resolves matchi
   });
 });
 
+test("RPC server manager sends typed approval requests", async () => {
+  const factory = new FakeProcessFactory();
+  const manager = rpcManagerWithFactory(factory);
+  const readyPromise = manager.start();
+  const child = factory.lastChild();
+  child.stdout.pushJson(initializeResponse(child.initializeRequest().id));
+  await readyPromise;
+
+  const approvePromise = manager.approve({
+    approvalId: "approval_1",
+    persist: "session",
+  });
+  await flushMicrotasks();
+  const approveRequest = child.requestAt(1);
+  assert.equal(approveRequest.method, RPC_APPROVE_METHOD);
+  assert.deepEqual(approveRequest.params, {
+    approvalId: "approval_1",
+    persist: "session",
+  });
+  child.stdout.pushJson({
+    jsonrpc: "2.0",
+    id: approveRequest.id,
+    result: {
+      approvalId: "approval_1",
+      state: "approved",
+      persist: "session",
+    },
+  });
+  assert.deepEqual(await approvePromise, {
+    approvalId: "approval_1",
+    state: "approved",
+    persist: "session",
+  });
+
+  const rejectPromise = manager.reject({
+    approvalId: "approval_2",
+    reason: "not now",
+  });
+  await flushMicrotasks();
+  const rejectRequest = child.requestAt(2);
+  assert.equal(rejectRequest.method, RPC_REJECT_METHOD);
+  assert.deepEqual(rejectRequest.params, {
+    approvalId: "approval_2",
+    reason: "not now",
+  });
+  child.stdout.pushJson({
+    jsonrpc: "2.0",
+    id: rejectRequest.id,
+    result: {
+      approvalId: "approval_2",
+      state: "rejected",
+      reason: "not now",
+    },
+  });
+  assert.deepEqual(await rejectPromise, {
+    approvalId: "approval_2",
+    state: "rejected",
+    reason: "not now",
+  });
+});
+
 test("RPC server manager rejects sendRequest when stdin write fails", async () => {
   const factory = new FakeProcessFactory();
   const manager = rpcManagerWithFactory(factory);
@@ -210,7 +273,7 @@ test("RPC server manager rejects JSON-RPC error responses", async () => {
   child.stdout.pushJson(initializeResponse(child.initializeRequest().id));
   await readyPromise;
 
-  const responsePromise = manager.sendRequest("agent.approve", {
+  const responsePromise = manager.approve({
     approvalId: "approval_1",
   });
   await flushMicrotasks();

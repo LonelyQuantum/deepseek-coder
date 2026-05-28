@@ -566,7 +566,7 @@ extension.ts
 
 ## 开发计划
 
-当前进度：Phase 1 Agent Core MVP 功能闭环和 Phase 2 的 1M Context Capsule 核心收敛均已完成。DeepSeek provider、基础工具执行、Context Builder、Run Log、Turn Loop、CLI、RPC、审批、取消、真实 DeepSeek streaming/tool-call 验收、本地 fixture smoke、进程级 CLI smoke、小型真实仓库 CLI 联网验收、合并前测试收敛、Context Capsule、manifest、token estimator、attachments、provider summary、Run Log 体积控制、tool call JSON Schema 校验、200K/500K/900K 离线大上下文验收入口和 Phase 2e 展示型 demo 扩展均已完成；VS Code RPC server 启动监管、JSON-RPC request client、RPC 全双工 reader/writer 与事件发送队列、Sidebar Chat 事件渲染和 Chat 输入发送真实 turn 均已完成。下一步继续 Phase 3 的真实审批回传。
+当前进度：Phase 1 Agent Core MVP 功能闭环和 Phase 2 的 1M Context Capsule 核心收敛均已完成。DeepSeek provider、基础工具执行、Context Builder、Run Log、Turn Loop、CLI、RPC、审批、取消、真实 DeepSeek streaming/tool-call 验收、本地 fixture smoke、进程级 CLI smoke、小型真实仓库 CLI 联网验收、合并前测试收敛、Context Capsule、manifest、token estimator、attachments、provider summary、Run Log 体积控制、tool call JSON Schema 校验、200K/500K/900K 离线大上下文验收入口和 Phase 2e 展示型 demo 扩展均已完成；VS Code RPC server 启动监管、JSON-RPC request client、RPC 全双工 reader/writer 与事件发送队列、Sidebar Chat 事件渲染、Chat 输入发送真实 turn 和真实审批回传均已完成。下一步继续 Phase 3 的命令风险分类器、Native diff editor、Run List / resume 和 Context Capsule 可视化。
 
 ### Phase 0：项目章程
 
@@ -643,7 +643,7 @@ extension.ts
 - [x] VS Code RPC/commands 边界测试补齐：已覆盖 `RpcServerManager` 启动异常、stdio 缺失、无效 JSON、process error、stop、onEvent dispose、stderr preview、sendRequest 写入失败等路径，以及 openChat 启动失败、非 Error 错误、不可持久审批 approve 和审批消息 paths 拼接。
 - [x] Sidebar Chat 与 `agent.event` 渲染：已贡献 ProleCoder Activity Bar view 和 Webview Sidebar Chat，订阅 `RpcServerManager.onEvent()` 并展示 assistant delta、tool lifecycle、审批、context/provider 和 terminal event；assistant delta 会按 run/turn 合并为一条消息。
 - [x] 文本输入发送 turn，并通过 `agent.sendTurn` 驱动真实 Agent 回合：Sidebar Chat 已提供 prompt 输入和 mode 选择，Webview 通过 typed `RpcServerManager.sendTurn()` 调用真实 `agent.sendTurn`，并在 accepted 后等待同一 run 的 terminal event 收口输入状态。
-- [ ] VS Code 审批 UI 接入真实 RPC pending queue。
+- [x] VS Code 审批 UI 接入真实 RPC pending queue：`ApprovalEventController` 订阅 `tool.approvalRequired`，复用 VS Code modal approval adapter，并通过 typed `RpcServerManager.approve()` / `reject()` 回传到 `agent.approve` / `agent.reject`。
 - [ ] 命令风险分类器和动态风险升级：识别依赖安装、网络访问、远程 git、删除和发布命令，并在审批 UI 中展示升级后的风险。
 - [ ] Native diff editor 展示 patch，并为 hunk 级审批预留交互边界。
 - [ ] Run List / resume。
@@ -655,7 +655,7 @@ extension.ts
 - 同一 run 的 live `agent.event` notification 与 `agent.resume` replay 都使用 Run Log `seq` 顺序和同一 envelope。
 - 关闭 stdin、writer 失败或插件停用会取消 active run，并在 run log 中收口到 terminal event。
 - Sidebar Chat 能展示 `assistant.delta`、tool lifecycle 和 terminal event；Chat 输入能发送真实 `agent.sendTurn` 并收到最终结果。已完成首版输入发送和事件流收口。
-- VS Code 审批弹窗能消费 `tool.approvalRequired`，并把 approve/reject 回传到 `agent.approve` / `agent.reject`。
+- VS Code 审批弹窗能消费 `tool.approvalRequired`，并把 approve/reject 回传到 `agent.approve` / `agent.reject`。已完成首版真实 RPC pending queue 接入。
 
 ### Phase 4：VS Code 深度集成
 
