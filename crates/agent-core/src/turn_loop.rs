@@ -2380,6 +2380,103 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn turn_loop_upgrades_shell_approval_risk_for_dependency_install() {
+        let workspace = TestWorkspace::new("turn-loop");
+        let store = RunLogStore::new(workspace.path()).expect("run log store should open");
+        let mut run = store
+            .create_run("run_turn_network_risk")
+            .expect("run should be created");
+        let provider = ScriptedProvider::new(vec![TurnProviderResponse::tool_calls(
+            None,
+            Some("I need to install dependencies.".to_owned()),
+            vec![ChatToolCall::function(
+                "call_shell",
+                "shell",
+                r#"{"command":"npm install","timeoutMs":1000}"#,
+            )],
+        )]);
+        let mut loop_runner =
+            AgentTurnLoop::new(workspace.path(), provider).expect("turn loop should initialize");
+
+        let error = loop_runner
+            .run_turn(AgentTurnInput::new("turn_1", "Install deps"), &mut run)
+            .await
+            .expect_err("default policy should reject upgraded shell approval");
+
+        assert!(matches!(error, AgentTurnLoopError::ApprovalRejected { .. }));
+        let events = store
+            .load_run("run_turn_network_risk")
+            .expect("events should load");
+        let requested = events
+            .iter()
+            .find(|event| event.event_type == "tool.requested")
+            .expect("tool.requested should be emitted");
+        assert_eq!(requested.payload["risk"], "network");
+        assert_eq!(
+            requested.payload["riskReasons"],
+            json!(["dependency install/update"])
+        );
+        let approval = events
+            .iter()
+            .find(|event| event.event_type == "tool.approvalRequired")
+            .expect("tool.approvalRequired should be emitted");
+        assert_eq!(approval.payload["risk"], "network");
+        assert_eq!(
+            approval.payload["riskReasons"],
+            json!(["dependency install/update"])
+        );
+        assert_eq!(approval.payload["persistable"], false);
+        assert!(
+            approval.payload["detail"]
+                .as_str()
+                .expect("detail should be text")
+                .contains("risk upgrade: dependency install/update")
+        );
+    }
+
+    #[tokio::test]
+    async fn turn_loop_upgrades_shell_approval_risk_for_destructive_command() {
+        let workspace = TestWorkspace::new("turn-loop");
+        let store = RunLogStore::new(workspace.path()).expect("run log store should open");
+        let mut run = store
+            .create_run("run_turn_destructive_risk")
+            .expect("run should be created");
+        let provider = ScriptedProvider::new(vec![TurnProviderResponse::tool_calls(
+            None,
+            Some("I need to delete build output.".to_owned()),
+            vec![ChatToolCall::function(
+                "call_shell",
+                "shell",
+                r#"{"command":"rm -rf target","timeoutMs":1000}"#,
+            )],
+        )]);
+        let mut loop_runner =
+            AgentTurnLoop::new(workspace.path(), provider).expect("turn loop should initialize");
+
+        let error = loop_runner
+            .run_turn(AgentTurnInput::new("turn_1", "Clean target"), &mut run)
+            .await
+            .expect_err("default policy should reject destructive shell approval");
+
+        assert!(matches!(error, AgentTurnLoopError::ApprovalRejected { .. }));
+        let events = store
+            .load_run("run_turn_destructive_risk")
+            .expect("events should load");
+        let approval = events
+            .iter()
+            .find(|event| event.event_type == "tool.approvalRequired")
+            .expect("tool.approvalRequired should be emitted");
+        assert_eq!(approval.payload["risk"], "destructive");
+        assert_eq!(approval.payload["riskReasons"], json!(["file deletion"]));
+        assert_eq!(approval.payload["persistable"], false);
+        assert!(
+            !events
+                .iter()
+                .any(|event| event.event_type == "tool.started")
+        );
+    }
+
+    #[tokio::test]
     async fn turn_loop_rejects_tool_arguments_before_typed_deserialization() {
         let workspace = TestWorkspace::new("turn-loop");
         workspace.write("README.md", "hello\n");
