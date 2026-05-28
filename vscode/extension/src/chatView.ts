@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import * as vscode from "vscode";
 
+import type { SendTurnParams, SendTurnResult } from "@prole-coder/protocol" with {
+  "resolution-mode": "import",
+};
+
+import { CHAT_RUN_MODES, DEFAULT_CHAT_MODE, parseChatTurnSubmission, sendTurnParams } from "./chatInput";
 import { ChatEventTimeline, type ChatTimelineSnapshot } from "./chatEvents";
 import type { AgentEventEnvelope, DisposableLike } from "./rpcServer";
 
@@ -10,25 +15,61 @@ export interface ChatRpcEventSource {
   onEvent(handler: (event: AgentEventEnvelope) => void): DisposableLike;
 }
 
-interface WebviewMessage {
+export interface ChatTurnSender {
+  sendTurn(params: SendTurnParams): Promise<SendTurnResult>;
+}
+
+export type ChatRpcClient = ChatRpcEventSource & ChatTurnSender;
+
+interface SnapshotWebviewMessage {
   readonly type: "snapshot";
   readonly snapshot: ChatTimelineSnapshot;
 }
 
+interface SubmissionWebviewMessage {
+  readonly type: "submission";
+  readonly submission: ChatSubmissionSnapshot;
+}
+
+type ExtensionToWebviewMessage = SnapshotWebviewMessage | SubmissionWebviewMessage;
+
+type ChatSubmissionStatus = "idle" | "sending" | "running" | "completed" | "failed" | "canceled";
+type TerminalSubmissionStatus = Extract<ChatSubmissionStatus, "completed" | "failed" | "canceled">;
+
+interface ChatSubmissionSnapshot {
+  readonly busy: boolean;
+  readonly status: ChatSubmissionStatus;
+  readonly message: string;
+  readonly runId?: string;
+  readonly turnId?: string;
+  readonly error?: string;
+}
+
+interface TerminalRunState {
+  readonly status: TerminalSubmissionStatus;
+  readonly message: string;
+  readonly error?: string;
+}
+
 export class ProleChatViewProvider implements vscode.WebviewViewProvider, DisposableLike {
   private readonly timeline = new ChatEventTimeline();
-  private readonly rpcEvents: ChatRpcEventSource | undefined;
+  private readonly terminalRuns = new Map<string, TerminalRunState>();
+  private readonly rpcClient: ChatRpcClient | undefined;
+  private submission: ChatSubmissionSnapshot = idleSubmission();
   private rpcSubscription: DisposableLike | undefined;
+  private viewMessageSubscription: DisposableLike | undefined;
   private view: vscode.WebviewView | undefined;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
-    rpcEvents?: ChatRpcEventSource,
+    rpcClient?: ChatRpcClient,
   ) {
-    this.rpcEvents = rpcEvents;
-    this.rpcSubscription = rpcEvents?.onEvent((event) => {
+    this.rpcClient = rpcClient;
+    this.rpcSubscription = rpcClient?.onEvent((event) => {
       this.timeline.append(event);
+      this.updateSubmissionForEvent(event);
       this.postSnapshot();
+      this.postSubmission();
     });
   }
 
@@ -38,8 +79,17 @@ export class ProleChatViewProvider implements vscode.WebviewViewProvider, Dispos
       enableScripts: true,
       localResourceRoots: [this.extensionUri],
     };
-    webviewView.webview.html = renderChatViewHtml(webviewView.webview, this.timeline.snapshot());
+    this.viewMessageSubscription?.dispose();
+    this.viewMessageSubscription = webviewView.webview.onDidReceiveMessage((message) => {
+      void this.handleWebviewMessage(message);
+    });
+    webviewView.webview.html = renderChatViewHtml(
+      webviewView.webview,
+      this.timeline.snapshot(),
+      this.submission,
+    );
     this.postSnapshot();
+    this.postSubmission();
   }
 
   openChatView(): Thenable<unknown> {
@@ -48,21 +98,131 @@ export class ProleChatViewProvider implements vscode.WebviewViewProvider, Dispos
 
   dispose(): void {
     this.rpcSubscription?.dispose();
+    this.viewMessageSubscription?.dispose();
     this.rpcSubscription = undefined;
+    this.viewMessageSubscription = undefined;
+  }
+
+  private async handleWebviewMessage(message: unknown): Promise<void> {
+    if (!isRecord(message) || message["type"] !== "submitTurn") {
+      return;
+    }
+
+    const parsed = parseChatTurnSubmission(message);
+    if (!parsed.ok) {
+      this.setSubmission({
+        ...idleSubmission(),
+        status: "failed",
+        message: parsed.error,
+        error: parsed.error,
+      });
+      return;
+    }
+
+    if (this.rpcClient === undefined) {
+      this.setSubmission({
+        ...idleSubmission(),
+        status: "failed",
+        message: "Open a trusted workspace before sending a turn.",
+        error: "No trusted workspace is available.",
+      });
+      return;
+    }
+
+    if (this.submission.busy) {
+      this.setSubmission({
+        ...this.submission,
+        message: "A turn is already running.",
+      });
+      return;
+    }
+
+    this.setSubmission({
+      busy: true,
+      status: "sending",
+      message: "Sending turn...",
+    });
+
+    try {
+      const result = await this.rpcClient.sendTurn(sendTurnParams(parsed.value));
+      const terminal = this.terminalRuns.get(result.runId);
+      this.setSubmission(
+        terminal === undefined
+          ? {
+              busy: true,
+              status: "running",
+              message: "Agent turn running.",
+              runId: result.runId,
+              turnId: result.turnId,
+            }
+          : terminalSubmission(result.runId, result.turnId, terminal),
+      );
+    } catch (error) {
+      const messageText = `Failed to send turn: ${errorMessage(error)}`;
+      this.setSubmission({
+        ...idleSubmission(),
+        status: "failed",
+        message: messageText,
+        error: messageText,
+      });
+    }
   }
 
   private postSnapshot(): void {
-    const message: WebviewMessage = {
+    const message: ExtensionToWebviewMessage = {
       type: "snapshot",
       snapshot: this.timeline.snapshot(),
     };
     void this.view?.webview.postMessage(message);
   }
+
+  private postSubmission(): void {
+    const message: ExtensionToWebviewMessage = {
+      type: "submission",
+      submission: this.submission,
+    };
+    void this.view?.webview.postMessage(message);
+  }
+
+  private setSubmission(submission: ChatSubmissionSnapshot): void {
+    this.submission = submission;
+    this.postSubmission();
+  }
+
+  private updateSubmissionForEvent(event: AgentEventEnvelope): void {
+    const terminal = terminalRunState(event);
+    if (terminal === undefined) {
+      return;
+    }
+
+    this.rememberTerminalRun(event.runId, terminal);
+    if (this.submission.runId === undefined || event.runId !== this.submission.runId) {
+      return;
+    }
+
+    this.submission = terminalSubmission(event.runId, this.submission.turnId, terminal);
+  }
+
+  private rememberTerminalRun(runId: string, terminal: TerminalRunState): void {
+    this.terminalRuns.set(runId, terminal);
+    while (this.terminalRuns.size > 50) {
+      const oldest = this.terminalRuns.keys().next().value;
+      if (oldest === undefined) {
+        return;
+      }
+      this.terminalRuns.delete(oldest);
+    }
+  }
 }
 
-function renderChatViewHtml(webview: vscode.Webview, snapshot: ChatTimelineSnapshot): string {
+function renderChatViewHtml(
+  webview: vscode.Webview,
+  snapshot: ChatTimelineSnapshot,
+  submission: ChatSubmissionSnapshot,
+): string {
   const nonce = nonceValue();
   const initialSnapshot = safeScriptJson(snapshot);
+  const initialSubmission = safeScriptJson(submission);
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -267,4 +427,68 @@ function safeScriptJson(value: unknown): string {
 
 function nonceValue(): string {
   return randomUUID().replaceAll("-", "");
+}
+
+function idleSubmission(): ChatSubmissionSnapshot {
+  return {
+    busy: false,
+    status: "idle",
+    message: "",
+  };
+}
+
+function terminalSubmission(
+  runId: string,
+  turnId: string | undefined,
+  terminal: TerminalRunState,
+): ChatSubmissionSnapshot {
+  return {
+    busy: false,
+    status: terminal.status,
+    message: terminal.message,
+    ...(terminal.error === undefined ? {} : { error: terminal.error }),
+    runId,
+    ...(turnId === undefined ? {} : { turnId }),
+  };
+}
+
+function terminalRunState(event: AgentEventEnvelope): TerminalRunState | undefined {
+  if (event.type === "run.completed") {
+    return {
+      status: "completed",
+      message: "Run completed.",
+    };
+  }
+
+  if (event.type === "run.failed") {
+    const message = terminalMessage(event, "Run failed.");
+    return {
+      status: "failed",
+      message,
+      error: message,
+    };
+  }
+
+  if (event.type === "run.canceled") {
+    return {
+      status: "canceled",
+      message: terminalMessage(event, "Run canceled."),
+    };
+  }
+
+  return undefined;
+}
+
+function terminalMessage(event: AgentEventEnvelope, fallback: string): string {
+  const payload = isRecord(event.payload) ? event.payload : undefined;
+  const message = payload?.["message"] ?? payload?.["reason"] ?? payload?.["summary"];
+  return typeof message === "string" && message.length > 0 ? message : fallback;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
