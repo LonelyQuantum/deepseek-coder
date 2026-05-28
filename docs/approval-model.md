@@ -107,7 +107,7 @@ pending
 - TypeScript：`packages/protocol/src/index.ts`、`vscode/extension/src/approvalFlow.ts`、`vscode/extension/src/commands.ts`。
 - JSON-RPC 事件：`docs/json-rpc-protocol.md` 中的 `tool.requested`、`tool.approvalRequired`、`tool.approvalResolved`、`agent.approve`、`agent.reject`、`agent.cancel`。
 
-当前 Rust 和 TypeScript 已定义风险等级、审批要求、持久化枚举和状态机转换规则。Agent Turn Loop 已能在工具执行前写入 `tool.approvalRequired`，根据审批策略等待批准、拒绝、取消或过期，并写入 `tool.approvalResolved`。CLI 二进制已有 stdin/stderr prompt；`agent-rpc` request loop 已能分发 `agent.approve` / `agent.reject` / `agent.cancel`；`AgentTurnLoopRpcHandler` 已实现单 active run 的内存 pending approval 队列。Agent Core 已在 shell 工具审批前执行命令风险分类：依赖安装、网络访问、远程 git 和发布命令会升级到 `network`，删除、强制 push、git reset/clean 等会升级到 `destructive`，并在 `tool.requested` / `tool.approvalRequired` 中写入 `riskReasons`。VS Code 插件已有 modal approval adapter 并接入真实 RPC pending queue；TUI 已有可测试的 prompt 状态机。
+当前 Rust 和 TypeScript 已定义风险等级、审批要求、持久化枚举和状态机转换规则。Agent Turn Loop 已能在工具执行前写入 `tool.approvalRequired`，根据审批策略等待批准、拒绝、取消或过期，并写入 `tool.approvalResolved`。CLI 二进制已有 stdin/stderr prompt；`agent-rpc` request loop 已能分发 `agent.approve` / `agent.reject` / `agent.cancel`；`AgentTurnLoopRpcHandler` 已实现单 active run 的内存 pending approval 队列。Agent Core 已在 shell 工具审批前执行命令风险分类：依赖安装、网络访问、远程 git 和发布命令会升级到 `network`，删除、强制 push、git reset/clean 等会升级到 `destructive`，并在 `tool.requested` / `tool.approvalRequired` 中写入 `riskReasons`。VS Code 插件已有 modal approval adapter 并接入真实 RPC pending queue；`apply_patch` 审批会先打开 VS Code 原生 diff 预览，并保留 hunk boundary 供后续细粒度审批；TUI 已有可测试的 prompt 状态机。
 
 ## 后续增强
 

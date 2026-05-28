@@ -1,6 +1,6 @@
 # 工具系统
 
-状态：`0.1.0` 设计已确定，Phase 1 基础执行层、审批前 shell 动态风险升级和 Phase 3 RPC/VS Code 审批接入已实现。
+状态：`0.1.0` 设计已确定，Phase 1 基础执行层、审批前 shell 动态风险升级、Phase 3 RPC/VS Code 审批接入和 VS Code Native diff patch 预览已实现。
 
 工具系统通过显式 schema 和类型化结果向 Agent Core 暴露工作区操作。模型不得直接执行文件写入、shell 命令或网络访问；它只能请求工具，工具请求必须经过 schema 校验和审批策略。
 
@@ -303,7 +303,7 @@ fixture 中的 `tools` 被当作无序集合校验；测试会按工具名规整
 - `workspace_manifest`：生成 workspace manifest v0，默认遵守 `.gitignore` 和 `.prole-coderignore`，硬排除 `.git/`、`.secrets/`、`.secret/`、`.agents/`、`.codex/` 和 `.prole-coder/`，并返回稳定排序条目、manifest hash、git 状态和截断原因。
 - `read_file`：只读取 workspace 内 UTF-8 文本文件，支持 1-based 行范围，并返回完整文件的 `sha256` 和 `sizeBytes`。
 - `search`：通过 `rg --json --fixed-strings` 搜索，默认排除 `.git/`、`.secrets/`、`.secret/`、`.env*`、`node_modules/` 和 `target/`。
-- `apply_patch`：应用受限 unified diff，要求 patch 实际文件集合与 `expectedFiles` 完全一致；执行时会先在内存中完成全部文件的 hunk 校验和 staging，再统一写盘，因此解析或 hunk mismatch 不会留下部分文件已修改的状态；成功后返回 reverse patch。
+- `apply_patch`：应用受限 unified diff，要求 patch 实际文件集合与 `expectedFiles` 完全一致；执行时会先在内存中完成全部文件的 hunk 校验和 staging，再统一写盘，因此解析或 hunk mismatch 不会留下部分文件已修改的状态；成功后返回 reverse patch。VS Code 前端会在审批前用原生 diff editor 展示 patch 预览，并生成稳定 hunk boundary，但当前 approve/reject 仍是 whole-patch 粒度。
 - `shell`：在 workspace 内执行非交互式命令，支持超时，执行前进行命令风险分类，返回 exit code、stdout、stderr 和耗时。
 - `git_status`：读取 `git status --short --branch` 或普通 `git status`。
 - `git_diff`：读取 unstaged 或 staged diff，支持限定 workspace-relative 路径。
@@ -357,7 +357,7 @@ Schema 校验不能只作为 typed deserialization 失败后的补救，因为 R
 ### `apply_patch`
 
 - 当前实现只支持受限 unified diff；后续需要支持更完整的 git patch 语法，包括 rename、copy、mode change 和更严格的 no-newline 语义。
-- 增加 patch 预览、hunk 级审批、冲突诊断和失败时的精确 hunk mismatch 信息。
+- 已增加 VS Code patch 预览和 hunk boundary；后续继续实现真实 hunk 级审批、冲突诊断和失败时的精确 hunk mismatch 信息。
 - 用修改前快照生成 reverse patch，并在 run log 中保存 patch id、审批 id 和可审计回滚信息。
 - 如果需要抵抗磁盘写入中途失败，应进一步引入临时文件、原子替换或备份恢复机制；当前 staging 主要保证解析和 hunk 校验失败不会产生半应用 patch。
 - 明确二进制文件和生成文件策略，避免文本 patch 意外改写不可审计内容。

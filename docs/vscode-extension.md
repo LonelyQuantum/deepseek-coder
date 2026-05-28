@@ -1,6 +1,6 @@
 # 编辑器插件（VS Code Extension）
 
-状态：Phase 3 优先开发项。基础命令、审批弹窗 adapter、RPC server 启动监管、初始化握手、JSON-RPC request client、VS Code/protocol TypeScript 类型共享、RPC/commands 边界测试、Sidebar Chat 事件渲染、Chat 输入发送真实 turn、真实审批回传、共享 RPC 全双工事件管线和命令风险动态升级展示已实现；尚未实现 diff editor、Run List / resume 和 Context Capsule 可视化。
+状态：Phase 3 优先开发项。基础命令、审批弹窗 adapter、RPC server 启动监管、初始化握手、JSON-RPC request client、VS Code/protocol TypeScript 类型共享、RPC/commands 边界测试、Sidebar Chat 事件渲染、Chat 输入发送真实 turn、真实审批回传、共享 RPC 全双工事件管线、命令风险动态升级展示和 Native diff editor patch 预览已实现；尚未实现 Run List / resume 和 Context Capsule 可视化。
 
 VS Code 插件是 `ProleCoder` 的一等前端。它必须通过 JSON-RPC server 复用 Rust Agent Core，而不是在 TypeScript 侧重新实现 agent loop、context builder、provider 调用或 tool execution。
 
@@ -97,7 +97,7 @@ Phase 3 P0 顺序：
 5. 通过 JSON-RPC request client 回传用户动作。已完成 approval approve/reject 回传。
 6. 展示审批请求和命令输出摘要。已完成首版 `tool.approvalRequired` modal 接入真实 RPC pending queue。
 7. 接入命令风险分类器输出，在审批 UI 中展示动态升级后的风险等级和原因。已完成：approval modal 和 Sidebar Chat 时间线都会展示 `riskReasons`。
-8. 使用 VS Code 原生 diff editor 展示 patch，并为 hunk 级审批预留交互边界。
+8. 使用 VS Code 原生 diff editor 展示 patch，并为 hunk 级审批预留交互边界。已完成：`PatchDiffPreviewController` 缓存 `tool.requested` 中的 `apply_patch` unified diff，在审批 modal 前打开虚拟 after 文档与 workspace before 文档的原生 diff，并保存 whole-patch 模式下的稳定 hunk boundary。
 9. 展示 Run List / resume 和 Context Capsule 可视化。
 
 Phase 3 P0 验收标准：
@@ -127,6 +127,6 @@ Phase 4 P1/P2 深度集成：
 - 处理协议版本不匹配：显示 server/client protocol version，并引导用户升级对应组件。
 - 支持多 workspace folder：每个 workspace root 对应一个 RPC server 或明确选择 active workspace。
 - 渲染 `agent.event` 流，包括 assistant delta、计划、工具调用、审批请求、patch 和验证结果。
-- 使用 VS Code 原生 diff editor 展示 patch，并支持 hunk 级审批。
+- 扩展 Native diff editor 当前的 hunk boundary，支持真实 hunk 级选择、部分批准和对应 RPC/Core 协议扩展。
 - 从 Problems 面板读取 diagnostics，通过协议传给 Agent Core，而不是在插件内自行生成修复逻辑。
 - 增加 `@vscode/test-electron` 集成测试，覆盖真实 extension activation、配置读取、启动失败提示和基础事件渲染。
