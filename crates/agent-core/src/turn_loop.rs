@@ -8,6 +8,7 @@ use thiserror::Error;
 use crate::{
     approval::{ApprovalRequirement, RiskLevel},
     cancellation::{CancellationError, CancellationToken},
+    command_risk::classify_shell_command,
     context::{
         ContextBuildError, ContextBuilder, ContextBuilderConfig, ContextItem, ContextItemKind,
         ContextManifestOmitted, ContextManifestReport,
@@ -605,18 +606,19 @@ where
             })?;
         let arguments_preview = parse_tool_arguments_value(tool_call)?;
         validate_tool_call_arguments(definition, tool_call, &arguments_preview)?;
+        let risk_assessment = tool_risk_assessment(definition, &arguments_preview);
 
         append_turn_event(
             run_log,
             event_sink,
             "tool.requested",
             Some(context.turn_id.to_owned()),
-            json!({
-                "toolCallId": tool_call.id.clone(),
-                "name": tool_name,
-                "risk": definition.risk.as_str(),
-                "argumentsPreview": arguments_preview,
-            }),
+            tool_requested_payload(
+                tool_call.id.clone(),
+                tool_name,
+                &risk_assessment,
+                arguments_preview.clone(),
+            ),
         )?;
 
         match definition.name {
@@ -667,6 +669,7 @@ where
                 let args: ApplyPatchArgs = parse_tool_arguments(tool_call, &arguments_preview)?;
                 self.ensure_approval(
                     definition,
+                    &risk_assessment,
                     tool_call,
                     context.turn_id,
                     context.iteration,
@@ -698,6 +701,7 @@ where
                 let args: ShellArgs = parse_tool_arguments(tool_call, &arguments_preview)?;
                 self.ensure_approval(
                     definition,
+                    &risk_assessment,
                     tool_call,
                     context.turn_id,
                     context.iteration,
@@ -810,6 +814,7 @@ where
     fn ensure_approval(
         &mut self,
         definition: &ToolDefinition,
+        risk_assessment: &ToolRiskAssessment,
         tool_call: &ChatToolCall,
         turn_id: &str,
         iteration: usize,
@@ -819,7 +824,8 @@ where
         run_log: &mut (impl RunLogWriter + ?Sized),
         event_sink: &mut (impl TurnEventSink + ?Sized),
     ) -> Result<(), AgentTurnLoopError> {
-        if definition.approval == ApprovalRequirement::None {
+        let approval = effective_approval_requirement(definition.approval, risk_assessment.risk);
+        if approval == ApprovalRequirement::None {
             return Ok(());
         }
 
@@ -827,16 +833,18 @@ where
             approval_id: format!("approval_{iteration}_{tool_index}"),
             tool_call_id: tool_call.id.clone(),
             tool_name: definition.name.as_str().to_owned(),
-            risk: definition.risk,
+            risk: risk_assessment.risk,
             title: approval_title(definition.name.as_str()).to_owned(),
             detail: approval_detail(
                 definition.name.as_str(),
                 command.as_deref(),
                 paths.as_deref(),
+                &risk_assessment.risk_reasons,
             ),
             command,
             paths,
-            persistable: definition.approval.is_persistable(),
+            risk_reasons: risk_assessment.risk_reasons.clone(),
+            persistable: approval_persistable(approval, risk_assessment.risk),
         };
 
         append_turn_event(
@@ -1460,6 +1468,7 @@ pub struct TurnApprovalRequest {
     pub detail: String,
     pub command: Option<String>,
     pub paths: Option<Vec<String>>,
+    pub risk_reasons: Vec<String>,
     pub persistable: bool,
 }
 
@@ -1751,6 +1760,53 @@ fn reasoning_state_payload(state: ReasoningContentState) -> Value {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ToolRiskAssessment {
+    risk: RiskLevel,
+    risk_reasons: Vec<String>,
+}
+
+fn tool_risk_assessment(definition: &ToolDefinition, arguments: &Value) -> ToolRiskAssessment {
+    if definition.name == ToolName::Shell
+        && let Some(command) = arguments.get("command").and_then(Value::as_str)
+    {
+        let classification = classify_shell_command(command);
+        return ToolRiskAssessment {
+            risk: classification.risk,
+            risk_reasons: classification.reason_summaries(),
+        };
+    }
+
+    ToolRiskAssessment {
+        risk: definition.risk,
+        risk_reasons: Vec::new(),
+    }
+}
+
+fn effective_approval_requirement(
+    static_approval: ApprovalRequirement,
+    risk: RiskLevel,
+) -> ApprovalRequirement {
+    let risk_approval = risk.default_approval();
+    if approval_requirement_rank(risk_approval) > approval_requirement_rank(static_approval) {
+        risk_approval
+    } else {
+        static_approval
+    }
+}
+
+fn approval_persistable(approval: ApprovalRequirement, risk: RiskLevel) -> bool {
+    approval.is_persistable() && !matches!(risk, RiskLevel::Network | RiskLevel::Destructive)
+}
+
+fn approval_requirement_rank(approval: ApprovalRequirement) -> u8 {
+    match approval {
+        ApprovalRequirement::None => 0,
+        ApprovalRequirement::Required => 1,
+        ApprovalRequirement::AlwaysRequired => 2,
+    }
+}
+
 fn approval_title(tool_name: &str) -> &'static str {
     match tool_name {
         "apply_patch" => "Apply patch",
@@ -1759,8 +1815,13 @@ fn approval_title(tool_name: &str) -> &'static str {
     }
 }
 
-fn approval_detail(tool_name: &str, command: Option<&str>, paths: Option<&[String]>) -> String {
-    match (tool_name, command, paths) {
+fn approval_detail(
+    tool_name: &str,
+    command: Option<&str>,
+    paths: Option<&[String]>,
+    risk_reasons: &[String],
+) -> String {
+    let mut detail = match (tool_name, command, paths) {
         ("shell", Some(command), _) => format!("Execute `{command}`"),
         ("apply_patch", _, Some(paths)) => {
             format!(
@@ -1770,7 +1831,45 @@ fn approval_detail(tool_name: &str, command: Option<&str>, paths: Option<&[Strin
             )
         }
         _ => format!("Execute tool `{tool_name}`"),
+    };
+
+    if !risk_reasons.is_empty() {
+        detail.push_str("; risk upgrade: ");
+        detail.push_str(&risk_reasons.join(", "));
     }
+
+    detail
+}
+
+fn tool_requested_payload(
+    tool_call_id: String,
+    tool_name: &str,
+    risk_assessment: &ToolRiskAssessment,
+    arguments_preview: Value,
+) -> Value {
+    let mut payload = Map::new();
+    payload.insert("toolCallId".to_owned(), Value::String(tool_call_id));
+    payload.insert("name".to_owned(), Value::String(tool_name.to_owned()));
+    payload.insert(
+        "risk".to_owned(),
+        Value::String(risk_assessment.risk.as_str().to_owned()),
+    );
+    payload.insert("argumentsPreview".to_owned(), arguments_preview);
+    if !risk_assessment.risk_reasons.is_empty() {
+        payload.insert(
+            "riskReasons".to_owned(),
+            Value::Array(
+                risk_assessment
+                    .risk_reasons
+                    .iter()
+                    .cloned()
+                    .map(Value::String)
+                    .collect(),
+            ),
+        );
+    }
+
+    Value::Object(payload)
 }
 
 fn approval_payload(request: &TurnApprovalRequest) -> Value {
@@ -1801,6 +1900,19 @@ fn approval_payload(request: &TurnApprovalRequest) -> Value {
         payload.insert(
             "paths".to_owned(),
             Value::Array(paths.iter().cloned().map(Value::String).collect()),
+        );
+    }
+    if !request.risk_reasons.is_empty() {
+        payload.insert(
+            "riskReasons".to_owned(),
+            Value::Array(
+                request
+                    .risk_reasons
+                    .iter()
+                    .cloned()
+                    .map(Value::String)
+                    .collect(),
+            ),
         );
     }
 
