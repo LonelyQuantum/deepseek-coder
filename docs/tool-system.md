@@ -1,6 +1,6 @@
 # 工具系统
 
-状态：`0.1.0` 设计已确定，Phase 1 基础执行层、审批前 shell 动态风险升级、Phase 3 RPC/VS Code 审批接入和 VS Code Native diff patch 预览已实现。
+状态：`0.1.0` 设计已确定，Phase 1 基础执行层、审批前 shell 动态风险升级、Phase 3 RPC/VS Code 审批接入、VS Code Native diff patch 预览和命令子进程树清理已实现。
 
 工具系统通过显式 schema 和类型化结果向 Agent Core 暴露工作区操作。模型不得直接执行文件写入、shell 命令或网络访问；它只能请求工具，工具请求必须经过 schema 校验和审批策略。
 
@@ -276,7 +276,7 @@ pub struct ToolDefinition {
 - TypeScript 协议类型：`packages/protocol/src/index.ts`。
 - 共享协议 fixture：`docs/protocol/tool-registry.v1.json`。
 
-`crates/agent-rpc` 已实现 Run Log 事件到 `agent.event` notification 的基础桥接，并已分发 `agent.approve` / `agent.reject`。真实 RPC handler 已能把工具请求、审批请求、审批决定和工具结果暴露给 CLI/VS Code/TUI；VS Code/TUI 仍需要把已有 UI 原语接入该 pending 队列，其中 VS Code 接入优先推进。
+`crates/agent-rpc` 已实现 Run Log 事件到 `agent.event` notification 的桥接，并已分发 `agent.approve` / `agent.reject`。真实 RPC handler 已能把工具请求、审批请求、审批决定和工具结果暴露给 CLI/VS Code/TUI；VS Code 已接入真实 pending 队列、命令风险展示和 Native diff patch 预览，TUI 真实队列接入仍在后续阶段。
 
 ## 协议一致性测试
 
@@ -316,7 +316,7 @@ fixture 中的 `tools` 被当作无序集合校验；测试会按工具名规整
 
 当前实现暂不包含 LSP diagnostics 和 plan update 的执行逻辑；它们仍只有 schema 和静态风险定义。
 
-当前执行层已接入基础 Agent Turn Loop、审批策略、取消信号和 run log。写入与命令执行会触发审批请求，并记录 `tool.approvalResolved`；CLI 二进制可以通过 stdin/stderr 做真实 y/n 审批，测试可使用显式 auto-approve 策略验证已批准路径。Run Log 事件已能通过 RPC 桥接发送给前端；`AgentTurnLoopRpcHandler` 已能通过 `agent.sendTurn` 真实驱动 Core，并在 `tool.approvalRequired` 处等待 `agent.approve` / `agent.reject` / `agent.cancel` 或审批超时。`shell` 会在审批前分类命令并动态升级风险；`shell`、`search`、`git_status` 和 `git_diff` 会在子进程轮询循环中检查 `CancellationToken`，取消时 kill child 并让 Turn Loop 写入 `run.canceled`。VS Code 已接入真实 RPC 审批队列；TUI 真实队列接入和更强进程树清理仍需要后续实现。
+当前执行层已接入基础 Agent Turn Loop、审批策略、取消信号和 run log。写入与命令执行会触发审批请求，并记录 `tool.approvalResolved`；CLI 二进制可以通过 stdin/stderr 做真实 y/n 审批，测试可使用显式 auto-approve 策略验证已批准路径。Run Log 事件已能通过 RPC 桥接发送给前端；`AgentTurnLoopRpcHandler` 已能通过 `agent.sendTurn` 真实驱动 Core，并在 `tool.approvalRequired` 处等待 `agent.approve` / `agent.reject` / `agent.cancel` 或审批超时。`shell` 会在审批前分类命令并动态升级风险；`shell`、`search`、`git_status` 和 `git_diff` 会在子进程轮询循环中检查 `CancellationToken`，取消或超时时清理整棵命令子进程树并让 Turn Loop 写入 `run.canceled`。VS Code 已接入真实 RPC 审批队列；TUI 真实队列接入仍需要后续实现。
 
 ## 后续增强
 
@@ -325,7 +325,7 @@ fixture 中的 `tools` 被当作无序集合校验；测试会按工具名规整
 - 为 Rust 和 TypeScript 的每个工具补齐具体 `resultSchema`，替换当前通用 `statusResultSchema`。
 - 将当前 `docs/protocol/tool-registry.v1.json` 扩展为更完整的 schema fixture 或代码生成入口，避免协议文档、Rust 类型和 `packages/protocol` 分叉。
 - 如果 fixture 或代码生成入口继续扩展，再引入 workspace 级路径元数据或 build script，避免多个 crate 复制相对路径。
-- 在 RPC pending 审批队列上继续补充全双工实时发送、client 断连取消、多 active run 关联和重放语义。
+- 在 RPC pending 审批队列上继续补充多 active run 关联、持久审批存储和更细的重放语义。
 
 ### 路径与敏感信息
 
@@ -365,7 +365,7 @@ Schema 校验不能只作为 typed deserialization 失败后的补救，因为 R
 ### `shell`
 
 - 已在执行前加入命令风险分类：网络、破坏性、依赖安装、发布、远程 git 操作等会升级审批，并输出 `riskReasons`；分类器会递归检查 shell 包装器、`$(...)` 和传统反引号子命令。
-- 已通过 Run Log 统一脱敏/截断限制输出大小并记录截断原因；后续继续增强分类覆盖面和进程树清理。
+- 已通过 Run Log 统一脱敏/截断限制输出大小并记录截断原因；取消和超时会清理命令子进程树。
 - 记录环境变量差异，但默认隐藏或脱敏敏感变量。
 - 后续按平台分别实现更强的 sandbox 策略；Windows、Linux 和 macOS 不能假设具备相同隔离能力。
 

@@ -15,8 +15,8 @@
 
 本轮审计没有发现“详细文档声称属于 Phase 1 且已完成，但代码或测试明显尚未完成”的阻塞项。发现并修正了两处容易误导的描述：
 
-- `docs/cli.md` 原先把 RPC 取消和审批过期也写成后续任务；实际 Phase 1 已实现显式取消、审批超时和 EOF shutdown 取消，未完成的是全双工后台事件 writer。
-- `docs/architecture.md` 原先把 VS Code 插件描述成完全没有接入真实 RPC server；实际 RPC server 启动监管和 request client 已提前完成，未完成的是完整 Chat UI、事件渲染、审批回传和 diff editor 集成。
+- `docs/cli.md` 原先把 RPC 取消和审批过期也写成后续任务；实际 Phase 1 已实现显式取消、审批超时和 EOF shutdown 取消，Phase 3 已补齐全双工后台事件 writer。
+- `docs/architecture.md` 原先把 VS Code 插件描述成完全没有接入真实 RPC server；实际 RPC server 启动监管和 request client 已提前完成，Phase 3 已补齐完整 Chat UI、事件渲染、审批回传和 diff editor 集成。
 
 `RPC 全双工 reader/writer 与独立事件 writer 队列` 不属于 Phase 1 已完成范围；它已在 Phase 3 共享 RPC 交互基础设施中完成。
 
@@ -84,7 +84,7 @@
 | [x] | 文本输入发送 turn 并接收真实 Agent 响应 | `README.md`、`docs/vscode-extension.md`、`docs/json-rpc-protocol.md` | 已完成：Sidebar Chat 提供 prompt 输入和 mode 选择，Webview submit 经过 `chatInput` 校验后调用 typed `RpcServerManager.sendTurn()`，accepted 后通过同一 run 的 `agent.event` terminal event 收口输入状态。验收：`pnpm -r typecheck`、`pnpm -r lint`、`pnpm -r test`。 |
 | [x] | VS Code 审批 UI 接入真实 RPC pending queue | `docs/approval-model.md`、`docs/vscode-extension.md` | 已完成：新增 `ApprovalEventController` 订阅 `tool.approvalRequired`，校验 protocol payload 后调用 VS Code modal approval adapter，并通过 typed `RpcServerManager.approve()` / `reject()` 发送 `agent.approve` / `agent.reject`；重复 approvalId 不会重复弹窗。验收：`pnpm -r typecheck`、`pnpm -r lint`、`pnpm -r test`。 |
 | [x] | 命令风险分类器和动态风险升级 | `README.md`、`docs/approval-model.md`、`docs/tool-system.md`、`docs/turn-loop.md` | 已完成：Agent Core 对 shell 命令做词法分段和显式命令族分类，递归检查 shell 包装器、`$(...)` 和传统反引号子命令，识别依赖安装、网络访问、远程 git、删除和发布命令，升级 `tool.requested` / `tool.approvalRequired` 风险并输出 `riskReasons`；VS Code/CLI/TUI 展示升级原因。验收：`cargo fmt --check`、`cargo test -p prole-coder-agent-core command_risk`、`cargo test -p prole-coder-agent-core turn_loop_upgrades_shell_approval_risk`、`cargo test`、`cargo clippy --all-targets -- -D warnings`、`pnpm -r typecheck`、`pnpm -r lint`、`pnpm -r test`、`git diff --check`。 |
-| [ ] | 更强进程树清理策略 | `docs/tool-system.md`、`docs/security-model.md`、`docs/roadmap.md` | 当前 shell/search/git 等只做基础协作式取消和 child kill。 |
+| [x] | 更强进程树清理策略 | `docs/tool-system.md`、`docs/security-model.md`、`docs/roadmap.md` | 已完成：命令类工具启动时建立可收束的进程树边界，Unix 使用独立 process group，Windows 使用新 process group、ParentProcessId descendant 枚举和 `taskkill /T /F` 兜底；取消和超时会清理 shell/search/git 等工具的子进程树。验收：`cargo test -p prole-coder-agent-core shell_cancels_descendant_processes`、`cargo test -p prole-coder-agent-core shell_timeout_cleans_descendant_processes`、`cargo test -p prole-coder-agent-core shell_cancels_running_command`。 |
 | [x] | Native diff editor 与 hunk 级审批边界 | `README.md`、`docs/vscode-extension.md` | 已完成：VS Code 侧新增 patch preview controller，缓存 `tool.requested.argumentsPreview.unifiedDiff`，在 `apply_patch` 审批 modal 前打开 VS Code 原生 diff editor；纯 TS parser 会生成稳定 hunk approval boundary，当前仍以 whole-patch approve/reject 回传，为后续 hunk 级决策预留结构。验收：`pnpm -r typecheck`、`pnpm -r lint`、`pnpm -r test`。 |
 | [x] | Run List / resume | `README.md`、`docs/vscode-extension.md`、`docs/rpc-server.md` | 已完成：VS Code Sidebar Chat 通过 typed `RpcServerManager.listRuns()` 拉取最近 run summary，Run List 保留 loading/failed/selected 状态；点击历史 run 会调用 `agent.resume` 并清空当前事件视图，随后消费 replay 的 `agent.event`。验收：`pnpm -r typecheck`、`pnpm -r lint`、`pnpm -r test`。 |
 | [x] | Context Capsule 可视化 | `README.md`、`docs/context-capsule.md`、`docs/vscode-extension.md` | 已完成：VS Code Sidebar Chat 新增 Context Capsule 面板，消费 `context.built` metadata，展示 StablePrefix / DynamicPrelude / TurnSuffix token 分布、input/stable budget、cache/estimator 摘要、included/omitted source 预览和 manifest 摘要。验收：`pnpm -r typecheck`、`pnpm -r lint`、`pnpm -r test`。 |
@@ -96,6 +96,10 @@
 | [ ] | Problems 面板诊断进入 Context Builder | `README.md`、`docs/vscode-extension.md`、`docs/context-capsule.md` | 依赖 Phase 2 attachment/context 输入稳定。 |
 | [ ] | Terminal command approval | `README.md`、`docs/vscode-extension.md`、`docs/approval-model.md` | 展示命令、cwd、风险等级、输出摘要和持久化选项。 |
 | [ ] | provider、model、预算、审批策略和 RPC 命令配置界面 | `README.md`、`docs/vscode-extension.md` | 避免保存 API Key，配置只管理非敏感选项。 |
+| [ ] | RPC 高频事件输出节流与批量发送策略 | `docs/rpc-server.md`、`docs/vscode-extension.md` | 面向 `assistant.delta` 等高频事件，减少 stdio/webview 卡顿；需保持 Run Log `seq` 与 live notification 顺序一致。 |
+| [ ] | 事件 payload schema 与协议 fixture 对齐 | `docs/json-rpc-protocol.md`、`docs/turn-loop.md`、`packages/protocol` | 将 `provider.requested`、`tool.completed`、`run.completed` 等事件 payload 纳入 Rust/TypeScript 兼容性测试，避免协议漂移。 |
+| [ ] | 审批持久化存储 | `docs/approval-model.md`、`docs/tool-system.md`、`docs/vscode-extension.md` | 实现 session/workspace 持久批准存储；继续禁止 network/destructive 风险持久化。 |
+| [ ] | 真实 hunk 级 patch 审批 | `docs/tool-system.md`、`docs/vscode-extension.md` | 复用 Phase 3 的 hunk boundary，将 `apply_patch` 从 whole-patch approve/reject 扩展到 hunk 级决策、冲突诊断和回放记录。 |
 | [ ] | FIM completion preview | `README.md`、`docs/deepseek-api-adapter.md`、`docs/vscode-extension.md` | 需要 provider capability model 与编辑器 UI。 |
 | [ ] | Provider capability model | `README.md`、`docs/roadmap.md`、`docs/deepseek-api-adapter.md` | 显式表达 thinking、tool choice、FIM、stream usage、cache usage、上下文和输出限制。 |
 | [ ] | VSIX alpha / pre-release 打包与安装说明 | `docs/release.md`、`docs/vscode-extension.md` | Marketplace 上架不阻塞 Phase 4 完成，但需要可安装产物和文档。 |
@@ -107,6 +111,8 @@
 | [ ] | TUI RPC 入口和事件流消费 | `README.md`、`docs/tui.md` | 消费 `agent.event`，展示 run、turn、工具和审批状态。 |
 | [ ] | TUI Chat / Plan / Diff / Tools / Context / Settings 页面 | `README.md`、`docs/tui.md` | 完整 ratatui 界面仍未实现。 |
 | [ ] | TUI hunk 级审批、run resume、配置文件和 release binary | `README.md`、`docs/tui.md` | 建议在 VS Code 核心体验和共享事件管线稳定后推进。 |
+| [ ] | 多 active run 与事件订阅模型 | `docs/rpc-server.md`、`docs/turn-loop.md`、`docs/tool-system.md` | 扩展 active run、审批队列、取消句柄和事件订阅模型，支持多个 run 或多个前端并发推进。 |
+| [ ] | 更细的 replay 语义 | `docs/rpc-server.md`、`docs/tool-system.md`、`docs/run-log.md` | 明确 resume 时哪些事件原样回放、哪些需要历史标记，并与 pending approval / hunk 审批状态保持一致。 |
 | [ ] | MCP client、本地模型/私有推理服务 adapter、包管理器工具、issue/PR 工具、审计包导出 | `docs/roadmap.md` | 生态扩展应在核心闭环、编辑器体验和 DeepSeek 差异化稳定后推进。 |
 
 ## Phase 6：发布与治理

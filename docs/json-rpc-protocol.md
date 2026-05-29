@@ -215,7 +215,7 @@ interface SendTurnResult {
 
 Result 返回后，进度通过 `agent.event` notification 持续到达。
 
-当前 Rust request loop 已能解析 `agent.sendTurn` 并分发给 `AgentRpcRequestHandler`。`crates/agent-rpc::AgentTurnLoopRpcHandler` 已能创建 run、选择注入的 provider factory、启动后台 Turn Loop worker，并把 Run Log 事件返回给 request loop 输出。当前实现会收集事件直到 run 结束或遇到 `tool.approvalRequired`：遇到审批时，response 后会输出审批请求事件，worker 在 pending approval 队列中等待 `agent.approve` / `agent.reject` / `agent.cancel`，并在超时时写入取消事件。如果 request loop 读到 EOF，会调用 handler shutdown；对于已经暂停在 pending approval 的 active run，shutdown 会把审批解析为 `decision: "canceled"` 并写入 `run.canceled`。完全全双工的“先发送 accepted response，再独立事件 writer 持续推送”仍是后续异步执行队列目标。
+当前 Rust request loop 已能解析 `agent.sendTurn` 并分发给 `AgentRpcRequestHandler`。`crates/agent-rpc::AgentTurnLoopRpcHandler` 已能创建 run、选择注入的 provider factory、启动后台 Turn Loop worker，并在创建 run 后立即返回 `accepted`。Run Log 事件会通过独立的 live event queue 发送到 request loop 的单 writer，并持续输出为 `agent.event` notification；遇到审批时，worker 在 pending approval 队列中等待 `agent.approve` / `agent.reject` / `agent.cancel`，并在超时时写入取消事件。如果 request loop 读到 EOF 或 writer 失败，会触发 handler shutdown / disconnect cancel；对于 active run，shutdown 会把未决审批解析为 `decision: "canceled"` 并写入 `run.canceled`，或等待已有 terminal event 收口。
 
 Phase 2c 起，Rust handler 会消费 `attachments` 并转换为 Context Capsule 来源：`file` 由 Core 在工作区内读取，复用工具执行层的路径和敏感目录保护；`selection` / `explicit_content` 由前端提供文本但受数量、大小、重复来源和路径校验限制；`diagnostic` 由 VS Code/TUI 等前端传入结构化诊断文本。当前默认限制是单 turn 最多 32 个 attachment，单个 attachment 文本最多 256 KiB；超过限制会让该 run 以 `run.failed` / `E_INVALID_ATTACHMENT` 结束。
 
@@ -288,9 +288,9 @@ interface CancelResult {
 
 - 当前 Rust request loop 已能解析 `agent.cancel` 并分发给 `AgentRpcRequestHandler`。
 - Phase 1 实现支持取消 active run。取消会设置该 run 的协作式 `CancellationToken`；如果当前正在等待审批，会把对应 pending approval 解析为 `decision: "canceled"`，随后写入 `run.canceled`。
-- provider wrapper 和命令类工具必须在可中断边界检查 token。DeepSeek streaming wrapper 会在 stream 事件之间检查 token；shell/search/git 等子进程工具会在轮询子进程状态时检查 token，并在取消时 kill child。
+- provider wrapper 和命令类工具必须在可中断边界检查 token。DeepSeek streaming wrapper 会在 stream 事件之间检查 token；shell/search/git 等子进程工具会在轮询子进程状态时检查 token，并在取消或超时时清理子进程树。
 - 当前内存队列默认审批超时为 300 秒；超时会把 approval 解析为 `decision: "expired"`，随后写入 `run.canceled`。测试和嵌入方可以通过 handler 配置缩短该时间。
-- 当前取消是协作式，不是强制杀线程；stdio EOF 已能通过 shutdown 取消已经暂停在 pending approval 的 active run。长时间 provider request 期间的即时 client 断连感知、完全全双工 writer 和更强进程树清理属于后续异步 run 执行队列。
+- 当前取消是协作式，不是强制杀线程；stdio EOF / writer failure 已能取消 active run，包括等待审批和长时间 provider request 场景。命令类工具会在取消或超时时清理子进程树。
 
 ### `agent.resume`
 

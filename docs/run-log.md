@@ -1,6 +1,6 @@
 # 运行日志（Run Log）
 
-状态：Phase 1 基础存储层和写入串行化已实现，并已接入基础 Agent Turn Loop、CLI `run` 和 RPC Turn Loop handler；Phase 2d 已加入统一脱敏/截断边界。
+状态：Phase 1 基础存储层和写入串行化已实现，并已接入基础 Agent Turn Loop、CLI `run` 和 RPC Turn Loop handler；Phase 2d 已加入统一脱敏/截断边界；Phase 3 RPC 全双工事件发送队列已复用同一份 Run Log 作为事实来源。
 
 Run Log 是 Agent Core 的本地审计记录。它记录一次 run 中发生的事件，使 CLI、TUI、VS Code 和后续调试工具能够读取同一份事实来源。Run Log 不等同于模型上下文；进入上下文前仍需要 Context Capsule 做筛选、摘要、脱敏和 token 预算。
 
@@ -47,7 +47,7 @@ crates/agent-core/src/run_log.rs
 
 `SerializedRunLog` 用于 RPC 等跨线程场景。它把同一个 `RunLog` 放入 `Mutex`，所有 clone 共享同一个 `next_seq` 和文件句柄状态；每次 append 都先拿锁，写入完成并推进 `seq` 后释放。`load` 也走同一把锁，避免 active run 正在写入时，`agent.resume` 从磁盘读到半条事件或不一致的序列。
 
-当前策略不是全双工事件发送队列：它只保证 run log 本身的 append/load 串行化。RPC stdout 的持续事件推送仍由 request loop flush；后续全双工 server 需要再引入独立事件 writer 队列，保证同一 run 的通知发送也按 `seq` 串行。
+Run Log 本身只负责 append/load 串行化，不直接管理 stdout。Phase 3 的 RPC live event queue 建在 `TurnEventSink` 之上：事件先成功追加到 Run Log，再投递给 request loop 的单 writer 输出为 `agent.event` notification。因此前端看到的 live notification 与后续 `agent.resume` 回放共享同一组 `seq` 和 payload。
 
 ## Summary Metadata
 

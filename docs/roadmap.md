@@ -77,7 +77,7 @@
 Phase 1 收官后优化池：
 
 - RPC 事件输出模型收敛：独立 writer 队列和长 provider request 期间的断连取消已完成；后续重点转向 VS Code 侧真实事件消费、审批回传和 UI 状态管理。
-- 工具执行安全打磨：Phase 3 已实现命令风险分类器，并在审批信息中突出命令摘要和风险升级原因；后续补充进程树清理策略和更强 sandbox。
+- 工具执行安全打磨：Phase 3 已实现命令风险分类器和命令子进程树清理，并在审批信息中突出命令摘要和风险升级原因；后续补充更强 sandbox。
 - Run Log 体积与隐私控制：为工具输出、verification 输出和 provider 摘要增加统一大小限制、截断原因和可导出的脱敏包边界。
 - Provider summary 事件：把 usage、cache 命中、模型名、stream 统计等写成稳定 schema，避免只依赖 provider 私有响应。
 - 本地环境诊断：增加 doctor 类检查，显式验证 `rg`、`git`、`cargo`、Node/pnpm、API key 来源和 workspace 信任状态；不做隐式搜索 backend 降级。
