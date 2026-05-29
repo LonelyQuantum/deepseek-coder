@@ -1,13 +1,30 @@
 import { randomUUID } from "node:crypto";
 import * as vscode from "vscode";
 
-import type { SendTurnParams, SendTurnResult } from "@prole-coder/protocol" with {
+import type {
+  ListRunsParams,
+  ListRunsResult,
+  ResumeParams,
+  ResumeResult,
+  SendTurnParams,
+  SendTurnResult,
+} from "@prole-coder/protocol" with {
   "resolution-mode": "import",
 };
 
 import { CHAT_RUN_MODES, DEFAULT_CHAT_MODE, parseChatTurnSubmission, sendTurnParams } from "./chatInput";
 import { ChatEventTimeline, type ChatTimelineSnapshot } from "./chatEvents";
 import type { AgentEventEnvelope, DisposableLike } from "./rpcServer";
+import {
+  RUN_LIST_LIMIT,
+  failedRunList,
+  idleRunList,
+  isRefreshRunsMessage,
+  loadingRunList,
+  readyRunList,
+  resumeRunIdFromMessage,
+  type RunListSnapshot,
+} from "./runHistory";
 
 export const CHAT_VIEW_ID = "prole-coder.chat";
 
@@ -19,7 +36,12 @@ export interface ChatTurnSender {
   sendTurn(params: SendTurnParams): Promise<SendTurnResult>;
 }
 
-export type ChatRpcClient = ChatRpcEventSource & ChatTurnSender;
+export interface ChatRunHistoryClient {
+  listRuns(params?: ListRunsParams): Promise<ListRunsResult>;
+  resume(params: ResumeParams): Promise<ResumeResult>;
+}
+
+export type ChatRpcClient = ChatRpcEventSource & ChatTurnSender & ChatRunHistoryClient;
 
 interface SnapshotWebviewMessage {
   readonly type: "snapshot";
@@ -31,7 +53,12 @@ interface SubmissionWebviewMessage {
   readonly submission: ChatSubmissionSnapshot;
 }
 
-type ExtensionToWebviewMessage = SnapshotWebviewMessage | SubmissionWebviewMessage;
+interface RunsWebviewMessage {
+  readonly type: "runs";
+  readonly runs: RunListSnapshot;
+}
+
+type ExtensionToWebviewMessage = SnapshotWebviewMessage | SubmissionWebviewMessage | RunsWebviewMessage;
 
 type ChatSubmissionStatus = "idle" | "sending" | "running" | "completed" | "failed" | "canceled";
 type TerminalSubmissionStatus = Extract<ChatSubmissionStatus, "completed" | "failed" | "canceled">;
@@ -56,6 +83,7 @@ export class ProleChatViewProvider implements vscode.WebviewViewProvider, Dispos
   private readonly terminalRuns = new Map<string, TerminalRunState>();
   private readonly rpcClient: ChatRpcClient | undefined;
   private submission: ChatSubmissionSnapshot = idleSubmission();
+  private runList: RunListSnapshot = idleRunList();
   private rpcSubscription: DisposableLike | undefined;
   private viewMessageSubscription: DisposableLike | undefined;
   private view: vscode.WebviewView | undefined;
@@ -67,9 +95,12 @@ export class ProleChatViewProvider implements vscode.WebviewViewProvider, Dispos
     this.rpcClient = rpcClient;
     this.rpcSubscription = rpcClient?.onEvent((event) => {
       this.timeline.append(event);
-      this.updateSubmissionForEvent(event);
+      const terminal = this.updateSubmissionForEvent(event);
       this.postSnapshot();
       this.postSubmission();
+      if (terminal && this.view !== undefined) {
+        void this.refreshRuns("Refreshing runs...");
+      }
     });
   }
 
@@ -87,9 +118,12 @@ export class ProleChatViewProvider implements vscode.WebviewViewProvider, Dispos
       webviewView.webview,
       this.timeline.snapshot(),
       this.submission,
+      this.runList,
     );
     this.postSnapshot();
     this.postSubmission();
+    this.postRuns();
+    void this.refreshRuns();
   }
 
   openChatView(): Thenable<unknown> {
@@ -104,6 +138,17 @@ export class ProleChatViewProvider implements vscode.WebviewViewProvider, Dispos
   }
 
   private async handleWebviewMessage(message: unknown): Promise<void> {
+    if (isRefreshRunsMessage(message)) {
+      await this.refreshRuns();
+      return;
+    }
+
+    const resumeRunId = resumeRunIdFromMessage(message);
+    if (resumeRunId !== undefined) {
+      await this.resumeRun(resumeRunId);
+      return;
+    }
+
     if (!isRecord(message) || message["type"] !== "submitTurn") {
       return;
     }
@@ -145,6 +190,7 @@ export class ProleChatViewProvider implements vscode.WebviewViewProvider, Dispos
 
     try {
       const result = await this.rpcClient.sendTurn(sendTurnParams(parsed.value));
+      void this.refreshRuns("Refreshing runs...");
       const terminal = this.terminalRuns.get(result.runId);
       this.setSubmission(
         terminal === undefined
@@ -184,23 +230,82 @@ export class ProleChatViewProvider implements vscode.WebviewViewProvider, Dispos
     void this.view?.webview.postMessage(message);
   }
 
+  private postRuns(): void {
+    const message: ExtensionToWebviewMessage = {
+      type: "runs",
+      runs: this.runList,
+    };
+    void this.view?.webview.postMessage(message);
+  }
+
   private setSubmission(submission: ChatSubmissionSnapshot): void {
     this.submission = submission;
     this.postSubmission();
   }
 
-  private updateSubmissionForEvent(event: AgentEventEnvelope): void {
+  private setRunList(runList: RunListSnapshot): void {
+    this.runList = runList;
+    this.postRuns();
+  }
+
+  private async refreshRuns(message = "Loading runs..."): Promise<void> {
+    if (this.rpcClient === undefined) {
+      this.setRunList(
+        failedRunList("Open a trusted workspace before loading runs.", this.runList),
+      );
+      return;
+    }
+
+    this.setRunList(loadingRunList(this.runList, message));
+    try {
+      const result = await this.rpcClient.listRuns({ limit: RUN_LIST_LIMIT });
+      this.setRunList(readyRunList(result, this.runList.selectedRunId));
+    } catch (error) {
+      this.setRunList(failedRunList(`Failed to load runs: ${errorMessage(error)}`, this.runList));
+    }
+  }
+
+  private async resumeRun(runId: string): Promise<void> {
+    if (this.rpcClient === undefined) {
+      this.setRunList(
+        failedRunList("Open a trusted workspace before replaying a run.", this.runList),
+      );
+      return;
+    }
+
+    if (this.submission.busy) {
+      this.setRunList(failedRunList("A turn is already running.", this.runList));
+      return;
+    }
+
+    this.timeline.clear();
+    this.postSnapshot();
+    this.setSubmission(idleSubmission());
+    this.setRunList(loadingRunList(this.runList, "Replaying run..."));
+    try {
+      const result = await this.rpcClient.resume({ runId });
+      const message = result.replayStarted
+        ? `Replaying ${result.runId} through seq ${result.nextSeq - 1}.`
+        : `No events to replay for ${result.runId}.`;
+      this.setRunList(readyRunList({ runs: this.runList.runs }, result.runId, message));
+    } catch (error) {
+      this.setRunList(failedRunList(`Failed to resume run: ${errorMessage(error)}`, this.runList));
+    }
+  }
+
+  private updateSubmissionForEvent(event: AgentEventEnvelope): boolean {
     const terminal = terminalRunState(event);
     if (terminal === undefined) {
-      return;
+      return false;
     }
 
     this.rememberTerminalRun(event.runId, terminal);
     if (this.submission.runId === undefined || event.runId !== this.submission.runId) {
-      return;
+      return false;
     }
 
     this.submission = terminalSubmission(event.runId, this.submission.turnId, terminal);
+    return true;
   }
 
   private rememberTerminalRun(runId: string, terminal: TerminalRunState): void {
@@ -219,10 +324,12 @@ function renderChatViewHtml(
   webview: vscode.Webview,
   snapshot: ChatTimelineSnapshot,
   submission: ChatSubmissionSnapshot,
+  runList: RunListSnapshot,
 ): string {
   const nonce = nonceValue();
   const initialSnapshot = safeScriptJson(snapshot);
   const initialSubmission = safeScriptJson(submission);
+  const initialRuns = safeScriptJson(runList);
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -266,6 +373,134 @@ function renderChatViewHtml(
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+
+    .runs {
+      display: grid;
+      gap: 6px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border);
+      background: var(--vscode-sideBar-background);
+    }
+
+    .runs-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .runs-title {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 600;
+    }
+
+    .refresh-runs {
+      flex: 0 0 auto;
+      height: 24px;
+      padding: 0 8px;
+      color: var(--vscode-button-secondaryForeground);
+      background: var(--vscode-button-secondaryBackground);
+      border: 0;
+      font: var(--vscode-font-size) var(--vscode-font-family);
+    }
+
+    .refresh-runs:hover:enabled {
+      background: var(--vscode-button-secondaryHoverBackground);
+    }
+
+    .refresh-runs:disabled {
+      opacity: 0.65;
+    }
+
+    .run-message {
+      min-height: 16px;
+      color: var(--vscode-descriptionForeground);
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .run-message.failed {
+      color: var(--vscode-editorError-foreground);
+    }
+
+    .run-list {
+      display: grid;
+      gap: 4px;
+      max-height: 180px;
+      overflow: auto;
+    }
+
+    .run-entry {
+      display: grid;
+      gap: 2px;
+      width: 100%;
+      min-height: 48px;
+      box-sizing: border-box;
+      padding: 6px 7px;
+      color: var(--vscode-foreground);
+      background: transparent;
+      border: 1px solid transparent;
+      border-left: 3px solid var(--vscode-editorWidget-border);
+      font: var(--vscode-font-size) var(--vscode-font-family);
+      text-align: left;
+    }
+
+    .run-entry:hover:enabled,
+    .run-entry.selected {
+      background: var(--vscode-list-hoverBackground);
+      border-color: var(--vscode-list-focusOutline, var(--vscode-editorWidget-border));
+    }
+
+    .run-entry:disabled {
+      opacity: 0.7;
+    }
+
+    .run-entry.running {
+      border-left-color: var(--vscode-progressBar-background);
+    }
+
+    .run-entry.completed {
+      border-left-color: var(--vscode-testing-iconPassed);
+    }
+
+    .run-entry.failed {
+      border-left-color: var(--vscode-editorError-foreground);
+    }
+
+    .run-entry.canceled {
+      border-left-color: var(--vscode-editorWarning-foreground);
+    }
+
+    .run-entry-title {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 600;
+      line-height: 1.3;
+    }
+
+    .run-entry-meta {
+      display: flex;
+      gap: 6px;
+      min-width: 0;
+      color: var(--vscode-descriptionForeground);
+      font-size: 11px;
+      line-height: 1.3;
+    }
+
+    .run-entry-meta span {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .events {
@@ -370,7 +605,9 @@ function renderChatViewHtml(
 
     .prompt:focus,
     .mode:focus,
-    .send:focus {
+    .send:focus,
+    .refresh-runs:focus,
+    .run-entry:focus {
       outline: 1px solid var(--vscode-focusBorder);
       outline-offset: 1px;
     }
@@ -442,6 +679,14 @@ function renderChatViewHtml(
       <div id="status-title" class="status-title">ProleCoder</div>
       <div id="status-subtitle" class="status-subtitle">No run events yet.</div>
     </section>
+    <section class="runs" aria-label="Runs">
+      <div class="runs-header">
+        <div class="runs-title">Runs</div>
+        <button id="refresh-runs" class="refresh-runs" type="button">Refresh</button>
+      </div>
+      <div id="run-message" class="run-message" aria-live="polite"></div>
+      <div id="run-list" class="run-list"></div>
+    </section>
     <section id="events" class="events" aria-label="Run events"></section>
     <form id="composer" class="composer">
       <textarea id="prompt" class="prompt" rows="3" placeholder="Ask ProleCoder" aria-label="Chat message"></textarea>
@@ -455,10 +700,14 @@ function renderChatViewHtml(
   <script nonce="${nonce}">
     const initialSnapshot = ${initialSnapshot};
     const initialSubmission = ${initialSubmission};
+    const initialRuns = ${initialRuns};
     const runModes = ${safeScriptJson(CHAT_RUN_MODES)};
     const defaultMode = ${safeScriptJson(DEFAULT_CHAT_MODE)};
     const vscodeApi = acquireVsCodeApi();
     const eventsRoot = document.getElementById("events");
+    const runListRoot = document.getElementById("run-list");
+    const runMessageRoot = document.getElementById("run-message");
+    const refreshRunsButton = document.getElementById("refresh-runs");
     const statusTitle = document.getElementById("status-title");
     const statusSubtitle = document.getElementById("status-subtitle");
     const composer = document.getElementById("composer");
@@ -483,6 +732,13 @@ function renderChatViewHtml(
       if (message && message.type === "submission") {
         renderSubmission(message.submission);
       }
+      if (message && message.type === "runs") {
+        renderRuns(message.runs);
+      }
+    });
+
+    refreshRunsButton.addEventListener("click", () => {
+      vscodeApi.postMessage({ type: "refreshRuns" });
     });
 
     composer.addEventListener("submit", (event) => {
@@ -517,12 +773,13 @@ function renderChatViewHtml(
 
     render(initialSnapshot);
     renderSubmission(initialSubmission);
+    renderRuns(initialRuns);
 
     function render(snapshot) {
       const items = Array.isArray(snapshot.items) ? snapshot.items : [];
       statusTitle.textContent = snapshot.latestStatus || "ProleCoder";
       statusSubtitle.textContent = snapshot.latestRunId
-        ? snapshot.latestRunId + " · " + snapshot.eventCount + " events"
+        ? snapshot.latestRunId + " - " + snapshot.eventCount + " events"
         : "No run events yet.";
       eventsRoot.replaceChildren();
 
@@ -537,6 +794,99 @@ function renderChatViewHtml(
       for (const item of items) {
         eventsRoot.append(renderItem(item));
       }
+    }
+
+    function renderRuns(snapshot) {
+      const state = snapshot && typeof snapshot === "object" ? snapshot : initialRuns;
+      const runs = Array.isArray(state.runs) ? state.runs : [];
+      const status = typeof state.status === "string" ? state.status : "idle";
+      const loading = status === "loading";
+      refreshRunsButton.disabled = loading;
+      runMessageRoot.className = "run-message " + status;
+      runMessageRoot.textContent = typeof state.message === "string" ? state.message : "";
+      runListRoot.replaceChildren();
+
+      if (runs.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = loading ? "Loading runs..." : "No runs.";
+        runListRoot.append(empty);
+        return;
+      }
+
+      for (const run of runs) {
+        runListRoot.append(renderRunEntry(run, state.selectedRunId, loading));
+      }
+    }
+
+    function renderRunEntry(run, selectedRunId, disabled) {
+      const button = document.createElement("button");
+      const status = typeof run.status === "string" ? run.status : "running";
+      button.type = "button";
+      button.className = "run-entry " + status + (run.runId === selectedRunId ? " selected" : "");
+      button.disabled = disabled;
+      button.title = typeof run.runId === "string" ? run.runId : "";
+      button.addEventListener("click", () => {
+        if (typeof run.runId === "string" && run.runId.length > 0) {
+          vscodeApi.postMessage({ type: "resumeRun", runId: run.runId });
+        }
+      });
+
+      const title = document.createElement("div");
+      title.className = "run-entry-title";
+      title.textContent = runTitle(run);
+
+      const meta = document.createElement("div");
+      meta.className = "run-entry-meta";
+      for (const part of runMeta(run)) {
+        const item = document.createElement("span");
+        item.textContent = part;
+        meta.append(item);
+      }
+
+      button.append(title, meta);
+      return button;
+    }
+
+    function runTitle(run) {
+      if (typeof run.title === "string" && run.title.length > 0) {
+        return run.title;
+      }
+      return typeof run.runId === "string" && run.runId.length > 0 ? run.runId : "Untitled run";
+    }
+
+    function runMeta(run) {
+      const parts = [];
+      if (typeof run.status === "string") {
+        parts.push(run.status);
+      }
+      if (typeof run.mode === "string") {
+        parts.push(run.mode);
+      }
+      if (typeof run.eventCount === "number") {
+        parts.push(run.eventCount + " events");
+      }
+      const updated = formatRunTime(run.updatedAt);
+      if (updated) {
+        parts.push(updated);
+      }
+      return parts;
+    }
+
+    function formatRunTime(value) {
+      if (typeof value !== "string" || value.length === 0) {
+        return "";
+      }
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) {
+        return value;
+      }
+      return date.toLocaleString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
     }
 
     function renderSubmission(submission) {
