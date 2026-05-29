@@ -2,10 +2,15 @@ use std::{
     collections::BTreeSet,
     fs, io,
     path::{Component, Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     thread,
     time::{Duration, Instant},
 };
+
+#[cfg(unix)]
+use std::os::unix::process::CommandExt as _;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt as _;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -19,6 +24,10 @@ use crate::{cancellation::CancellationToken, hashing::sha256_hex, run_log::sanit
 
 const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
 const DEFAULT_SEARCH_MAX_RESULTS: usize = 100;
+#[cfg(unix)]
+const PROCESS_TREE_TERMINATION_GRACE: Duration = Duration::from_millis(100);
+#[cfg(windows)]
+const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 
 #[derive(Debug, Clone)]
 pub struct WorkspaceToolExecutor {
@@ -835,12 +844,16 @@ fn run_command<'a>(
 ) -> Result<CommandOutput, ToolExecutionError> {
     check_canceled(cancellation_token, program)?;
     let start = Instant::now();
-    let mut child = Command::new(program)
+    let mut command = Command::new(program);
+    command
         .args(args)
         .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_process_tree_root(&mut command);
+
+    let mut child = command
         .spawn()
         .map_err(|source| ToolExecutionError::CommandIo {
             program: program.to_owned(),
@@ -849,8 +862,7 @@ fn run_command<'a>(
 
     loop {
         if cancellation_token.is_canceled() {
-            let _ = child.kill();
-            let _ = child.wait();
+            terminate_child_process_tree(&mut child);
             return Err(ToolExecutionError::CommandCanceled {
                 program: program.to_owned(),
                 reason: cancellation_token.cancellation_reason(),
@@ -881,14 +893,125 @@ fn run_command<'a>(
         }
 
         if start.elapsed() >= timeout {
-            let _ = child.kill();
-            let _ = child.wait();
+            terminate_child_process_tree(&mut child);
             return Err(ToolExecutionError::CommandTimedOut {
                 program: program.to_owned(),
                 timeout_ms: timeout.as_millis(),
             });
         }
 
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(unix)]
+fn configure_process_tree_root(command: &mut Command) {
+    command.process_group(0);
+}
+
+#[cfg(windows)]
+fn configure_process_tree_root(command: &mut Command) {
+    command.creation_flags(CREATE_NEW_PROCESS_GROUP);
+}
+
+#[cfg(not(any(unix, windows)))]
+fn configure_process_tree_root(_command: &mut Command) {}
+
+#[cfg(unix)]
+fn terminate_child_process_tree(child: &mut Child) {
+    let group_id = child.id().to_string();
+    send_unix_process_group_signal("TERM", &group_id);
+    wait_for_child_exit(child, PROCESS_TREE_TERMINATION_GRACE);
+    if child.try_wait().ok().flatten().is_none() {
+        send_unix_process_group_signal("KILL", &group_id);
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+}
+
+#[cfg(unix)]
+fn send_unix_process_group_signal(signal: &str, group_id: &str) {
+    let process_group = format!("-{group_id}");
+    let _ = Command::new("kill")
+        .arg(format!("-{signal}"))
+        .arg("--")
+        .arg(process_group)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+#[cfg(windows)]
+fn terminate_child_process_tree(child: &mut Child) {
+    let pid = child.id();
+    stop_windows_process_tree(pid);
+    let pid = pid.to_string();
+    let _ = Command::new("taskkill")
+        .args(["/PID", pid.as_str(), "/T", "/F"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[cfg(windows)]
+fn stop_windows_process_tree(root_pid: u32) {
+    let script = format!(
+        r#"
+$ErrorActionPreference = 'SilentlyContinue'
+$RootProcessId = {root_pid}
+$Processes = Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId
+$Pending = New-Object System.Collections.Generic.Queue[int]
+$Targets = New-Object System.Collections.Generic.List[int]
+$Pending.Enqueue($RootProcessId)
+while ($Pending.Count -gt 0) {{
+    $ParentProcessId = $Pending.Dequeue()
+    foreach ($Process in $Processes) {{
+        if ($Process.ParentProcessId -eq $ParentProcessId) {{
+            $ProcessId = [int]$Process.ProcessId
+            [void]$Targets.Add($ProcessId)
+            $Pending.Enqueue($ProcessId)
+        }}
+    }}
+}}
+for ($Index = $Targets.Count - 1; $Index -ge 0; $Index--) {{
+    Stop-Process -Id $Targets[$Index] -Force -ErrorAction SilentlyContinue
+}}
+Stop-Process -Id $RootProcessId -Force -ErrorAction SilentlyContinue
+"#
+    );
+
+    let _ = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script.as_str(),
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+#[cfg(not(any(unix, windows)))]
+fn terminate_child_process_tree(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[cfg(unix)]
+fn wait_for_child_exit(child: &mut Child, timeout: Duration) {
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        if child.try_wait().ok().flatten().is_some() {
+            return;
+        }
         thread::sleep(Duration::from_millis(10));
     }
 }
@@ -1638,6 +1761,84 @@ mod tests {
             error,
             ToolExecutionError::CommandCanceled { ref reason, .. } if reason == "stop command"
         ));
+    }
+
+    #[test]
+    fn shell_cancels_descendant_processes() {
+        let workspace = TestWorkspace::new("tool-execution");
+        let tools = WorkspaceToolExecutor::new(workspace.path()).expect("workspace should open");
+        let cancellation_token = CancellationToken::new();
+        let cancel_from_thread = cancellation_token.clone();
+        let cancel_thread = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            cancel_from_thread.cancel("stop process tree");
+        });
+
+        #[cfg(windows)]
+        let command = r#"cmd /C "ping -n 4 127.0.0.1 > nul && echo alive>tree-marker.txt""#;
+        #[cfg(not(windows))]
+        let command = "(sleep 3; printf alive > tree-marker.txt) & wait";
+
+        let error = tools
+            .shell_with_cancellation(
+                ShellArgs {
+                    command: command.to_owned(),
+                    cwd: None,
+                    timeout_ms: Some(10_000),
+                },
+                &cancellation_token,
+            )
+            .expect_err("shell process tree should be canceled");
+        cancel_thread.join().expect("cancel thread should join");
+
+        assert!(matches!(
+            error,
+            ToolExecutionError::CommandCanceled { ref reason, .. }
+                if reason == "stop process tree"
+        ));
+
+        std::thread::sleep(std::time::Duration::from_millis(4_000));
+        assert!(
+            !workspace.path().join("tree-marker.txt").exists(),
+            "descendant process survived cancellation and wrote the marker"
+        );
+    }
+
+    #[test]
+    fn shell_timeout_cleans_descendant_processes() {
+        let workspace = TestWorkspace::new("tool-execution");
+        let tools = WorkspaceToolExecutor::new(workspace.path()).expect("workspace should open");
+        let cancellation_token = CancellationToken::new();
+
+        #[cfg(windows)]
+        let command = r#"cmd /C "ping -n 4 127.0.0.1 > nul && echo alive>tree-marker.txt""#;
+        #[cfg(not(windows))]
+        let command = "(sleep 3; printf alive > tree-marker.txt) & wait";
+
+        let error = tools
+            .shell_with_cancellation(
+                ShellArgs {
+                    command: command.to_owned(),
+                    cwd: None,
+                    timeout_ms: Some(100),
+                },
+                &cancellation_token,
+            )
+            .expect_err("shell process tree should time out");
+
+        assert!(matches!(
+            error,
+            ToolExecutionError::CommandTimedOut {
+                timeout_ms: 100,
+                ..
+            }
+        ));
+
+        std::thread::sleep(std::time::Duration::from_millis(4_000));
+        assert!(
+            !workspace.path().join("tree-marker.txt").exists(),
+            "descendant process survived timeout cleanup and wrote the marker"
+        );
     }
 
     #[test]
