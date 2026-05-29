@@ -86,7 +86,7 @@
 | [x] | 命令风险分类器和动态风险升级 | `README.md`、`docs/approval-model.md`、`docs/tool-system.md`、`docs/turn-loop.md` | 已完成：Agent Core 对 shell 命令做词法分段和显式命令族分类，递归检查 shell 包装器、`$(...)` 和传统反引号子命令，识别依赖安装、网络访问、远程 git、删除和发布命令，升级 `tool.requested` / `tool.approvalRequired` 风险并输出 `riskReasons`；VS Code/CLI/TUI 展示升级原因。验收：`cargo fmt --check`、`cargo test -p prole-coder-agent-core command_risk`、`cargo test -p prole-coder-agent-core turn_loop_upgrades_shell_approval_risk`、`cargo test`、`cargo clippy --all-targets -- -D warnings`、`pnpm -r typecheck`、`pnpm -r lint`、`pnpm -r test`、`git diff --check`。 |
 | [ ] | 更强进程树清理策略 | `docs/tool-system.md`、`docs/security-model.md`、`docs/roadmap.md` | 当前 shell/search/git 等只做基础协作式取消和 child kill。 |
 | [x] | Native diff editor 与 hunk 级审批边界 | `README.md`、`docs/vscode-extension.md` | 已完成：VS Code 侧新增 patch preview controller，缓存 `tool.requested.argumentsPreview.unifiedDiff`，在 `apply_patch` 审批 modal 前打开 VS Code 原生 diff editor；纯 TS parser 会生成稳定 hunk approval boundary，当前仍以 whole-patch approve/reject 回传，为后续 hunk 级决策预留结构。验收：`pnpm -r typecheck`、`pnpm -r lint`、`pnpm -r test`。 |
-| [ ] | Run List / resume | `README.md`、`docs/vscode-extension.md`、`docs/rpc-server.md` | 复用 `agent.listRuns` 与 run summary metadata。 |
+| [x] | Run List / resume | `README.md`、`docs/vscode-extension.md`、`docs/rpc-server.md` | 已完成：VS Code Sidebar Chat 通过 typed `RpcServerManager.listRuns()` 拉取最近 run summary，Run List 保留 loading/failed/selected 状态；点击历史 run 会调用 `agent.resume` 并清空当前事件视图，随后消费 replay 的 `agent.event`。验收：`pnpm -r typecheck`、`pnpm -r lint`、`pnpm -r test`。 |
 | [ ] | Context Capsule 可视化 | `README.md`、`docs/context-capsule.md`、`docs/vscode-extension.md` | 基于 `context.built` 的 included/omitted sources、三层 token 预算和 cache placement。 |
 
 ## Phase 4：VS Code 深度集成
