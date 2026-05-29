@@ -6,8 +6,10 @@ import {
   DEFAULT_RPC_COMMAND,
   RPC_APPROVE_METHOD,
   RPC_INITIALIZE_METHOD,
+  RPC_LIST_RUNS_METHOD,
   RPC_PROTOCOL_VERSION,
   RPC_REJECT_METHOD,
+  RPC_RESUME_METHOD,
   RPC_SEND_TURN_METHOD,
   RpcRequestError,
   RpcServerManager,
@@ -186,6 +188,78 @@ test("RPC server manager sends typed agent.sendTurn requests and resolves matchi
     runId: "run_1",
     turnId: "turn_1",
     accepted: true,
+  });
+});
+
+test("RPC server manager sends typed run list and resume requests", async () => {
+  const factory = new FakeProcessFactory();
+  const manager = rpcManagerWithFactory(factory);
+  const readyPromise = manager.start();
+  const child = factory.lastChild();
+  child.stdout.pushJson(initializeResponse(child.initializeRequest().id));
+  await readyPromise;
+
+  const listPromise = manager.listRuns({ limit: 10 });
+  await flushMicrotasks();
+  const listRequest = child.requestAt(1);
+  assert.equal(listRequest.method, RPC_LIST_RUNS_METHOD);
+  assert.deepEqual(listRequest.params, { limit: 10 });
+  child.stdout.pushJson({
+    jsonrpc: "2.0",
+    id: listRequest.id,
+    result: {
+      runs: [
+        {
+          runId: "run_1",
+          title: "Update docs",
+          status: "completed",
+          startedAt: "1970-01-01T00:00:00.000Z",
+          updatedAt: "1970-01-01T00:00:01.000Z",
+          completedAt: "1970-01-01T00:00:01.000Z",
+          lastSeq: 8,
+          eventCount: 8,
+          mode: "edit",
+          summary: "done",
+        },
+      ],
+    },
+  });
+  assert.deepEqual(await listPromise, {
+    runs: [
+      {
+        runId: "run_1",
+        title: "Update docs",
+        status: "completed",
+        startedAt: "1970-01-01T00:00:00.000Z",
+        updatedAt: "1970-01-01T00:00:01.000Z",
+        completedAt: "1970-01-01T00:00:01.000Z",
+        lastSeq: 8,
+        eventCount: 8,
+        mode: "edit",
+        summary: "done",
+      },
+    ],
+  });
+
+  const resumePromise = manager.resume({ runId: "run_1", replayFromSeq: 3 });
+  await flushMicrotasks();
+  const resumeRequest = child.requestAt(2);
+  assert.equal(resumeRequest.method, RPC_RESUME_METHOD);
+  assert.deepEqual(resumeRequest.params, { runId: "run_1", replayFromSeq: 3 });
+  child.stdout.pushJson({
+    jsonrpc: "2.0",
+    id: resumeRequest.id,
+    result: {
+      runId: "run_1",
+      nextSeq: 9,
+      replayStarted: true,
+    },
+  });
+
+  assert.deepEqual(await resumePromise, {
+    runId: "run_1",
+    nextSeq: 9,
+    replayStarted: true,
   });
 });
 
