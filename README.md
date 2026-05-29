@@ -566,7 +566,7 @@ extension.ts
 
 ## 开发计划
 
-当前进度：Phase 1 Agent Core MVP 功能闭环和 Phase 2 的 1M Context Capsule 核心收敛均已完成。DeepSeek provider、基础工具执行、Context Builder、Run Log、Turn Loop、CLI、RPC、审批、取消、真实 DeepSeek streaming/tool-call 验收、本地 fixture smoke、进程级 CLI smoke、小型真实仓库 CLI 联网验收、合并前测试收敛、Context Capsule、manifest、token estimator、attachments、provider summary、Run Log 体积控制、tool call JSON Schema 校验、200K/500K/900K 离线大上下文验收入口和 Phase 2e 展示型 demo 扩展均已完成；VS Code RPC server 启动监管、JSON-RPC request client、RPC 全双工 reader/writer 与事件发送队列、Sidebar Chat 事件渲染、Chat 输入发送真实 turn、真实审批回传、命令风险动态升级、Native diff editor patch 预览和 Run List / resume 均已完成。下一步继续 Phase 3 的更强进程树清理和 Context Capsule 可视化。
+当前进度：Phase 1 Agent Core MVP 功能闭环和 Phase 2 的 1M Context Capsule 核心收敛均已完成。DeepSeek provider、基础工具执行、Context Builder、Run Log、Turn Loop、CLI、RPC、审批、取消、真实 DeepSeek streaming/tool-call 验收、本地 fixture smoke、进程级 CLI smoke、小型真实仓库 CLI 联网验收、合并前测试收敛、Context Capsule、manifest、token estimator、attachments、provider summary、Run Log 体积控制、tool call JSON Schema 校验、200K/500K/900K 离线大上下文验收入口和 Phase 2e 展示型 demo 扩展均已完成；VS Code RPC server 启动监管、JSON-RPC request client、RPC 全双工 reader/writer 与事件发送队列、Sidebar Chat 事件渲染、Chat 输入发送真实 turn、真实审批回传、命令风险动态升级、Native diff editor patch 预览、Run List / resume 和 Context Capsule 可视化均已完成。下一步继续 Phase 3 的更强进程树清理。
 
 ### Phase 0：项目章程
 
@@ -647,7 +647,7 @@ extension.ts
 - [x] 命令风险分类器和动态风险升级：Agent Core 已在 shell 审批前识别依赖安装、网络访问、远程 git、删除和发布命令，升级 `tool.requested` / `tool.approvalRequired` 的风险，并通过 `riskReasons` 在 CLI/TUI/VS Code 审批展示升级原因。
 - [x] Native diff editor 展示 patch，并为 hunk 级审批预留交互边界：VS Code 侧缓存 `tool.requested` 的 `apply_patch` unified diff，在对应 `tool.approvalRequired` 前用 VS Code 原生 diff editor 展示虚拟补丁结果，并生成稳定 hunk approval boundary 供后续细粒度审批复用。
 - [x] Run List / resume：Sidebar Chat 已通过 typed `RpcServerManager.listRuns()` 拉取 run summary，并可点击历史 run 调用 `agent.resume` 清空当前事件视图后按 Run Log `seq` 重放。
-- [ ] Context Capsule 可视化。
+- [x] Context Capsule 可视化：Sidebar Chat 已消费 `context.built` metadata，展示 StablePrefix / DynamicPrelude / TurnSuffix token 分布、input/stable budget、cache/estimator 摘要、included/omitted sources 和 manifest 摘要。
 
 验收标准：
 
@@ -657,6 +657,7 @@ extension.ts
 - Sidebar Chat 能展示 `assistant.delta`、tool lifecycle 和 terminal event；Chat 输入能发送真实 `agent.sendTurn` 并收到最终结果。已完成首版输入发送和事件流收口。
 - VS Code 审批弹窗能消费 `tool.approvalRequired`，并把 approve/reject 回传到 `agent.approve` / `agent.reject`。已完成首版真实 RPC pending queue 接入。
 - Sidebar Chat 能展示最近 run 列表，并通过 `agent.resume` 回放历史事件。已完成首版 Run List / resume 接入。
+- Sidebar Chat 能可视化 `context.built` 的 token 分段、来源纳入/省略和 manifest/cache/estimator metadata。已完成首版 Context Capsule 可视化。
 
 ### Phase 4：VS Code 深度集成
 

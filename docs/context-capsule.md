@@ -1,6 +1,6 @@
 # 上下文胶囊（Context Capsule）
 
-状态：草案，Phase 1 基础 Context Builder 已实现；Phase 2a/2b/2c/2d 已完成，下一步进入 Phase 3 的 VS Code/RPC 事件消费与上下文可视化。
+状态：草案，Phase 1 基础 Context Builder 已实现；Phase 2a/2b/2c/2d 已完成；Phase 3 的 VS Code/RPC 事件消费与 Context Capsule 可视化已完成首版。
 
 Context Capsule 是一次模型回合的结构化输入包。它面向 DeepSeek 的长上下文和上下文缓存能力设计。
 
@@ -187,7 +187,7 @@ Phase 2 按 4 个增量轮次落地：
 
 默认 token 统计使用 `utf8_bytes` 估算器：它用 UTF-8 字节数作为确定性估算，不是 DeepSeek tokenizer 的精确 token 数。`CalibratedEstimator` 也必须报告 `exact=false`，前端和后续 turn loop 不能把它展示成精确模型 token。
 
-当前 Context Builder 已接入基础 Agent Turn Loop。Turn Loop 会收集用户任务和调用方提供的上下文条目；如果调用方没有显式提供 `WorkspaceManifest` 条目，则自动生成 workspace manifest summary 放入 `StablePrefix`，生成 provider 请求输入，并把带有 section token 和 manifest 摘要的 `context.built` 事件写入 Run Log。基础 RPC 事件桥接和 `AgentTurnLoopRpcHandler` 已能把该事件发送为 JSON-RPC notification；后续仍需要扩展 git 状态、选中文件、工具结果和计划步骤的自动收集。
+当前 Context Builder 已接入基础 Agent Turn Loop。Turn Loop 会收集用户任务和调用方提供的上下文条目；如果调用方没有显式提供 `WorkspaceManifest` 条目，则自动生成 workspace manifest summary 放入 `StablePrefix`，生成 provider 请求输入，并把带有 section token 和 manifest 摘要的 `context.built` 事件写入 Run Log。基础 RPC 事件桥接和 `AgentTurnLoopRpcHandler` 已能把该事件发送为 JSON-RPC notification；VS Code Sidebar Chat 已能把 `context.built` metadata 渲染为 Context Capsule 面板，展示 StablePrefix / DynamicPrelude / TurnSuffix token 分布、input/stable budget、cache/estimator 摘要、included/omitted sources 和 manifest 摘要。后续仍需要扩展 git 状态、选中文件、工具结果和计划步骤的自动收集。
 
 ## 与工具系统的衔接
 

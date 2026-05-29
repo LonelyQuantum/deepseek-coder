@@ -87,7 +87,7 @@
 | [ ] | 更强进程树清理策略 | `docs/tool-system.md`、`docs/security-model.md`、`docs/roadmap.md` | 当前 shell/search/git 等只做基础协作式取消和 child kill。 |
 | [x] | Native diff editor 与 hunk 级审批边界 | `README.md`、`docs/vscode-extension.md` | 已完成：VS Code 侧新增 patch preview controller，缓存 `tool.requested.argumentsPreview.unifiedDiff`，在 `apply_patch` 审批 modal 前打开 VS Code 原生 diff editor；纯 TS parser 会生成稳定 hunk approval boundary，当前仍以 whole-patch approve/reject 回传，为后续 hunk 级决策预留结构。验收：`pnpm -r typecheck`、`pnpm -r lint`、`pnpm -r test`。 |
 | [x] | Run List / resume | `README.md`、`docs/vscode-extension.md`、`docs/rpc-server.md` | 已完成：VS Code Sidebar Chat 通过 typed `RpcServerManager.listRuns()` 拉取最近 run summary，Run List 保留 loading/failed/selected 状态；点击历史 run 会调用 `agent.resume` 并清空当前事件视图，随后消费 replay 的 `agent.event`。验收：`pnpm -r typecheck`、`pnpm -r lint`、`pnpm -r test`。 |
-| [ ] | Context Capsule 可视化 | `README.md`、`docs/context-capsule.md`、`docs/vscode-extension.md` | 基于 `context.built` 的 included/omitted sources、三层 token 预算和 cache placement。 |
+| [x] | Context Capsule 可视化 | `README.md`、`docs/context-capsule.md`、`docs/vscode-extension.md` | 已完成：VS Code Sidebar Chat 新增 Context Capsule 面板，消费 `context.built` metadata，展示 StablePrefix / DynamicPrelude / TurnSuffix token 分布、input/stable budget、cache/estimator 摘要、included/omitted source 预览和 manifest 摘要。验收：`pnpm -r typecheck`、`pnpm -r lint`、`pnpm -r test`。 |
 
 ## Phase 4：VS Code 深度集成
 
