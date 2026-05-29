@@ -14,6 +14,11 @@ import type {
 
 import { CHAT_RUN_MODES, DEFAULT_CHAT_MODE, parseChatTurnSubmission, sendTurnParams } from "./chatInput";
 import { ChatEventTimeline, type ChatTimelineSnapshot } from "./chatEvents";
+import {
+  contextVizFromEvent,
+  emptyContextViz,
+  type ContextVizSnapshot,
+} from "./contextViz";
 import type { AgentEventEnvelope, DisposableLike } from "./rpcServer";
 import {
   RUN_LIST_LIMIT,
@@ -58,7 +63,16 @@ interface RunsWebviewMessage {
   readonly runs: RunListSnapshot;
 }
 
-type ExtensionToWebviewMessage = SnapshotWebviewMessage | SubmissionWebviewMessage | RunsWebviewMessage;
+interface ContextWebviewMessage {
+  readonly type: "context";
+  readonly context: ContextVizSnapshot;
+}
+
+type ExtensionToWebviewMessage =
+  | SnapshotWebviewMessage
+  | SubmissionWebviewMessage
+  | RunsWebviewMessage
+  | ContextWebviewMessage;
 
 type ChatSubmissionStatus = "idle" | "sending" | "running" | "completed" | "failed" | "canceled";
 type TerminalSubmissionStatus = Extract<ChatSubmissionStatus, "completed" | "failed" | "canceled">;
@@ -84,6 +98,7 @@ export class ProleChatViewProvider implements vscode.WebviewViewProvider, Dispos
   private readonly rpcClient: ChatRpcClient | undefined;
   private submission: ChatSubmissionSnapshot = idleSubmission();
   private runList: RunListSnapshot = idleRunList();
+  private contextViz: ContextVizSnapshot = emptyContextViz();
   private rpcSubscription: DisposableLike | undefined;
   private viewMessageSubscription: DisposableLike | undefined;
   private view: vscode.WebviewView | undefined;
@@ -95,8 +110,15 @@ export class ProleChatViewProvider implements vscode.WebviewViewProvider, Dispos
     this.rpcClient = rpcClient;
     this.rpcSubscription = rpcClient?.onEvent((event) => {
       this.timeline.append(event);
+      const contextViz = contextVizFromEvent(event);
+      if (contextViz !== undefined) {
+        this.contextViz = contextViz;
+      }
       const terminal = this.updateSubmissionForEvent(event);
       this.postSnapshot();
+      if (contextViz !== undefined) {
+        this.postContext();
+      }
       this.postSubmission();
       if (terminal && this.view !== undefined) {
         void this.refreshRuns("Refreshing runs...");
@@ -119,10 +141,12 @@ export class ProleChatViewProvider implements vscode.WebviewViewProvider, Dispos
       this.timeline.snapshot(),
       this.submission,
       this.runList,
+      this.contextViz,
     );
     this.postSnapshot();
     this.postSubmission();
     this.postRuns();
+    this.postContext();
     void this.refreshRuns();
   }
 
@@ -187,6 +211,7 @@ export class ProleChatViewProvider implements vscode.WebviewViewProvider, Dispos
       status: "sending",
       message: "Sending turn...",
     });
+    this.setContextViz(emptyContextViz());
 
     try {
       const result = await this.rpcClient.sendTurn(sendTurnParams(parsed.value));
@@ -238,6 +263,14 @@ export class ProleChatViewProvider implements vscode.WebviewViewProvider, Dispos
     void this.view?.webview.postMessage(message);
   }
 
+  private postContext(): void {
+    const message: ExtensionToWebviewMessage = {
+      type: "context",
+      context: this.contextViz,
+    };
+    void this.view?.webview.postMessage(message);
+  }
+
   private setSubmission(submission: ChatSubmissionSnapshot): void {
     this.submission = submission;
     this.postSubmission();
@@ -246,6 +279,11 @@ export class ProleChatViewProvider implements vscode.WebviewViewProvider, Dispos
   private setRunList(runList: RunListSnapshot): void {
     this.runList = runList;
     this.postRuns();
+  }
+
+  private setContextViz(contextViz: ContextVizSnapshot): void {
+    this.contextViz = contextViz;
+    this.postContext();
   }
 
   private async refreshRuns(message = "Loading runs..."): Promise<void> {
@@ -281,6 +319,7 @@ export class ProleChatViewProvider implements vscode.WebviewViewProvider, Dispos
     this.timeline.clear();
     this.postSnapshot();
     this.setSubmission(idleSubmission());
+    this.setContextViz(emptyContextViz());
     this.setRunList(loadingRunList(this.runList, "Replaying run..."));
     try {
       const result = await this.rpcClient.resume({ runId });
@@ -325,11 +364,13 @@ function renderChatViewHtml(
   snapshot: ChatTimelineSnapshot,
   submission: ChatSubmissionSnapshot,
   runList: RunListSnapshot,
+  contextViz: ContextVizSnapshot,
 ): string {
   const nonce = nonceValue();
   const initialSnapshot = safeScriptJson(snapshot);
   const initialSubmission = safeScriptJson(submission);
   const initialRuns = safeScriptJson(runList);
+  const initialContext = safeScriptJson(contextViz);
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -503,6 +544,142 @@ function renderChatViewHtml(
       white-space: nowrap;
     }
 
+    .context-viz {
+      display: grid;
+      gap: 7px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border);
+      background: var(--vscode-sideBar-background);
+    }
+
+    .context-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .context-title {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 600;
+    }
+
+    .context-total {
+      flex: 0 1 auto;
+      min-width: 0;
+      color: var(--vscode-descriptionForeground);
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .context-body {
+      display: grid;
+      gap: 7px;
+    }
+
+    .context-token-bar {
+      display: flex;
+      width: 100%;
+      height: 10px;
+      overflow: hidden;
+      background: var(--vscode-editorWidget-border);
+    }
+
+    .context-token-segment {
+      min-width: 2px;
+    }
+
+    .context-token-segment.stable-prefix {
+      background: var(--vscode-charts-blue, #3794ff);
+    }
+
+    .context-token-segment.dynamic-prelude {
+      background: var(--vscode-charts-green, #89d185);
+    }
+
+    .context-token-segment.turn-suffix {
+      background: var(--vscode-charts-yellow, #cca700);
+    }
+
+    .context-segments,
+    .context-metrics,
+    .context-sources,
+    .context-manifest {
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+    }
+
+    .context-row,
+    .context-source-row,
+    .context-metric-row,
+    .context-manifest-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: baseline;
+      min-width: 0;
+      color: var(--vscode-descriptionForeground);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    .context-row strong,
+    .context-source-row strong,
+    .context-metric-row strong,
+    .context-manifest-row strong {
+      min-width: 0;
+      color: var(--vscode-foreground);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 500;
+    }
+
+    .context-value {
+      color: var(--vscode-descriptionForeground);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    .context-source-reason {
+      grid-column: 1 / -1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .context-source-tabs {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4px;
+    }
+
+    .context-tab {
+      height: 24px;
+      color: var(--vscode-button-secondaryForeground);
+      background: var(--vscode-button-secondaryBackground);
+      border: 1px solid transparent;
+      font: var(--vscode-font-size) var(--vscode-font-family);
+    }
+
+    .context-tab.active {
+      color: var(--vscode-button-foreground);
+      background: var(--vscode-button-background);
+    }
+
+    .context-tab:hover {
+      background: var(--vscode-button-secondaryHoverBackground);
+    }
+
     .events {
       display: grid;
       gap: 8px;
@@ -607,7 +784,8 @@ function renderChatViewHtml(
     .mode:focus,
     .send:focus,
     .refresh-runs:focus,
-    .run-entry:focus {
+    .run-entry:focus,
+    .context-tab:focus {
       outline: 1px solid var(--vscode-focusBorder);
       outline-offset: 1px;
     }
@@ -687,6 +865,13 @@ function renderChatViewHtml(
       <div id="run-message" class="run-message" aria-live="polite"></div>
       <div id="run-list" class="run-list"></div>
     </section>
+    <section class="context-viz" aria-label="Context Capsule">
+      <div class="context-header">
+        <div class="context-title">Context Capsule</div>
+        <div id="context-total" class="context-total">No context yet.</div>
+      </div>
+      <div id="context-body" class="context-body"></div>
+    </section>
     <section id="events" class="events" aria-label="Run events"></section>
     <form id="composer" class="composer">
       <textarea id="prompt" class="prompt" rows="3" placeholder="Ask ProleCoder" aria-label="Chat message"></textarea>
@@ -701,6 +886,7 @@ function renderChatViewHtml(
     const initialSnapshot = ${initialSnapshot};
     const initialSubmission = ${initialSubmission};
     const initialRuns = ${initialRuns};
+    const initialContext = ${initialContext};
     const runModes = ${safeScriptJson(CHAT_RUN_MODES)};
     const defaultMode = ${safeScriptJson(DEFAULT_CHAT_MODE)};
     const vscodeApi = acquireVsCodeApi();
@@ -708,6 +894,8 @@ function renderChatViewHtml(
     const runListRoot = document.getElementById("run-list");
     const runMessageRoot = document.getElementById("run-message");
     const refreshRunsButton = document.getElementById("refresh-runs");
+    const contextTotalRoot = document.getElementById("context-total");
+    const contextBodyRoot = document.getElementById("context-body");
     const statusTitle = document.getElementById("status-title");
     const statusSubtitle = document.getElementById("status-subtitle");
     const composer = document.getElementById("composer");
@@ -715,6 +903,8 @@ function renderChatViewHtml(
     const modeInput = document.getElementById("mode");
     const sendButton = document.getElementById("send");
     const submissionRoot = document.getElementById("submission");
+    let currentContext = initialContext;
+    let contextSourceTab = "included";
 
     for (const mode of runModes) {
       const option = document.createElement("option");
@@ -734,6 +924,9 @@ function renderChatViewHtml(
       }
       if (message && message.type === "runs") {
         renderRuns(message.runs);
+      }
+      if (message && message.type === "context") {
+        renderContext(message.context);
       }
     });
 
@@ -774,6 +967,7 @@ function renderChatViewHtml(
     render(initialSnapshot);
     renderSubmission(initialSubmission);
     renderRuns(initialRuns);
+    renderContext(initialContext);
 
     function render(snapshot) {
       const items = Array.isArray(snapshot.items) ? snapshot.items : [];
@@ -887,6 +1081,208 @@ function renderChatViewHtml(
         hour: "2-digit",
         minute: "2-digit",
       });
+    }
+
+    function renderContext(snapshot) {
+      const state = snapshot && typeof snapshot === "object" ? snapshot : initialContext;
+      currentContext = state;
+      contextBodyRoot.replaceChildren();
+
+      if (state.status !== "ready") {
+        contextTotalRoot.textContent = "No context yet.";
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "No context yet.";
+        contextBodyRoot.append(empty);
+        return;
+      }
+
+      contextTotalRoot.textContent = formatTokens(state.inputTokens) + " / " + formatTokens(state.maxInputTokens);
+      contextBodyRoot.append(renderContextTokenBar(state));
+      contextBodyRoot.append(renderContextSegments(state));
+      contextBodyRoot.append(renderContextMetrics(state));
+      contextBodyRoot.append(renderContextSources(state));
+      if (state.manifest) {
+        contextBodyRoot.append(renderContextManifest(state.manifest));
+      }
+    }
+
+    function renderContextTokenBar(state) {
+      const bar = document.createElement("div");
+      bar.className = "context-token-bar";
+      const segments = Array.isArray(state.segments) ? state.segments : [];
+      for (const segment of segments) {
+        if (typeof segment.tokens !== "number" || segment.tokens <= 0) {
+          continue;
+        }
+        const entry = document.createElement("div");
+        entry.className = "context-token-segment " + placementClass(segment.placement);
+        entry.style.flexGrow = String(segment.tokens);
+        entry.title = segment.label + ": " + formatTokens(segment.tokens) + " (" + formatPercent(segment.percent) + ")";
+        bar.append(entry);
+      }
+      return bar;
+    }
+
+    function renderContextSegments(state) {
+      const root = document.createElement("div");
+      root.className = "context-segments";
+      for (const segment of Array.isArray(state.segments) ? state.segments : []) {
+        root.append(
+          contextRow(
+            segment.label,
+            formatTokens(segment.tokens) + " - " + formatPercent(segment.percent),
+            segment.itemCount + " items",
+          ),
+        );
+      }
+      return root;
+    }
+
+    function renderContextMetrics(state) {
+      const root = document.createElement("div");
+      root.className = "context-metrics";
+      root.append(contextMetric("Input budget", formatPercent(state.inputPercent)));
+      root.append(contextMetric("Stable budget", formatPercent(state.stablePrefixBudgetPercent)));
+      root.append(contextMetric("Stable target", formatPercent(state.stablePrefixBudgetRatioPercent)));
+      if (typeof state.cacheHitTokens === "number" || typeof state.cacheMissTokens === "number") {
+        root.append(
+          contextMetric(
+            "Cache",
+            formatTokens(state.cacheHitTokens || 0) + " hit / " + formatTokens(state.cacheMissTokens || 0) + " miss",
+          ),
+        );
+      }
+      if (state.estimator) {
+        root.append(
+          contextMetric(
+            "Estimator",
+            state.estimator.name + (state.estimator.exact === true ? " exact" : " estimated"),
+          ),
+        );
+      }
+      if (typeof state.stablePrefixHash === "string") {
+        root.append(contextMetric("Stable hash", shortHash(state.stablePrefixHash)));
+      }
+      return root;
+    }
+
+    function renderContextSources(state) {
+      const root = document.createElement("div");
+      root.className = "context-sources";
+
+      const tabs = document.createElement("div");
+      tabs.className = "context-source-tabs";
+      tabs.append(contextTabButton("included", "Included", state.includedSourceCount));
+      tabs.append(contextTabButton("omitted", "Omitted", state.omittedSourceCount));
+      root.append(tabs);
+
+      const list = document.createElement("div");
+      list.className = "context-sources";
+      const sources = contextSourceTab === "omitted" ? state.omittedSources : state.includedSources;
+      if (!Array.isArray(sources) || sources.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = contextSourceTab === "omitted" ? "No omitted sources." : "No included sources.";
+        list.append(empty);
+      } else {
+        for (const source of sources) {
+          list.append(renderContextSource(source));
+        }
+      }
+      root.append(list);
+      return root;
+    }
+
+    function contextTabButton(tab, label, count) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "context-tab" + (contextSourceTab === tab ? " active" : "");
+      button.textContent = label + " " + count;
+      button.addEventListener("click", () => {
+        contextSourceTab = tab;
+        renderContext(currentContext);
+      });
+      return button;
+    }
+
+    function renderContextSource(source) {
+      const row = document.createElement("div");
+      row.className = "context-source-row";
+      const title = document.createElement("strong");
+      title.textContent = source.label;
+      const value = document.createElement("span");
+      value.className = "context-value";
+      value.textContent = formatTokens(source.tokens) + (source.required === true ? " required" : " optional");
+      row.append(title, value);
+
+      const reason = document.createElement("div");
+      reason.className = "context-source-reason";
+      reason.textContent = source.omissionReason
+        ? source.kind + " - " + source.omissionReason + " - " + source.reason
+        : source.kind + " - " + source.reason;
+      row.append(reason);
+      return row;
+    }
+
+    function renderContextManifest(manifest) {
+      const root = document.createElement("div");
+      root.className = "context-manifest";
+      root.append(contextMetric("Manifest", shortHash(manifest.manifestHash)));
+      root.append(contextMetric("Files", manifest.includedFiles + " / " + manifest.totalDiscoveredFiles));
+      root.append(contextMetric("Max entries", String(manifest.maxEntries)));
+      if (Array.isArray(manifest.omitted) && manifest.omitted.length > 0) {
+        const omitted = manifest.omitted.map((entry) => entry.reason + ": " + entry.count).join(", ");
+        root.append(contextMetric("Manifest omitted", omitted));
+      }
+      return root;
+    }
+
+    function contextMetric(label, value) {
+      return contextRow(label, value);
+    }
+
+    function contextRow(label, value, detail) {
+      const row = document.createElement("div");
+      row.className = detail ? "context-row" : "context-metric-row";
+      const title = document.createElement("strong");
+      title.textContent = label;
+      const amount = document.createElement("span");
+      amount.className = "context-value";
+      amount.textContent = value;
+      row.append(title, amount);
+      if (detail) {
+        const detailRoot = document.createElement("div");
+        detailRoot.className = "context-source-reason";
+        detailRoot.textContent = detail;
+        row.append(detailRoot);
+      }
+      return row;
+    }
+
+    function placementClass(placement) {
+      if (placement === "stable_prefix") {
+        return "stable-prefix";
+      }
+      if (placement === "dynamic_prelude") {
+        return "dynamic-prelude";
+      }
+      return "turn-suffix";
+    }
+
+    function formatTokens(value) {
+      return typeof value === "number" && Number.isFinite(value) ? Math.round(value).toLocaleString() : "0";
+    }
+
+    function formatPercent(value) {
+      return typeof value === "number" && Number.isFinite(value) ? value.toFixed(1).replace(".0", "") + "%" : "0%";
+    }
+
+    function shortHash(value) {
+      if (typeof value !== "string") {
+        return "";
+      }
+      return value.length > 18 ? value.slice(0, 18) + "..." : value;
     }
 
     function renderSubmission(submission) {
