@@ -4,8 +4,12 @@ import type {
   AgentEventEnvelope as ProtocolAgentEventEnvelope,
   ApproveParams,
   ApproveResult,
+  ListRunsParams,
+  ListRunsResult,
   RejectParams,
   RejectResult,
+  ResumeParams,
+  ResumeResult,
   SendTurnParams,
   SendTurnResult,
 } from "@prole-coder/protocol" with {
@@ -16,6 +20,8 @@ export const RPC_PROTOCOL_VERSION = "0.1.0";
 export const RPC_INITIALIZE_METHOD = "agent.initialize";
 export const RPC_EVENT_METHOD = "agent.event";
 export const RPC_SEND_TURN_METHOD = "agent.sendTurn";
+export const RPC_RESUME_METHOD = "agent.resume";
+export const RPC_LIST_RUNS_METHOD = "agent.listRuns";
 export const RPC_APPROVE_METHOD = "agent.approve";
 export const RPC_REJECT_METHOD = "agent.reject";
 export const DEFAULT_RPC_COMMAND = "prole";
@@ -302,6 +308,14 @@ export class RpcServerManager implements DisposableLike {
 
   sendTurn(params: SendTurnParams): Promise<SendTurnResult> {
     return this.sendRequest<SendTurnResult>(RPC_SEND_TURN_METHOD, params);
+  }
+
+  resume(params: ResumeParams): Promise<ResumeResult> {
+    return this.sendRequest<ResumeResult>(RPC_RESUME_METHOD, params);
+  }
+
+  listRuns(params: ListRunsParams = {}): Promise<ListRunsResult> {
+    return this.sendRequest<ListRunsResult>(RPC_LIST_RUNS_METHOD, params);
   }
 
   approve(params: ApproveParams): Promise<ApproveResult> {
