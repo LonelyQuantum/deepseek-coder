@@ -136,6 +136,7 @@ test("approval request and decision params use stable protocol fields", () => {
     title: "Run shell command",
     detail: "Execute cargo test",
     command: "cargo test",
+    riskReasons: ["dependency install/update"],
     persistable: false,
   } satisfies ApprovalRequest;
   const requiredPayload = {
@@ -146,6 +147,7 @@ test("approval request and decision params use stable protocol fields", () => {
     title: request.title,
     detail: request.detail,
     command: request.command,
+    riskReasons: request.riskReasons,
     persistable: request.persistable,
   } satisfies ToolApprovalRequiredPayload;
   const resolvedPayload = {

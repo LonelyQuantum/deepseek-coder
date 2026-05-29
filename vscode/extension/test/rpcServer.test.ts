@@ -4,8 +4,13 @@ import test from "node:test";
 import {
   DEFAULT_RPC_ARGS,
   DEFAULT_RPC_COMMAND,
+  RPC_APPROVE_METHOD,
   RPC_INITIALIZE_METHOD,
+  RPC_LIST_RUNS_METHOD,
   RPC_PROTOCOL_VERSION,
+  RPC_REJECT_METHOD,
+  RPC_RESUME_METHOD,
+  RPC_SEND_TURN_METHOD,
   RpcRequestError,
   RpcServerManager,
   type RpcChildProcess,
@@ -87,7 +92,71 @@ test("RPC server manager forwards agent.event notifications", async () => {
   ]);
 });
 
-test("RPC server manager sends JSON-RPC requests and resolves matching responses", async () => {
+test("RPC server manager ignores malformed agent.event notifications", async () => {
+  const factory = new FakeProcessFactory();
+  const manager = rpcManagerWithFactory(factory);
+  const received: unknown[] = [];
+  manager.onEvent((event) => received.push(event));
+
+  const readyPromise = manager.start();
+  const child = factory.lastChild();
+  child.stdout.pushJson(initializeResponse(child.initializeRequest().id));
+  await readyPromise;
+
+  child.stdout.pushJson({
+    jsonrpc: "2.0",
+    method: "agent.event",
+    params: {
+      seq: 1,
+      time: "1970-01-01T00:00:00.000Z",
+      type: "run.started",
+      payload: { mode: "ask" },
+    },
+  });
+
+  assert.deepEqual(received, []);
+});
+
+test("RPC server manager ignores non-agent.event notifications", async () => {
+  const factory = new FakeProcessFactory();
+  const manager = rpcManagerWithFactory(factory);
+  const received: unknown[] = [];
+  manager.onEvent((event) => received.push(event));
+
+  const readyPromise = manager.start();
+  const child = factory.lastChild();
+  child.stdout.pushJson(initializeResponse(child.initializeRequest().id));
+  await readyPromise;
+
+  child.stdout.pushJson({
+    jsonrpc: "2.0",
+    method: "window/logMessage",
+    params: {
+      message: "hello",
+    },
+  });
+
+  assert.deepEqual(received, []);
+});
+
+test("RPC server manager removes disposed event handlers", async () => {
+  const factory = new FakeProcessFactory();
+  const manager = rpcManagerWithFactory(factory);
+  const received: unknown[] = [];
+  const disposable = manager.onEvent((event) => received.push(event));
+  disposable.dispose();
+
+  const readyPromise = manager.start();
+  const child = factory.lastChild();
+  child.stdout.pushJson(initializeResponse(child.initializeRequest().id));
+  await readyPromise;
+
+  child.stdout.pushJson(agentEventNotification());
+
+  assert.deepEqual(received, []);
+});
+
+test("RPC server manager sends typed agent.sendTurn requests and resolves matching responses", async () => {
   const factory = new FakeProcessFactory();
   const manager = rpcManagerWithFactory(factory);
   const readyPromise = manager.start();
@@ -95,22 +164,179 @@ test("RPC server manager sends JSON-RPC requests and resolves matching responses
   child.stdout.pushJson(initializeResponse(child.initializeRequest().id));
   await readyPromise;
 
-  const responsePromise = manager.sendRequest<{ accepted: boolean }>("agent.sendTurn", {
-    prompt: "hello",
+  const responsePromise = manager.sendTurn({
+    message: "hello",
+    mode: "edit",
   });
   await flushMicrotasks();
   const request = child.requestAt(1);
 
-  assert.equal(request.method, "agent.sendTurn");
-  assert.deepEqual(request.params, { prompt: "hello" });
+  assert.equal(request.method, RPC_SEND_TURN_METHOD);
+  assert.deepEqual(request.params, { message: "hello", mode: "edit" });
 
   child.stdout.pushJson({
     jsonrpc: "2.0",
     id: request.id,
-    result: { accepted: true },
+    result: {
+      runId: "run_1",
+      turnId: "turn_1",
+      accepted: true,
+    },
   });
 
-  assert.deepEqual(await responsePromise, { accepted: true });
+  assert.deepEqual(await responsePromise, {
+    runId: "run_1",
+    turnId: "turn_1",
+    accepted: true,
+  });
+});
+
+test("RPC server manager sends typed run list and resume requests", async () => {
+  const factory = new FakeProcessFactory();
+  const manager = rpcManagerWithFactory(factory);
+  const readyPromise = manager.start();
+  const child = factory.lastChild();
+  child.stdout.pushJson(initializeResponse(child.initializeRequest().id));
+  await readyPromise;
+
+  const listPromise = manager.listRuns({ limit: 10 });
+  await flushMicrotasks();
+  const listRequest = child.requestAt(1);
+  assert.equal(listRequest.method, RPC_LIST_RUNS_METHOD);
+  assert.deepEqual(listRequest.params, { limit: 10 });
+  child.stdout.pushJson({
+    jsonrpc: "2.0",
+    id: listRequest.id,
+    result: {
+      runs: [
+        {
+          runId: "run_1",
+          title: "Update docs",
+          status: "completed",
+          startedAt: "1970-01-01T00:00:00.000Z",
+          updatedAt: "1970-01-01T00:00:01.000Z",
+          completedAt: "1970-01-01T00:00:01.000Z",
+          lastSeq: 8,
+          eventCount: 8,
+          mode: "edit",
+          summary: "done",
+        },
+      ],
+    },
+  });
+  assert.deepEqual(await listPromise, {
+    runs: [
+      {
+        runId: "run_1",
+        title: "Update docs",
+        status: "completed",
+        startedAt: "1970-01-01T00:00:00.000Z",
+        updatedAt: "1970-01-01T00:00:01.000Z",
+        completedAt: "1970-01-01T00:00:01.000Z",
+        lastSeq: 8,
+        eventCount: 8,
+        mode: "edit",
+        summary: "done",
+      },
+    ],
+  });
+
+  const resumePromise = manager.resume({ runId: "run_1", replayFromSeq: 3 });
+  await flushMicrotasks();
+  const resumeRequest = child.requestAt(2);
+  assert.equal(resumeRequest.method, RPC_RESUME_METHOD);
+  assert.deepEqual(resumeRequest.params, { runId: "run_1", replayFromSeq: 3 });
+  child.stdout.pushJson({
+    jsonrpc: "2.0",
+    id: resumeRequest.id,
+    result: {
+      runId: "run_1",
+      nextSeq: 9,
+      replayStarted: true,
+    },
+  });
+
+  assert.deepEqual(await resumePromise, {
+    runId: "run_1",
+    nextSeq: 9,
+    replayStarted: true,
+  });
+});
+
+test("RPC server manager sends typed approval requests", async () => {
+  const factory = new FakeProcessFactory();
+  const manager = rpcManagerWithFactory(factory);
+  const readyPromise = manager.start();
+  const child = factory.lastChild();
+  child.stdout.pushJson(initializeResponse(child.initializeRequest().id));
+  await readyPromise;
+
+  const approvePromise = manager.approve({
+    approvalId: "approval_1",
+    persist: "session",
+  });
+  await flushMicrotasks();
+  const approveRequest = child.requestAt(1);
+  assert.equal(approveRequest.method, RPC_APPROVE_METHOD);
+  assert.deepEqual(approveRequest.params, {
+    approvalId: "approval_1",
+    persist: "session",
+  });
+  child.stdout.pushJson({
+    jsonrpc: "2.0",
+    id: approveRequest.id,
+    result: {
+      approvalId: "approval_1",
+      state: "approved",
+      persist: "session",
+    },
+  });
+  assert.deepEqual(await approvePromise, {
+    approvalId: "approval_1",
+    state: "approved",
+    persist: "session",
+  });
+
+  const rejectPromise = manager.reject({
+    approvalId: "approval_2",
+    reason: "not now",
+  });
+  await flushMicrotasks();
+  const rejectRequest = child.requestAt(2);
+  assert.equal(rejectRequest.method, RPC_REJECT_METHOD);
+  assert.deepEqual(rejectRequest.params, {
+    approvalId: "approval_2",
+    reason: "not now",
+  });
+  child.stdout.pushJson({
+    jsonrpc: "2.0",
+    id: rejectRequest.id,
+    result: {
+      approvalId: "approval_2",
+      state: "rejected",
+      reason: "not now",
+    },
+  });
+  assert.deepEqual(await rejectPromise, {
+    approvalId: "approval_2",
+    state: "rejected",
+    reason: "not now",
+  });
+});
+
+test("RPC server manager rejects sendRequest when stdin write fails", async () => {
+  const factory = new FakeProcessFactory();
+  const manager = rpcManagerWithFactory(factory);
+  const readyPromise = manager.start();
+  const child = factory.lastChild();
+  child.stdout.pushJson(initializeResponse(child.initializeRequest().id));
+  await readyPromise;
+  child.failStdinWritesWith(new Error("stdin closed"));
+
+  await assert.rejects(
+    manager.sendRequest(RPC_SEND_TURN_METHOD, { message: "hello", mode: "edit" }),
+    /stdin closed/,
+  );
 });
 
 test("RPC server manager rejects JSON-RPC error responses", async () => {
@@ -121,7 +347,7 @@ test("RPC server manager rejects JSON-RPC error responses", async () => {
   child.stdout.pushJson(initializeResponse(child.initializeRequest().id));
   await readyPromise;
 
-  const responsePromise = manager.sendRequest("agent.approve", {
+  const responsePromise = manager.approve({
     approvalId: "approval_1",
   });
   await flushMicrotasks();
@@ -153,12 +379,78 @@ test("RPC server manager rejects pending requests when the server exits", async 
   child.stdout.pushJson(initializeResponse(child.initializeRequest().id));
   await readyPromise;
 
-  const responsePromise = manager.sendRequest("agent.sendTurn", { prompt: "hello" });
+  const responsePromise = manager.sendRequest(RPC_SEND_TURN_METHOD, {
+    message: "hello",
+    mode: "edit",
+  });
   await flushMicrotasks();
 
   child.exit(1, null);
 
   await assert.rejects(responsePromise, /exited before the request completed/);
+});
+
+test("RPC server manager rejects when spawn throws", async () => {
+  const factory = new FakeProcessFactory({
+    spawnError: new Error("spawn denied"),
+  });
+  const manager = rpcManagerWithFactory(factory);
+
+  await assert.rejects(manager.start(), /spawn denied/);
+
+  assert.equal(manager.status, "failed");
+});
+
+test("RPC server manager rejects when the child has missing stdio pipes", async () => {
+  const factory = new FakeProcessFactory({
+    childOptions: {
+      stdin: null,
+    },
+  });
+  const manager = rpcManagerWithFactory(factory);
+
+  await assert.rejects(manager.start(), /stdio pipes/);
+
+  assert.equal(manager.status, "failed");
+});
+
+test("RPC server manager fails startup on invalid JSON output", async () => {
+  const factory = new FakeProcessFactory();
+  const manager = rpcManagerWithFactory(factory);
+  const readyPromise = manager.start();
+  const child = factory.lastChild();
+
+  child.stdout.push("{not json}\n");
+
+  await assert.rejects(readyPromise, /invalid JSON/);
+  assert.equal(manager.status, "failed");
+  assert.equal(child.killed, true);
+});
+
+test("RPC server manager fails startup on process error", async () => {
+  const factory = new FakeProcessFactory();
+  const manager = rpcManagerWithFactory(factory);
+  const readyPromise = manager.start();
+  const child = factory.lastChild();
+
+  child.error(new Error("process launch failed"));
+
+  await assert.rejects(readyPromise, /process launch failed/);
+  assert.equal(manager.status, "failed");
+});
+
+test("RPC server manager stop rejects pending startup", async () => {
+  const factory = new FakeProcessFactory();
+  const manager = rpcManagerWithFactory(factory);
+  const readyPromise = manager.start();
+  const child = factory.lastChild();
+
+  manager.stop();
+
+  await assert.rejects(readyPromise, /stopped before initialization/);
+  assert.equal(child.killed, true);
+  assert.equal(child.stdinEnded, true);
+  assert.equal(manager.status, "stopped");
 });
 
 test("RPC server manager rejects untrusted workspaces without spawning", async () => {
@@ -218,6 +510,24 @@ test("RPC server manager warns when a ready server exits unexpectedly", async ()
   assert.ok(warnings[0]?.includes("exit code 1"));
 });
 
+test("RPC server manager records a bounded stderr preview", async () => {
+  const factory = new FakeProcessFactory();
+  const manager = rpcManagerWithFactory(factory);
+  const readyPromise = manager.start();
+  const child = factory.lastChild();
+
+  child.stderr.push("first stderr line\n");
+  child.stdout.pushJson(initializeResponse(child.initializeRequest().id));
+  await readyPromise;
+
+  assert.equal(manager.stderrPreview, "first stderr line\n");
+
+  child.stderr.push("x".repeat(5000));
+
+  assert.equal(manager.stderrPreview.length, 4096);
+  assert.ok(manager.stderrPreview.endsWith("x".repeat(64)));
+});
+
 test("RPC server manager disposes the child process", async () => {
   const factory = new FakeProcessFactory();
   const manager = rpcManagerWithFactory(factory);
@@ -229,7 +539,7 @@ test("RPC server manager disposes the child process", async () => {
   manager.dispose();
 
   assert.equal(child.killed, true);
-  assert.equal(child.stdin.ended, true);
+  assert.equal(child.stdinEnded, true);
   assert.equal(manager.status, "stopped");
 });
 
@@ -291,12 +601,31 @@ function initializeResponse(id: unknown): unknown {
   };
 }
 
+function agentEventNotification(): unknown {
+  return {
+    jsonrpc: "2.0",
+    method: "agent.event",
+    params: {
+      seq: 1,
+      time: "1970-01-01T00:00:00.000Z",
+      type: "run.started",
+      runId: "run_1",
+      payload: { mode: "ask" },
+    },
+  };
+}
+
 class FakeConfiguration implements RpcServerConfiguration {
   constructor(private readonly values: Record<string, unknown>) {}
 
   get<T>(section: string, defaultValue: T): T {
     return section in this.values ? (this.values[section] as T) : defaultValue;
   }
+}
+
+interface FakeProcessFactoryOptions {
+  readonly spawnError?: Error;
+  readonly childOptions?: FakeChildProcessOptions;
 }
 
 class FakeProcessFactory implements RpcProcessFactory {
@@ -306,12 +635,18 @@ class FakeProcessFactory implements RpcProcessFactory {
   spawnCount = 0;
   private child: FakeChildProcess | undefined;
 
+  constructor(private readonly options: FakeProcessFactoryOptions = {}) {}
+
   spawn(command: string, args: readonly string[], options: RpcSpawnOptions): RpcChildProcess {
     this.spawnCount += 1;
+    if (this.options.spawnError !== undefined) {
+      throw this.options.spawnError;
+    }
+
     this.lastCommand = command;
     this.lastArgs = [...args];
     this.lastOptions = options;
-    this.child = new FakeChildProcess();
+    this.child = new FakeChildProcess(this.options.childOptions);
     return this.child;
   }
 
@@ -324,8 +659,13 @@ class FakeProcessFactory implements RpcProcessFactory {
 class FakeWritable implements RpcWritable {
   readonly writes: string[] = [];
   ended = false;
+  private writeError: Error | undefined;
 
   write(data: string): unknown {
+    if (this.writeError !== undefined) {
+      throw this.writeError;
+    }
+
     this.writes.push(data);
     return true;
   }
@@ -333,6 +673,10 @@ class FakeWritable implements RpcWritable {
   end(): unknown {
     this.ended = true;
     return undefined;
+  }
+
+  failWritesWith(error: Error): void {
+    this.writeError = error;
   }
 }
 
@@ -358,14 +702,31 @@ class FakeReadable implements RpcReadable {
 }
 
 class FakeChildProcess implements RpcChildProcess {
-  readonly stdin = new FakeWritable();
+  private readonly fakeStdin = new FakeWritable();
   readonly stdout = new FakeReadable();
   readonly stderr = new FakeReadable();
   killed = false;
+  private readonly exposeStdin: boolean;
 
   private readonly exitListeners: Array<(code: number | null, signal: NodeJS.Signals | null) => void> =
     [];
   private readonly errorListeners: Array<(error: Error) => void> = [];
+
+  constructor(options: FakeChildProcessOptions = {}) {
+    this.exposeStdin = options.stdin !== null;
+  }
+
+  get stdin(): FakeWritable | null {
+    return this.exposeStdin ? this.fakeStdin : null;
+  }
+
+  get stdinEnded(): boolean {
+    return this.fakeStdin.ended;
+  }
+
+  failStdinWritesWith(error: Error): void {
+    this.fakeStdin.failWritesWith(error);
+  }
 
   kill(): boolean {
     this.killed = true;
@@ -387,7 +748,7 @@ class FakeChildProcess implements RpcChildProcess {
   }
 
   initializeRequest(): InitializeRequest {
-    const firstWrite = this.stdin.writes[0];
+    const firstWrite = this.fakeStdin.writes[0];
     assert.ok(firstWrite);
     return JSON.parse(firstWrite) as InitializeRequest;
   }
@@ -405,10 +766,14 @@ class FakeChildProcess implements RpcChildProcess {
   }
 
   requestAt(index: number): RpcRequest {
-    const write = this.stdin.writes[index];
+    const write = this.fakeStdin.writes[index];
     assert.ok(write);
     return JSON.parse(write) as RpcRequest;
   }
+}
+
+interface FakeChildProcessOptions {
+  readonly stdin?: null;
 }
 
 interface InitializeRequest {

@@ -31,7 +31,7 @@ prole rpc [options]
 - `--max-input-tokens <n>`、`--max-model-turns <n>`、`--max-output-tokens <n>`
 - `--thinking <enabled|disabled>`
 
-`prole rpc` 从 stdin 读取 newline-delimited JSON-RPC request，并把 response / `agent.event` notification 写到 stdout。它当前接入 `AgentTurnLoopRpcHandler`：`agent.sendTurn` 会创建 run log、启动后台 Turn Loop worker，并在 run 结束或遇到 `tool.approvalRequired` 时返回 response 和事件；`agent.approve` / `agent.reject` 会唤醒 pending approval 队列并继续输出后续事件。显式取消、审批过期和 pending approval 场景下的 EOF shutdown 取消已实现；完全全双工的后台事件 writer 与长 provider request 期间的断连感知归入 Phase 3 共享 RPC 交互管线。
+`prole rpc` 从 stdin 读取 newline-delimited JSON-RPC request，并把 response / `agent.event` notification 写到 stdout。它当前接入 `AgentTurnLoopRpcHandler`：`agent.sendTurn` 会创建 run log、启动后台 Turn Loop worker，并立即返回 accepted；后续事件由全双工 live event queue 持续输出。`agent.approve` / `agent.reject` 会唤醒 pending approval 队列并继续输出后续事件。显式取消、审批过期、EOF shutdown 取消和 writer failure 断连取消已实现。
 
 ## Provider
 
@@ -119,7 +119,7 @@ CLI 二进制默认会在 `apply_patch`、`shell` 等需要审批的工具执行
 
 - CLI DeepSeek provider 已能聚合 streaming tool call delta；`live_deepseek_cli_real_repo_acceptance_test` 已作为 ignored live test 覆盖真实写入、验证和 run log，并已在 Windows 本机通过。
 - verification 只支持用户显式提供的单条 shell command。
-- `rpc` 子命令已接入 `agent-rpc` request loop 和真实 pending approval 队列；长 provider 请求仍会占用当前 request，后续需要全双工异步 run 队列。
+- `rpc` 子命令已接入 `agent-rpc` 全双工 request loop、真实 pending approval 队列、active run 断连取消和命令子进程树清理；后续仍需要输出节流、多 active run 和更强 sandbox。
 - 如果 fixture 场景继续增加，应把 CLI fixture 与 `agent-core` 的 scripted provider 抽成共享测试 harness，减少两套测试替身并行维护。
 
 ## 本地 smoke test 示例

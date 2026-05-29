@@ -27,6 +27,10 @@ export interface RpcServerStarter {
   }>;
 }
 
+export interface ChatViewOpener {
+  openChatView(): unknown;
+}
+
 export interface ApprovalWindowMessenger {
   showWarningMessage(
     message: string,
@@ -51,6 +55,7 @@ export interface ApprovalPromptRequest {
   readonly persistable: boolean;
   readonly command?: string;
   readonly paths?: readonly string[];
+  readonly riskReasons?: readonly string[];
 }
 
 export type ApprovalPromptDecision =
@@ -69,8 +74,11 @@ export function registerOpenChatCommand(
   commands: CommandRegistry,
   window: WindowMessenger,
   rpcServer?: RpcServerStarter,
+  chatView?: ChatViewOpener,
 ): DisposableLike {
   return commands.registerCommand(OPEN_CHAT_COMMAND, () => {
+    chatView?.openChatView();
+
     if (rpcServer === undefined) {
       return window.showInformationMessage(OPEN_CHAT_NO_WORKSPACE_MESSAGE);
     }
@@ -144,6 +152,10 @@ function formatApprovalMessage(request: ApprovalPromptRequest): string {
     `Tool: ${request.toolName}`,
     `Risk: ${request.risk}`,
   ];
+
+  if (request.riskReasons !== undefined && request.riskReasons.length > 0) {
+    detail.push(`Risk reasons: ${request.riskReasons.join(", ")}`);
+  }
 
   if (request.command !== undefined) {
     detail.push(`Command: ${request.command}`);

@@ -1,8 +1,29 @@
 import { spawn } from "node:child_process";
 
+import type {
+  AgentEventEnvelope as ProtocolAgentEventEnvelope,
+  ApproveParams,
+  ApproveResult,
+  ListRunsParams,
+  ListRunsResult,
+  RejectParams,
+  RejectResult,
+  ResumeParams,
+  ResumeResult,
+  SendTurnParams,
+  SendTurnResult,
+} from "@prole-coder/protocol" with {
+  "resolution-mode": "import",
+};
+
 export const RPC_PROTOCOL_VERSION = "0.1.0";
 export const RPC_INITIALIZE_METHOD = "agent.initialize";
 export const RPC_EVENT_METHOD = "agent.event";
+export const RPC_SEND_TURN_METHOD = "agent.sendTurn";
+export const RPC_RESUME_METHOD = "agent.resume";
+export const RPC_LIST_RUNS_METHOD = "agent.listRuns";
+export const RPC_APPROVE_METHOD = "agent.approve";
+export const RPC_REJECT_METHOD = "agent.reject";
 export const DEFAULT_RPC_COMMAND = "prole";
 export const DEFAULT_RPC_ARGS = ["rpc"] as const;
 
@@ -64,14 +85,7 @@ export interface RpcProcessFactory {
   spawn(command: string, args: readonly string[], options: RpcSpawnOptions): RpcChildProcess;
 }
 
-export interface AgentEventEnvelope {
-  readonly seq: number;
-  readonly time: string;
-  readonly type: string;
-  readonly runId?: string;
-  readonly turnId?: string;
-  readonly payload: unknown;
-}
+export type AgentEventEnvelope = ProtocolAgentEventEnvelope;
 
 export interface DisposableLike {
   dispose(): unknown;
@@ -290,6 +304,26 @@ export class RpcServerManager implements DisposableLike {
     }
 
     return promise;
+  }
+
+  sendTurn(params: SendTurnParams): Promise<SendTurnResult> {
+    return this.sendRequest<SendTurnResult>(RPC_SEND_TURN_METHOD, params);
+  }
+
+  resume(params: ResumeParams): Promise<ResumeResult> {
+    return this.sendRequest<ResumeResult>(RPC_RESUME_METHOD, params);
+  }
+
+  listRuns(params: ListRunsParams = {}): Promise<ListRunsResult> {
+    return this.sendRequest<ListRunsResult>(RPC_LIST_RUNS_METHOD, params);
+  }
+
+  approve(params: ApproveParams): Promise<ApproveResult> {
+    return this.sendRequest<ApproveResult>(RPC_APPROVE_METHOD, params);
+  }
+
+  reject(params: RejectParams): Promise<RejectResult> {
+    return this.sendRequest<RejectResult>(RPC_REJECT_METHOD, params);
   }
 
   stop(): void {
@@ -521,6 +555,7 @@ function isAgentEventEnvelope(value: unknown): value is AgentEventEnvelope {
     typeof value["seq"] === "number" &&
     typeof value["time"] === "string" &&
     typeof value["type"] === "string" &&
+    typeof value["runId"] === "string" &&
     typeof value["payload"] !== "undefined"
   );
 }

@@ -2,7 +2,7 @@
 
 use std::{
     env,
-    io::{self, Write},
+    io::{self, BufReader, Write},
     process::ExitCode,
 };
 
@@ -10,7 +10,7 @@ fn main() -> ExitCode {
     let mut stdout = io::stdout();
     let mut stderr = io::stderr();
     let stdin = io::stdin();
-    let mut stdin = stdin.lock();
+    let mut stdin = BufReader::new(stdin);
 
     match prole_coder_cli::run_cli_with_input(env::args(), &mut stdin, &mut stdout, &mut stderr) {
         Ok(()) => ExitCode::SUCCESS,

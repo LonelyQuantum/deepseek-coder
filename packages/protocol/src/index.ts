@@ -519,6 +519,7 @@ export interface ApprovalRequest {
   readonly toolName: ToolName;
   readonly command?: string;
   readonly paths?: readonly string[];
+  readonly riskReasons?: readonly string[];
   readonly persistable: boolean;
 }
 
@@ -613,6 +614,7 @@ export interface ToolApprovalRequiredPayload {
   readonly detail: string;
   readonly command?: string;
   readonly paths?: readonly string[];
+  readonly riskReasons?: readonly string[];
   readonly persistable: boolean;
 }
 

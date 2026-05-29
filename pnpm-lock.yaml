@@ -19,6 +19,9 @@ importers:
 
   vscode/extension:
     devDependencies:
+      '@prole-coder/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
       '@types/node':
         specifier: ^24.0.0
         version: 24.12.4

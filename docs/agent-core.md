@@ -68,7 +68,7 @@ Phase 2a/2b/2c 已把基础 builder 升级为结构化 `ContextCapsule`：先构
 
 Phase 1 已实现 `WorkspaceToolExecutor`，作为 workspace_manifest/read/search/apply_patch/shell/git 工具的基础执行层。它负责 workspace 路径解析、敏感路径拒绝、命令超时和结构化工具结果。详细设计见 `docs/tool-system.md`。
 
-当前执行层已接入基础 Agent Turn Loop，可以跑通“模型请求工具 -> 请求审批 -> 记录审批决定 -> 执行工具 -> 写入 run log -> 继续下一轮模型调用”的 fake provider 集成测试。RPC handler 已能在 `tool.approvalRequired` 处等待 `agent.approve` / `agent.reject` / `agent.cancel` 或审批超时，并能通过 `CancellationToken` 协作式取消 provider request 和命令类工具。Phase 2d 已加入 tool call JSON Schema 预校验：模型 arguments 会先解析为 `serde_json::Value` 并按工具注册表 schema 校验，再进入 Rust typed deserialization、审批和执行。尚未完成的是命令风险分类器和更强 sandbox。
+当前执行层已接入基础 Agent Turn Loop，可以跑通“模型请求工具 -> 请求审批 -> 记录审批决定 -> 执行工具 -> 写入 run log -> 继续下一轮模型调用”的 fake provider 集成测试。RPC handler 已能在 `tool.approvalRequired` 处等待 `agent.approve` / `agent.reject` / `agent.cancel` 或审批超时，并能通过 `CancellationToken` 协作式取消 provider request 和命令类工具。Phase 2d 已加入 tool call JSON Schema 预校验：模型 arguments 会先解析为 `serde_json::Value` 并按工具注册表 schema 校验，再进入 Rust typed deserialization、审批和执行。Phase 3 已加入 shell 命令风险分类器，在审批前识别依赖安装、网络访问、远程 git、删除、reset 和发布等高风险操作并升级风险；命令类工具取消或超时时也会清理子进程树。尚未完成的是更强 sandbox。
 
 ## Run Log
 
@@ -94,8 +94,8 @@ Phase 1 已通过以下闭环验收：
 
 ## 后续增强
 
-- 实现 RPC 全双工事件 writer 队列，让 `agent.sendTurn` 可以更早返回 accepted，并在后台持续推送事件。
-- 优先将 VS Code 接入真实 RPC pending approval 队列，TUI 后续复用同一协议和审批模型。
-- 实现命令风险分类器和更强 sandbox，区分普通测试命令、网络访问、删除、reset、发布等高风险操作。
+- 扩展 RPC active run 管理到多 active run 和跨进程恢复。
+- 继续增强 TUI 对真实 RPC pending approval 队列的接入，复用同一协议和审批模型。
+- 实现更强 sandbox；命令风险分类器已能区分普通测试命令、网络访问、删除、reset、发布等高风险操作，命令子进程树清理也已完成。
 - 扩展 DeepSeek cache hit/miss 手动样本，在大上下文重复前缀场景下记录更清晰的 live 验收过程。
 - 扩展 `crates/agent-rpc` 的 client 断连取消和多 active run 管理，供 CLI/TUI/VS Code 共享。

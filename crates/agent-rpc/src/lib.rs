@@ -77,6 +77,8 @@ pub const RPC_RUN_CANCELED: i64 = -32050;
 pub const RPC_INTERNAL_INVARIANT: i64 = -32060;
 
 pub const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(300);
+const RPC_LOOP_QUEUE_BOUND: usize = 256;
+const RPC_LIVE_EVENT_QUEUE_BOUND: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JsonRpcRequest<TParams = Value> {
@@ -496,6 +498,14 @@ impl AgentRpcHandlerError {
 }
 
 pub trait AgentRpcRequestHandler {
+    fn attach_live_event_sender(&mut self, _sender: mpsc::SyncSender<RunLogEvent>) {}
+
+    fn detach_live_event_sender(&mut self) {}
+
+    fn attach_disconnect_handle(&mut self, _handle: RpcDisconnectHandle) {}
+
+    fn detach_disconnect_handle(&mut self) {}
+
     fn initialize(
         &mut self,
         params: AgentInitializeParams,
@@ -567,6 +577,8 @@ pub struct AgentTurnLoopRpcHandler<F> {
     workspace: Option<RpcWorkspace>,
     approval_queue: RpcApprovalQueue,
     active_run: Option<ActiveRpcRun>,
+    live_event_sender: Option<mpsc::SyncSender<RunLogEvent>>,
+    disconnect_handle: Option<RpcDisconnectHandle>,
 }
 
 impl<F> AgentTurnLoopRpcHandler<F> {
@@ -577,6 +589,8 @@ impl<F> AgentTurnLoopRpcHandler<F> {
             workspace: None,
             approval_queue: RpcApprovalQueue::default(),
             active_run: None,
+            live_event_sender: None,
+            disconnect_handle: None,
         }
     }
 
@@ -602,6 +616,22 @@ where
     F: RpcTurnProviderFactory,
     F::Provider: Send + 'static,
 {
+    fn attach_live_event_sender(&mut self, sender: mpsc::SyncSender<RunLogEvent>) {
+        self.live_event_sender = Some(sender);
+    }
+
+    fn detach_live_event_sender(&mut self) {
+        self.live_event_sender = None;
+    }
+
+    fn attach_disconnect_handle(&mut self, handle: RpcDisconnectHandle) {
+        self.disconnect_handle = Some(handle);
+    }
+
+    fn detach_disconnect_handle(&mut self) {
+        self.disconnect_handle = None;
+    }
+
     fn initialize(
         &mut self,
         params: AgentInitializeParams,
@@ -652,16 +682,26 @@ where
             .with_mode(params.mode.into())
             .with_attachments(attachments);
 
-        self.active_run = Some(spawn_active_run(
-            run_id.clone(),
+        let live_events = self.live_event_sender.clone();
+        let active_run = spawn_active_run(ActiveRunSpawn {
+            run_id: run_id.clone(),
             workspace_root,
             provider,
             run_log,
             input,
-            self.config,
-            self.approval_queue.clone(),
-        )?);
-        let events = self.collect_active_run_events_until_pause()?;
+            config: self.config,
+            approval_queue: self.approval_queue.clone(),
+            live_events,
+        })?;
+        if let Some(disconnect_handle) = &self.disconnect_handle {
+            disconnect_handle.register(&active_run)?;
+        }
+        self.active_run = Some(active_run);
+        let events = if self.live_events_enabled() {
+            Vec::new()
+        } else {
+            self.collect_active_run_events_until_pause()?
+        };
 
         Ok(AgentRpcHandlerOutput::new(SendTurnResult {
             run_id,
@@ -680,7 +720,11 @@ where
             self.drain_ready_active_run_events()?;
             return Err(error);
         }
-        let events = self.collect_active_run_events_until_pause()?;
+        let events = if self.live_events_enabled() {
+            Vec::new()
+        } else {
+            self.collect_active_run_events_until_pause()?
+        };
 
         Ok(AgentRpcHandlerOutput::new(ApproveResult {
             approval_id: params.approval_id,
@@ -704,7 +748,11 @@ where
             self.drain_ready_active_run_events()?;
             return Err(error);
         }
-        let events = self.collect_active_run_events_until_pause()?;
+        let events = if self.live_events_enabled() {
+            Vec::new()
+        } else {
+            self.collect_active_run_events_until_pause()?
+        };
 
         Ok(AgentRpcHandlerOutput::new(RejectResult {
             approval_id: params.approval_id,
@@ -744,7 +792,11 @@ where
         active_run.cancellation_token.cancel(reason.clone());
         self.approval_queue
             .cancel_run_pending_approvals(&params.run_id, reason.clone())?;
-        let events = self.collect_active_run_events_until_pause()?;
+        let events = if self.live_events_enabled() {
+            Vec::new()
+        } else {
+            self.collect_active_run_events_until_pause()?
+        };
 
         Ok(AgentRpcHandlerOutput::new(CancelResult {
             run_id: params.run_id,
@@ -832,6 +884,10 @@ where
 }
 
 impl<F> AgentTurnLoopRpcHandler<F> {
+    fn live_events_enabled(&self) -> bool {
+        self.live_event_sender.is_some()
+    }
+
     fn workspace(&self) -> Result<&RpcWorkspace, AgentRpcHandlerError> {
         self.workspace.as_ref().ok_or_else(|| {
             AgentRpcHandlerError::new(
@@ -849,6 +905,7 @@ impl<F> AgentTurnLoopRpcHandler<F> {
         &mut self,
     ) -> Result<Vec<RunLogEvent>, AgentRpcHandlerError> {
         let mut events = Vec::new();
+        let collect_events = !self.live_events_enabled();
         let Some(active_run) = self.active_run.as_mut() else {
             return Ok(events);
         };
@@ -858,7 +915,9 @@ impl<F> AgentTurnLoopRpcHandler<F> {
                 Ok(event) => {
                     let pauses_for_approval = is_approval_pause_event(&event);
                     let is_terminal = is_terminal_run_event(&event);
-                    events.push(event);
+                    if collect_events {
+                        events.push(event);
+                    }
                     if pauses_for_approval || is_terminal {
                         break is_terminal;
                     }
@@ -878,6 +937,7 @@ impl<F> AgentTurnLoopRpcHandler<F> {
 
     fn drain_ready_active_run_events(&mut self) -> Result<Vec<RunLogEvent>, AgentRpcHandlerError> {
         let mut events = Vec::new();
+        let collect_events = !self.live_events_enabled();
         let Some(active_run) = self.active_run.as_mut() else {
             return Ok(events);
         };
@@ -886,7 +946,9 @@ impl<F> AgentTurnLoopRpcHandler<F> {
             match active_run.events.try_recv() {
                 Ok(event) => {
                     let is_terminal = is_terminal_run_event(&event);
-                    events.push(event);
+                    if collect_events {
+                        events.push(event);
+                    }
                     if is_terminal {
                         break true;
                     }
@@ -907,6 +969,9 @@ impl<F> AgentTurnLoopRpcHandler<F> {
         let Some(active_run) = self.active_run.take() else {
             return Ok(());
         };
+        if let Some(disconnect_handle) = &self.disconnect_handle {
+            disconnect_handle.clear_run(&active_run.run_id)?;
+        }
 
         match active_run.join.join() {
             Ok(result) => result,
@@ -963,9 +1028,68 @@ struct RpcWorkspace {
 struct ActiveRpcRun {
     run_id: String,
     cancellation_token: CancellationToken,
+    approval_queue: RpcApprovalQueue,
     run_log: SerializedRunLog,
     events: mpsc::Receiver<RunLogEvent>,
     join: thread::JoinHandle<Result<(), AgentRpcHandlerError>>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RpcDisconnectHandle {
+    active_run: Arc<Mutex<Option<ActiveRunCancelHandle>>>,
+}
+
+#[derive(Debug, Clone)]
+struct ActiveRunCancelHandle {
+    run_id: String,
+    cancellation_token: CancellationToken,
+    approval_queue: RpcApprovalQueue,
+}
+
+impl RpcDisconnectHandle {
+    fn register(&self, active_run: &ActiveRpcRun) -> Result<(), AgentRpcHandlerError> {
+        let mut active = self.lock_active_run()?;
+        *active = Some(ActiveRunCancelHandle {
+            run_id: active_run.run_id.clone(),
+            cancellation_token: active_run.cancellation_token.clone(),
+            approval_queue: active_run.approval_queue.clone(),
+        });
+        Ok(())
+    }
+
+    fn clear_run(&self, run_id: &str) -> Result<(), AgentRpcHandlerError> {
+        let mut active = self.lock_active_run()?;
+        if active
+            .as_ref()
+            .is_some_and(|active_run| active_run.run_id == run_id)
+        {
+            *active = None;
+        }
+        Ok(())
+    }
+
+    fn cancel_active(&self, reason: String) -> Result<(), AgentRpcHandlerError> {
+        let active = self.lock_active_run()?.clone();
+        if let Some(active_run) = active {
+            active_run.cancellation_token.cancel(reason.clone());
+            active_run
+                .approval_queue
+                .cancel_run_pending_approvals(&active_run.run_id, reason)?;
+        }
+        Ok(())
+    }
+
+    fn lock_active_run(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, Option<ActiveRunCancelHandle>>, AgentRpcHandlerError>
+    {
+        self.active_run.lock().map_err(|_| {
+            AgentRpcHandlerError::new(
+                RPC_INTERNAL_INVARIANT,
+                "RPC disconnect handle lock was poisoned",
+            )
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1206,6 +1330,8 @@ impl ApprovalPolicy for RpcApprovalPolicy {
 struct RpcRunEventSink {
     events: mpsc::Sender<RunLogEvent>,
     approval_queue: RpcApprovalQueue,
+    live_events: Option<mpsc::SyncSender<RunLogEvent>>,
+    buffer_internal_events: bool,
 }
 
 impl TurnEventSink for RpcRunEventSink {
@@ -1227,14 +1353,21 @@ impl TurnEventSink for RpcRunEventSink {
                 })?;
         }
 
-        self.events
-            .send(event.clone())
-            .map_err(|_| TurnEventSinkError::new("RPC event receiver was dropped"))?;
+        if self.buffer_internal_events || is_terminal_run_event(event) {
+            self.events
+                .send(event.clone())
+                .map_err(|_| TurnEventSinkError::new("RPC event receiver was dropped"))?;
+        }
+        if let Some(live_events) = &self.live_events {
+            live_events
+                .send(event.clone())
+                .map_err(|_| TurnEventSinkError::new("RPC live event receiver was dropped"))?;
+        }
         Ok(())
     }
 }
 
-fn spawn_active_run<P>(
+struct ActiveRunSpawn<P> {
     run_id: String,
     workspace_root: PathBuf,
     provider: P,
@@ -1242,52 +1375,86 @@ fn spawn_active_run<P>(
     input: AgentTurnInput,
     config: AgentTurnLoopConfig,
     approval_queue: RpcApprovalQueue,
-) -> Result<ActiveRpcRun, AgentRpcHandlerError>
+    live_events: Option<mpsc::SyncSender<RunLogEvent>>,
+}
+
+struct ActiveTurnLoopWorker<P> {
+    workspace_root: PathBuf,
+    provider: P,
+    run_log: SerializedRunLog,
+    input: AgentTurnInput,
+    config: AgentTurnLoopConfig,
+    events: mpsc::Sender<RunLogEvent>,
+    approval_queue: RpcApprovalQueue,
+    live_events: Option<mpsc::SyncSender<RunLogEvent>>,
+    buffer_internal_events: bool,
+}
+
+fn spawn_active_run<P>(spawn: ActiveRunSpawn<P>) -> Result<ActiveRpcRun, AgentRpcHandlerError>
 where
     P: TurnProvider + Send + 'static,
 {
+    let ActiveRunSpawn {
+        run_id,
+        workspace_root,
+        provider,
+        run_log,
+        input,
+        config,
+        approval_queue,
+        live_events,
+    } = spawn;
+    let buffer_internal_events = live_events.is_none();
     let cancellation_token = CancellationToken::new();
     let worker_input = input.with_cancellation_token(cancellation_token.clone());
     let run_log = SerializedRunLog::new(run_log);
     let worker_run_log = run_log.clone();
+    let worker_approval_queue = approval_queue.clone();
     let (events_tx, events_rx) = mpsc::channel();
     let thread_name = format!("prole-coder-rpc-{run_id}");
     let join = thread::Builder::new()
         .name(thread_name)
         .spawn(move || {
-            run_active_turn_loop(
+            run_active_turn_loop(ActiveTurnLoopWorker {
                 workspace_root,
                 provider,
-                worker_run_log,
-                worker_input,
+                run_log: worker_run_log,
+                input: worker_input,
                 config,
-                events_tx,
-                approval_queue,
-            )
+                events: events_tx,
+                approval_queue: worker_approval_queue,
+                live_events,
+                buffer_internal_events,
+            })
         })
         .map_err(map_io_error)?;
 
     Ok(ActiveRpcRun {
         run_id,
         cancellation_token,
+        approval_queue,
         run_log,
         events: events_rx,
         join,
     })
 }
 
-fn run_active_turn_loop<P>(
-    workspace_root: PathBuf,
-    provider: P,
-    mut run_log: SerializedRunLog,
-    input: AgentTurnInput,
-    config: AgentTurnLoopConfig,
-    events: mpsc::Sender<RunLogEvent>,
-    approval_queue: RpcApprovalQueue,
-) -> Result<(), AgentRpcHandlerError>
+fn run_active_turn_loop<P>(worker: ActiveTurnLoopWorker<P>) -> Result<(), AgentRpcHandlerError>
 where
     P: TurnProvider,
 {
+    let ActiveTurnLoopWorker {
+        workspace_root,
+        provider,
+        mut run_log,
+        input,
+        config,
+        events,
+        approval_queue,
+        live_events,
+        buffer_internal_events,
+    } = worker;
+
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .thread_name("prole-coder-rpc-turn-loop-runtime")
@@ -1301,6 +1468,8 @@ where
         let mut event_sink = RpcRunEventSink {
             events,
             approval_queue,
+            live_events,
+            buffer_internal_events,
         };
         let mut loop_runner =
             AgentTurnLoop::with_approval_policy(&workspace_root, provider, approval_policy)
@@ -1356,6 +1525,7 @@ fn approval_request_from_event(
         detail: payload.detail,
         command: payload.command,
         paths: payload.paths,
+        risk_reasons: payload.risk_reasons,
         persistable: payload.persistable,
     })
 }
@@ -1371,6 +1541,8 @@ struct ApprovalRequiredPayload {
     detail: String,
     command: Option<String>,
     paths: Option<Vec<String>>,
+    #[serde(default)]
+    risk_reasons: Vec<String>,
     persistable: bool,
 }
 
@@ -1877,22 +2049,129 @@ where
     }
 }
 
+#[derive(Debug)]
+enum RpcLoopMessage {
+    InputLine(Result<String, io::Error>),
+    ReaderEof,
+    RunEvent(RunLogEvent),
+}
+
 pub fn run_stdio_request_loop<R, W, H>(
     reader: R,
     writer: &mut W,
     handler: H,
 ) -> Result<H, AgentRpcError>
 where
-    R: BufRead,
+    R: BufRead + Send,
     W: Write,
     H: AgentRpcRequestHandler,
 {
+    let (loop_tx, loop_rx) = mpsc::sync_channel(RPC_LOOP_QUEUE_BOUND);
+    let (live_event_tx, live_event_rx) = mpsc::sync_channel(RPC_LIVE_EVENT_QUEUE_BOUND);
+    let disconnect_handle = RpcDisconnectHandle::default();
     let mut server = AgentRpcServer::new(handler);
-    for line in reader.lines() {
-        server.handle_line(&line?, writer)?;
-    }
-    server.shutdown(writer)?;
+    server.handler.attach_live_event_sender(live_event_tx);
+    server
+        .handler
+        .attach_disconnect_handle(disconnect_handle.clone());
+
+    thread::scope(|scope| -> Result<(), AgentRpcError> {
+        let reader_tx = loop_tx.clone();
+        scope.spawn(move || {
+            for line in reader.lines() {
+                if reader_tx.send(RpcLoopMessage::InputLine(line)).is_err() {
+                    return;
+                }
+            }
+            let _ = reader_tx.send(RpcLoopMessage::ReaderEof);
+        });
+
+        let event_tx = loop_tx.clone();
+        scope.spawn(move || {
+            for event in live_event_rx {
+                if event_tx.send(RpcLoopMessage::RunEvent(event)).is_err() {
+                    return;
+                }
+            }
+        });
+        drop(loop_tx);
+
+        let mut shutdown_started = false;
+        let mut pending_error = None;
+        while let Ok(message) = loop_rx.recv() {
+            match message {
+                RpcLoopMessage::InputLine(Ok(line)) if !shutdown_started => {
+                    let result = server.handle_line(&line, writer);
+                    handle_stdio_write_result(&mut server, result, &disconnect_handle)?;
+                }
+                RpcLoopMessage::InputLine(Err(error)) if !shutdown_started => {
+                    shutdown_started = true;
+                    pending_error = Some(AgentRpcError::Io(error));
+                    let result = server.shutdown(writer);
+                    handle_stdio_write_result(&mut server, result, &disconnect_handle)?;
+                    detach_stdio_loop_handler(&mut server);
+                }
+                RpcLoopMessage::ReaderEof if !shutdown_started => {
+                    shutdown_started = true;
+                    let result = server.shutdown(writer);
+                    handle_stdio_write_result(&mut server, result, &disconnect_handle)?;
+                    detach_stdio_loop_handler(&mut server);
+                }
+                RpcLoopMessage::RunEvent(event) => {
+                    let result = emit_run_log_events(writer, std::slice::from_ref(&event));
+                    handle_stdio_write_result(&mut server, result, &disconnect_handle)?;
+                }
+                RpcLoopMessage::InputLine(_) | RpcLoopMessage::ReaderEof => {}
+            }
+        }
+
+        if !shutdown_started {
+            let result = server.shutdown(writer);
+            handle_stdio_write_result(&mut server, result, &disconnect_handle)?;
+            detach_stdio_loop_handler(&mut server);
+        }
+
+        match pending_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    })?;
     Ok(server.into_inner())
+}
+
+fn detach_stdio_loop_handler<H>(server: &mut AgentRpcServer<H>)
+where
+    H: AgentRpcRequestHandler,
+{
+    server.handler.detach_live_event_sender();
+    server.handler.detach_disconnect_handle();
+}
+
+fn write_or_cancel_disconnect(
+    result: Result<(), AgentRpcError>,
+    disconnect_handle: &RpcDisconnectHandle,
+) -> Result<(), AgentRpcError> {
+    if result.is_err() {
+        let _ = disconnect_handle.cancel_active("RPC client disconnected".to_owned());
+    }
+    result
+}
+
+fn handle_stdio_write_result<H>(
+    server: &mut AgentRpcServer<H>,
+    result: Result<(), AgentRpcError>,
+    disconnect_handle: &RpcDisconnectHandle,
+) -> Result<(), AgentRpcError>
+where
+    H: AgentRpcRequestHandler,
+{
+    match write_or_cancel_disconnect(result, disconnect_handle) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            detach_stdio_loop_handler(server);
+            Err(error)
+        }
+    }
 }
 
 pub fn write_json_line<W, T>(writer: &mut W, message: &T) -> Result<(), AgentRpcError>
@@ -2070,6 +2349,8 @@ fn civil_from_unix_days(
 
 #[cfg(test)]
 mod tests {
+    const RPC_TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
     use prole_coder_agent_core::{
         provider::deepseek_api::ChatToolCall,
         run_log::{RunLogEvent, RunLogStore},
@@ -2081,23 +2362,29 @@ mod tests {
         },
     };
     use serde_json::{Value, json};
-    use std::{collections::VecDeque, io::Cursor, thread, time::Duration};
+    use std::{
+        collections::VecDeque,
+        io::{self, Cursor, Read, Write},
+        sync::{Arc, Condvar, Mutex, mpsc},
+        thread,
+        time::{Duration, Instant},
+    };
 
     use super::{
-        APPROVE_METHOD, AgentInitializeParams, AgentInitializeResult, AgentRpcHandlerError,
-        AgentRpcHandlerOutput, AgentRpcRequestHandler, AgentTurnLoopRpcHandler, ApproveParams,
-        ApproveResult, CANCEL_METHOD, CancelParams, CancelResult, EVENT_METHOD, INITIALIZE_METHOD,
-        JSON_RPC_INTERNAL_ERROR, JSON_RPC_INVALID_PARAMS, JSON_RPC_INVALID_REQUEST,
-        JSON_RPC_METHOD_NOT_FOUND, JSON_RPC_PARSE_ERROR, LIST_RUNS_METHOD, ListRunsParams,
-        ListRunsResult, PROTOCOL_VERSION, REJECT_METHOD, RESUME_METHOD, RPC_APPROVAL_DENIED,
-        RPC_APPROVAL_NOT_FOUND, RPC_CONTEXT_BUDGET_EXCEEDED, RPC_INTERNAL_INVARIANT,
-        RPC_INVALID_TOOL_ARGUMENTS, RPC_PROVIDER_ERROR, RPC_RUN_ALREADY_ACTIVE, RPC_RUN_CANCELED,
-        RPC_RUN_NOT_FOUND, RPC_TOOL_EXECUTION_FAILED, RPC_UNSUPPORTED_PROTOCOL,
-        RPC_WORKSPACE_UNTRUSTED, RejectParams, RejectResult, ResumeParams, ResumeResult,
-        RpcApprovalPersistence, RpcApprovalQueue, RpcApprovalState, RpcRunState, RpcRunSummary,
-        RpcRunSummaryStatus, RpcWorkspace, SEND_TURN_METHOD, SendTurnParams, SendTurnResult,
-        StdioEventBridge, format_unix_millis, run_log_event_to_notification,
-        run_stdio_request_loop, spawn_active_run,
+        APPROVE_METHOD, ActiveRunSpawn, AgentInitializeParams, AgentInitializeResult,
+        AgentRpcError, AgentRpcHandlerError, AgentRpcHandlerOutput, AgentRpcRequestHandler,
+        AgentTurnLoopRpcHandler, ApproveParams, ApproveResult, CANCEL_METHOD, CancelParams,
+        CancelResult, EVENT_METHOD, INITIALIZE_METHOD, JSON_RPC_INTERNAL_ERROR,
+        JSON_RPC_INVALID_PARAMS, JSON_RPC_INVALID_REQUEST, JSON_RPC_METHOD_NOT_FOUND,
+        JSON_RPC_PARSE_ERROR, LIST_RUNS_METHOD, ListRunsParams, ListRunsResult, PROTOCOL_VERSION,
+        REJECT_METHOD, RESUME_METHOD, RPC_APPROVAL_DENIED, RPC_APPROVAL_NOT_FOUND,
+        RPC_CONTEXT_BUDGET_EXCEEDED, RPC_INTERNAL_INVARIANT, RPC_INVALID_TOOL_ARGUMENTS,
+        RPC_PROVIDER_ERROR, RPC_RUN_ALREADY_ACTIVE, RPC_RUN_CANCELED, RPC_RUN_NOT_FOUND,
+        RPC_TOOL_EXECUTION_FAILED, RPC_UNSUPPORTED_PROTOCOL, RPC_WORKSPACE_UNTRUSTED, RejectParams,
+        RejectResult, ResumeParams, ResumeResult, RpcApprovalPersistence, RpcApprovalQueue,
+        RpcApprovalState, RpcRunState, RpcRunSummary, RpcRunSummaryStatus, RpcWorkspace,
+        SEND_TURN_METHOD, SendTurnParams, SendTurnResult, StdioEventBridge, format_unix_millis,
+        run_log_event_to_notification, run_stdio_request_loop, spawn_active_run,
     };
 
     #[test]
@@ -2580,14 +2867,19 @@ mod tests {
     #[test]
     fn turn_loop_rpc_handler_runs_send_turn_and_replays_events() {
         let workspace = TestWorkspace::new("rpc");
-        let input = [
+        let (input, output, join) =
+            spawn_interactive_rpc_loop(AgentTurnLoopRpcHandler::new(final_provider_factory));
+        send_rpc_line(
+            &input,
             json!({
                 "jsonrpc": "2.0",
                 "id": "init_1",
                 "method": "agent.initialize",
                 "params": initialize_params_for(workspace.path_str())
-            })
-            .to_string(),
+            }),
+        );
+        send_rpc_line(
+            &input,
             json!({
                 "jsonrpc": "2.0",
                 "id": "turn_1",
@@ -2597,8 +2889,19 @@ mod tests {
                     "message": "Say hello",
                     "mode": "ask"
                 }
-            })
-            .to_string(),
+            }),
+        );
+
+        output.wait_for_line(
+            |line| {
+                line["method"] == "agent.event"
+                    && line["params"]["type"] == "run.completed"
+                    && line["params"]["runId"] == "run_real_rpc"
+            },
+            RPC_TEST_TIMEOUT,
+        );
+        send_rpc_line(
+            &input,
             json!({
                 "jsonrpc": "2.0",
                 "id": "resume_1",
@@ -2607,37 +2910,33 @@ mod tests {
                     "runId": "run_real_rpc",
                     "replayFromSeq": 1
                 }
-            })
-            .to_string(),
+            }),
+        );
+        send_rpc_line(
+            &input,
             json!({
                 "jsonrpc": "2.0",
                 "id": "list_1",
                 "method": "agent.listRuns"
-            })
-            .to_string(),
-        ]
-        .join("\n");
-        let mut output = Vec::new();
+            }),
+        );
+        output.wait_for_line(|line| line["id"] == "list_1", RPC_TEST_TIMEOUT);
+        drop(input);
+        join.join()
+            .expect("request loop thread should not panic")
+            .expect("real turn loop handler should complete");
 
-        run_stdio_request_loop(
-            Cursor::new(input),
-            &mut output,
-            AgentTurnLoopRpcHandler::new(final_provider_factory),
-        )
-        .expect("real turn loop handler should complete");
-
-        let lines = output_lines(output);
+        let lines = output.lines();
         assert_eq!(lines[0]["id"], "init_1");
         assert_eq!(lines[1]["id"], "turn_1");
         assert_eq!(lines[1]["result"]["accepted"], true);
         assert_eq!(lines[1]["result"]["runId"], "run_real_rpc");
         assert_eq!(lines[1]["result"]["turnId"], "turn_1");
-        assert!(
-            lines
-                .iter()
-                .any(|line| line["method"] == "agent.event"
-                    && line["params"]["type"] == "run.started")
-        );
+        let turn_response_index = line_index(&lines, |line| line["id"] == "turn_1");
+        let run_started_index = line_index(&lines, |line| {
+            line["method"] == "agent.event" && line["params"]["type"] == "run.started"
+        });
+        assert!(turn_response_index < run_started_index);
         assert!(lines.iter().any(|line| line["method"] == "agent.event"
             && line["params"]["type"] == "run.completed"
             && line["params"]["payload"]["summary"] == "RPC final answer"));
@@ -2676,17 +2975,80 @@ mod tests {
     }
 
     #[test]
-    fn turn_loop_rpc_handler_waits_for_approval_and_applies_after_approve() {
+    fn request_loop_send_turn_returns_before_provider_completion() {
         let workspace = TestWorkspace::new("rpc");
-        workspace.write("README.md", "old\n");
-        let input = [
+        let gate = ProviderGate::default();
+        let provider_gate = gate.clone();
+        let (input, output, join) = spawn_interactive_rpc_loop(AgentTurnLoopRpcHandler::new(
+            move |_params: &SendTurnParams| {
+                Ok(GatedFinalProvider {
+                    gate: provider_gate.clone(),
+                })
+            },
+        ));
+        send_rpc_line(
+            &input,
             json!({
                 "jsonrpc": "2.0",
                 "id": "init_1",
                 "method": "agent.initialize",
                 "params": initialize_params_for(workspace.path_str())
-            })
-            .to_string(),
+            }),
+        );
+        send_rpc_line(
+            &input,
+            json!({
+                "jsonrpc": "2.0",
+                "id": "turn_1",
+                "method": "agent.sendTurn",
+                "params": {
+                    "runId": "run_rpc_early_accept",
+                    "message": "Wait for provider",
+                    "mode": "ask"
+                }
+            }),
+        );
+
+        output.wait_for_line(|line| line["id"] == "turn_1", RPC_TEST_TIMEOUT);
+        assert!(
+            !output.lines().iter().any(|line| {
+                line["method"] == "agent.event" && line["params"]["type"] == "run.completed"
+            }),
+            "sendTurn response must be written before the blocked provider completes"
+        );
+
+        gate.release();
+        output.wait_for_line(
+            |line| {
+                line["method"] == "agent.event"
+                    && line["params"]["type"] == "run.completed"
+                    && line["params"]["runId"] == "run_rpc_early_accept"
+            },
+            RPC_TEST_TIMEOUT,
+        );
+        drop(input);
+        join.join()
+            .expect("request loop thread should not panic")
+            .expect("real turn loop handler should complete");
+    }
+
+    #[test]
+    fn turn_loop_rpc_handler_waits_for_approval_and_applies_after_approve() {
+        let workspace = TestWorkspace::new("rpc");
+        workspace.write("README.md", "old\n");
+        let (input, output, join) =
+            spawn_interactive_rpc_loop(AgentTurnLoopRpcHandler::new(patch_provider_factory));
+        send_rpc_line(
+            &input,
+            json!({
+                "jsonrpc": "2.0",
+                "id": "init_1",
+                "method": "agent.initialize",
+                "params": initialize_params_for(workspace.path_str())
+            }),
+        );
+        send_rpc_line(
+            &input,
             json!({
                 "jsonrpc": "2.0",
                 "id": "turn_1",
@@ -2696,8 +3058,18 @@ mod tests {
                     "message": "Update README",
                     "mode": "edit"
                 }
-            })
-            .to_string(),
+            }),
+        );
+        output.wait_for_line(
+            |line| {
+                line["method"] == "agent.event"
+                    && line["params"]["type"] == "tool.approvalRequired"
+                    && line["params"]["runId"] == "run_rpc_approval"
+            },
+            RPC_TEST_TIMEOUT,
+        );
+        send_rpc_line(
+            &input,
             json!({
                 "jsonrpc": "2.0",
                 "id": "approve_1",
@@ -2706,21 +3078,23 @@ mod tests {
                     "approvalId": "approval_1_1",
                     "persist": "session"
                 }
-            })
-            .to_string(),
-        ]
-        .join("\n");
-        let mut output = Vec::new();
-
-        run_stdio_request_loop(
-            Cursor::new(input),
-            &mut output,
-            AgentTurnLoopRpcHandler::new(patch_provider_factory),
-        )
-        .expect("real turn loop handler should complete after approval");
+            }),
+        );
+        output.wait_for_line(
+            |line| {
+                line["method"] == "agent.event"
+                    && line["params"]["type"] == "run.completed"
+                    && line["params"]["runId"] == "run_rpc_approval"
+            },
+            RPC_TEST_TIMEOUT,
+        );
+        drop(input);
+        join.join()
+            .expect("request loop thread should not panic")
+            .expect("real turn loop handler should complete after approval");
 
         assert_eq!(workspace.read("README.md"), "new\n");
-        let lines = output_lines(output);
+        let lines = output.lines();
         let approval_required_index = line_index(&lines, |line| {
             line["method"] == "agent.event" && line["params"]["type"] == "tool.approvalRequired"
         });
@@ -2742,6 +3116,7 @@ mod tests {
         assert_eq!(approval_payload["persistable"], true);
         assert_eq!(lines[1]["id"], "turn_1");
         assert_eq!(lines[1]["result"]["accepted"], true);
+        assert!(1 < approval_required_index);
         assert_eq!(lines[approve_response_index]["result"]["state"], "approved");
         assert_eq!(
             lines[approve_response_index]["result"]["persist"],
@@ -2758,14 +3133,19 @@ mod tests {
     fn turn_loop_rpc_handler_rejects_pending_approval_without_running_tool() {
         let workspace = TestWorkspace::new("rpc");
         workspace.write("README.md", "old\n");
-        let input = [
+        let (input, output, join) =
+            spawn_interactive_rpc_loop(AgentTurnLoopRpcHandler::new(patch_provider_factory));
+        send_rpc_line(
+            &input,
             json!({
                 "jsonrpc": "2.0",
                 "id": "init_1",
                 "method": "agent.initialize",
                 "params": initialize_params_for(workspace.path_str())
-            })
-            .to_string(),
+            }),
+        );
+        send_rpc_line(
+            &input,
             json!({
                 "jsonrpc": "2.0",
                 "id": "turn_1",
@@ -2775,8 +3155,18 @@ mod tests {
                     "message": "Update README",
                     "mode": "edit"
                 }
-            })
-            .to_string(),
+            }),
+        );
+        output.wait_for_line(
+            |line| {
+                line["method"] == "agent.event"
+                    && line["params"]["type"] == "tool.approvalRequired"
+                    && line["params"]["runId"] == "run_rpc_rejected_approval"
+            },
+            RPC_TEST_TIMEOUT,
+        );
+        send_rpc_line(
+            &input,
             json!({
                 "jsonrpc": "2.0",
                 "id": "reject_1",
@@ -2785,21 +3175,23 @@ mod tests {
                     "approvalId": "approval_1_1",
                     "reason": "not now"
                 }
-            })
-            .to_string(),
-        ]
-        .join("\n");
-        let mut output = Vec::new();
-
-        run_stdio_request_loop(
-            Cursor::new(input),
-            &mut output,
-            AgentTurnLoopRpcHandler::new(patch_provider_factory),
-        )
-        .expect("real turn loop handler should complete after rejection");
+            }),
+        );
+        output.wait_for_line(
+            |line| {
+                line["method"] == "agent.event"
+                    && line["params"]["type"] == "run.failed"
+                    && line["params"]["runId"] == "run_rpc_rejected_approval"
+            },
+            RPC_TEST_TIMEOUT,
+        );
+        drop(input);
+        join.join()
+            .expect("request loop thread should not panic")
+            .expect("real turn loop handler should complete after rejection");
 
         assert_eq!(workspace.read("README.md"), "old\n");
-        let lines = output_lines(output);
+        let lines = output.lines();
         let reject_response_index = line_index(&lines, |line| line["id"] == "reject_1");
         assert_eq!(lines[reject_response_index]["result"]["state"], "rejected");
         assert_eq!(lines[reject_response_index]["result"]["reason"], "not now");
@@ -2820,14 +3212,19 @@ mod tests {
     fn turn_loop_rpc_handler_cancels_pending_approval_without_running_tool() {
         let workspace = TestWorkspace::new("rpc");
         workspace.write("README.md", "old\n");
-        let input = [
+        let (input, output, join) =
+            spawn_interactive_rpc_loop(AgentTurnLoopRpcHandler::new(patch_provider_factory));
+        send_rpc_line(
+            &input,
             json!({
                 "jsonrpc": "2.0",
                 "id": "init_1",
                 "method": "agent.initialize",
                 "params": initialize_params_for(workspace.path_str())
-            })
-            .to_string(),
+            }),
+        );
+        send_rpc_line(
+            &input,
             json!({
                 "jsonrpc": "2.0",
                 "id": "turn_1",
@@ -2837,8 +3234,18 @@ mod tests {
                     "message": "Update README",
                     "mode": "edit"
                 }
-            })
-            .to_string(),
+            }),
+        );
+        output.wait_for_line(
+            |line| {
+                line["method"] == "agent.event"
+                    && line["params"]["type"] == "tool.approvalRequired"
+                    && line["params"]["runId"] == "run_rpc_canceled_approval"
+            },
+            RPC_TEST_TIMEOUT,
+        );
+        send_rpc_line(
+            &input,
             json!({
                 "jsonrpc": "2.0",
                 "id": "cancel_1",
@@ -2847,21 +3254,23 @@ mod tests {
                     "runId": "run_rpc_canceled_approval",
                     "reason": "user changed their mind"
                 }
-            })
-            .to_string(),
-        ]
-        .join("\n");
-        let mut output = Vec::new();
-
-        run_stdio_request_loop(
-            Cursor::new(input),
-            &mut output,
-            AgentTurnLoopRpcHandler::new(patch_provider_factory),
-        )
-        .expect("real turn loop handler should complete after cancellation");
+            }),
+        );
+        output.wait_for_line(
+            |line| {
+                line["method"] == "agent.event"
+                    && line["params"]["type"] == "run.canceled"
+                    && line["params"]["runId"] == "run_rpc_canceled_approval"
+            },
+            RPC_TEST_TIMEOUT,
+        );
+        drop(input);
+        join.join()
+            .expect("request loop thread should not panic")
+            .expect("real turn loop handler should complete after cancellation");
 
         assert_eq!(workspace.read("README.md"), "old\n");
-        let lines = output_lines(output);
+        let lines = output.lines();
         let cancel_response_index = line_index(&lines, |line| line["id"] == "cancel_1");
         assert_eq!(lines[cancel_response_index]["result"]["state"], "canceled");
         assert_eq!(
@@ -2890,15 +3299,16 @@ mod tests {
         let run_log = store
             .create_run("run_rpc_provider_cancel")
             .expect("run should be created");
-        let active_run = spawn_active_run(
-            "run_rpc_provider_cancel".to_owned(),
-            workspace.path().to_path_buf(),
-            WaitingForCancellationProvider,
+        let active_run = spawn_active_run(ActiveRunSpawn {
+            run_id: "run_rpc_provider_cancel".to_owned(),
+            workspace_root: workspace.path().to_path_buf(),
+            provider: WaitingForCancellationProvider,
             run_log,
-            AgentTurnInput::new("turn_1", "Wait for cancellation"),
-            AgentTurnLoopConfig::default(),
-            RpcApprovalQueue::default(),
-        )
+            input: AgentTurnInput::new("turn_1", "Wait for cancellation"),
+            config: AgentTurnLoopConfig::default(),
+            approval_queue: RpcApprovalQueue::default(),
+            live_events: None,
+        })
         .expect("active run should spawn");
         let mut handler = AgentTurnLoopRpcHandler::new(final_provider_factory);
         handler.workspace = Some(RpcWorkspace { store });
@@ -2931,14 +3341,19 @@ mod tests {
     fn request_loop_rejects_concurrent_turn_and_cancels_pending_approval_on_eof() {
         let workspace = TestWorkspace::new("rpc");
         workspace.write("README.md", "old\n");
-        let input = [
+        let (input, output, join) =
+            spawn_interactive_rpc_loop(AgentTurnLoopRpcHandler::new(patch_provider_factory));
+        send_rpc_line(
+            &input,
             json!({
                 "jsonrpc": "2.0",
                 "id": "init_1",
                 "method": "agent.initialize",
                 "params": initialize_params_for(workspace.path_str())
-            })
-            .to_string(),
+            }),
+        );
+        send_rpc_line(
+            &input,
             json!({
                 "jsonrpc": "2.0",
                 "id": "turn_1",
@@ -2948,8 +3363,18 @@ mod tests {
                     "message": "Update README and wait for approval",
                     "mode": "edit"
                 }
-            })
-            .to_string(),
+            }),
+        );
+        output.wait_for_line(
+            |line| {
+                line["method"] == "agent.event"
+                    && line["params"]["type"] == "tool.approvalRequired"
+                    && line["params"]["runId"] == "run_rpc_active_disconnect"
+            },
+            RPC_TEST_TIMEOUT,
+        );
+        send_rpc_line(
+            &input,
             json!({
                 "jsonrpc": "2.0",
                 "id": "turn_2",
@@ -2959,24 +3384,21 @@ mod tests {
                     "message": "This turn must be rejected while the first run is active",
                     "mode": "ask"
                 }
-            })
-            .to_string(),
-        ]
-        .join("\n");
-        let mut output = Vec::new();
+            }),
+        );
+        output.wait_for_line(|line| line["id"] == "turn_2", RPC_TEST_TIMEOUT);
+        drop(input);
 
-        let handler = run_stdio_request_loop(
-            Cursor::new(input),
-            &mut output,
-            AgentTurnLoopRpcHandler::new(patch_provider_factory),
-        )
-        .expect("request loop should cancel the active run after EOF");
+        let handler = join
+            .join()
+            .expect("request loop thread should not panic")
+            .expect("request loop should cancel the active run after EOF");
 
         assert!(
             handler.active_run.is_none(),
             "EOF shutdown should finish the active run"
         );
-        let lines = output_lines(output);
+        let lines = output.lines();
         let first_turn_response_index = line_index(&lines, |line| line["id"] == "turn_1");
         assert_eq!(
             lines[first_turn_response_index]["result"]["runId"],
@@ -3131,6 +3553,7 @@ mod tests {
                 "title": "Apply patch",
                 "detail": "Modify README.md",
                 "paths": ["README.md"],
+                "riskReasons": ["file deletion"],
                 "persistable": true
             }),
         );
@@ -3146,6 +3569,7 @@ mod tests {
             prole_coder_agent_core::approval::RiskLevel::Write
         );
         assert_eq!(request.paths, Some(vec!["README.md".to_owned()]));
+        assert_eq!(request.risk_reasons, vec!["file deletion".to_owned()]);
         assert!(request.persistable);
     }
 
@@ -3202,6 +3626,136 @@ mod tests {
             .iter()
             .position(predicate)
             .expect("expected output line should exist")
+    }
+
+    fn spawn_interactive_rpc_loop<H>(
+        handler: H,
+    ) -> (
+        mpsc::Sender<String>,
+        SharedOutput,
+        thread::JoinHandle<Result<H, AgentRpcError>>,
+    )
+    where
+        H: AgentRpcRequestHandler + Send + 'static,
+    {
+        let (input_tx, input_rx) = mpsc::channel();
+        let reader = io::BufReader::new(ChannelReader::new(input_rx));
+        let output = SharedOutput::default();
+        let mut writer = output.clone();
+        let join = thread::spawn(move || run_stdio_request_loop(reader, &mut writer, handler));
+        (input_tx, output, join)
+    }
+
+    fn send_rpc_line(input: &mpsc::Sender<String>, message: Value) {
+        input
+            .send(format!("{message}\n"))
+            .expect("request loop input should be open");
+    }
+
+    fn complete_output_lines(output: &[u8]) -> Vec<Value> {
+        let output = std::str::from_utf8(output).expect("output should be UTF-8");
+        output
+            .split_inclusive('\n')
+            .filter_map(|line| line.strip_suffix('\n'))
+            .filter(|line| !line.is_empty())
+            .map(|line| serde_json::from_str(line).expect("line should be JSON"))
+            .collect()
+    }
+
+    struct ChannelReader {
+        input: mpsc::Receiver<String>,
+        pending: Cursor<Vec<u8>>,
+    }
+
+    impl ChannelReader {
+        fn new(input: mpsc::Receiver<String>) -> Self {
+            Self {
+                input,
+                pending: Cursor::new(Vec::new()),
+            }
+        }
+    }
+
+    impl Read for ChannelReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            loop {
+                let read = self.pending.read(buf)?;
+                if read > 0 {
+                    return Ok(read);
+                }
+
+                match self.input.recv() {
+                    Ok(line) => {
+                        self.pending = Cursor::new(line.into_bytes());
+                    }
+                    Err(_) => return Ok(0),
+                }
+            }
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct SharedOutput {
+        inner: Arc<(Mutex<Vec<u8>>, Condvar)>,
+    }
+
+    impl SharedOutput {
+        fn lines(&self) -> Vec<Value> {
+            let output = self
+                .inner
+                .0
+                .lock()
+                .expect("shared output lock should not be poisoned")
+                .clone();
+            output_lines(output)
+        }
+
+        fn wait_for_line(&self, predicate: impl Fn(&Value) -> bool, timeout: Duration) -> Value {
+            let deadline = Instant::now()
+                .checked_add(timeout)
+                .expect("timeout deadline should be representable");
+            let (output, changed) = &*self.inner;
+            let mut output = output
+                .lock()
+                .expect("shared output lock should not be poisoned");
+
+            loop {
+                let lines = complete_output_lines(&output);
+                if let Some(line) = lines.iter().find(|line| predicate(line)) {
+                    return line.clone();
+                }
+
+                let now = Instant::now();
+                if now >= deadline {
+                    panic!(
+                        "timed out waiting for RPC output line; output so far: {}",
+                        String::from_utf8_lossy(&output)
+                    );
+                }
+
+                let remaining = deadline.saturating_duration_since(now);
+                let wait_result = changed
+                    .wait_timeout(output, remaining)
+                    .expect("shared output lock should not be poisoned");
+                output = wait_result.0;
+            }
+        }
+    }
+
+    impl Write for SharedOutput {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            let (output, changed) = &*self.inner;
+            let mut output = output
+                .lock()
+                .expect("shared output lock should not be poisoned");
+            output.extend_from_slice(buf);
+            changed.notify_all();
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
     }
 
     #[derive(Default)]
@@ -3400,6 +3954,49 @@ mod tests {
                     .pop_front()
                     .ok_or_else(|| TurnProviderError::new("scripted provider has no response"))?;
                 Ok(turn_provider_response_stream(response))
+            })
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct ProviderGate {
+        inner: Arc<(Mutex<bool>, Condvar)>,
+    }
+
+    impl ProviderGate {
+        fn wait(&self) {
+            let (released, changed) = &*self.inner;
+            let mut released = released
+                .lock()
+                .expect("provider gate lock should not be poisoned");
+            while !*released {
+                released = changed
+                    .wait(released)
+                    .expect("provider gate lock should not be poisoned");
+            }
+        }
+
+        fn release(&self) {
+            let (released, changed) = &*self.inner;
+            let mut released = released
+                .lock()
+                .expect("provider gate lock should not be poisoned");
+            *released = true;
+            changed.notify_all();
+        }
+    }
+
+    struct GatedFinalProvider {
+        gate: ProviderGate,
+    }
+
+    impl TurnProvider for GatedFinalProvider {
+        fn complete_stream(&mut self, _request: TurnProviderRequest) -> TurnProviderFuture<'_> {
+            Box::pin(async move {
+                self.gate.wait();
+                Ok(turn_provider_response_stream(
+                    TurnProviderResponse::final_text("provider was released"),
+                ))
             })
         }
     }

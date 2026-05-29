@@ -1,4 +1,12 @@
 src/**
+test/**
+out-test/**
+out/**/*.test.js
+out/**/*.test.js.map
+.vscode/**
+node_modules/**
 tsconfig.json
+tsconfig.test.json
+**/*.map
 *.map
 *.tsbuildinfo

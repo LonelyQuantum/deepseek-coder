@@ -2,6 +2,7 @@
 
 pub mod approval;
 pub mod cancellation;
+pub mod command_risk;
 pub mod context;
 mod hashing;
 pub mod provider;

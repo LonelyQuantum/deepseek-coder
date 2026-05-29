@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    io::Write,
+    io::{BufRead, BufReader, Read, Write},
     process::{Command, Stdio},
 };
 
@@ -170,33 +170,63 @@ fn rpc_fixture_smoke_from_binary() {
         .spawn()
         .expect("CLI binary should spawn");
 
+    let mut stdin = child.stdin.take().expect("child stdin should be piped");
+    stdin
+        .write_all(input.as_bytes())
+        .expect("input should be written");
+    stdin.write_all(b"\n").expect("newline should be written");
+    stdin.flush().expect("input should be flushed");
+
+    let stdout = child.stdout.take().expect("child stdout should be piped");
+    let mut stdout = BufReader::new(stdout);
+    let mut stdout_text = String::new();
+    let mut line = String::new();
+    let mut saw_completed = false;
+    while stdout
+        .read_line(&mut line)
+        .expect("stdout line should be readable")
+        > 0
     {
-        let stdin = child.stdin.as_mut().expect("child stdin should be piped");
-        stdin
-            .write_all(input.as_bytes())
-            .expect("input should be written");
-        stdin.write_all(b"\n").expect("newline should be written");
+        stdout_text.push_str(&line);
+        let value = serde_json::from_str::<Value>(&line).expect("stdout line should be JSON");
+        if value["method"] == "agent.event"
+            && value["params"]["type"] == "run.completed"
+            && value["params"]["runId"] == "run_cli_rpc_process_smoke"
+        {
+            saw_completed = true;
+            break;
+        }
+        line.clear();
     }
-    drop(child.stdin.take());
+    assert!(
+        saw_completed,
+        "RPC process should emit run.completed before stdin is closed; stdout:\n{stdout_text}"
+    );
+    drop(stdin);
+    stdout
+        .read_to_string(&mut stdout_text)
+        .expect("remaining stdout should be readable");
 
-    let output = child
-        .wait_with_output()
+    let status = child
+        .wait()
         .expect("CLI binary should finish after stdin EOF");
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .expect("child stderr should be piped")
+        .read_to_string(&mut stderr)
+        .expect("stderr should be readable");
 
     assert!(
-        output.status.success(),
+        status.success(),
         "CLI rpc failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        stdout_text,
+        stderr
     );
-    assert!(
-        output.stderr.is_empty(),
-        "stderr should be empty: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert!(stderr.is_empty(), "stderr should be empty: {stderr}");
 
-    let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
-    let lines = stdout
+    let lines = stdout_text
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).expect("stdout line should be JSON"))
         .collect::<Vec<_>>();
