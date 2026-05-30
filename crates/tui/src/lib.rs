@@ -196,6 +196,7 @@ mod tests {
             cwd: Some(".".to_owned()),
             output_summary: None,
             paths: Some(vec!["crates/cli/src/lib.rs".to_owned()]),
+            hunks: None,
             risk_reasons: Vec::new(),
             persistable,
         }
