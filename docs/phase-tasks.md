@@ -93,20 +93,20 @@
 
 | 状态 | 任务 | 来源 | 说明 |
 | --- | --- | --- | --- |
-| [ ] | P4-0a：VSIX dry-run packaging smoke | `README.md`、`docs/vscode-extension.md`、`docs/release.md` | Phase 4 早期基础设施检查；验证 `.vscodeignore`、`workspace:*` 依赖、media asset、compiled `out/` 和 activationEvents，不代表 P4-10 完成。 |
-| [ ] | P4-0b：`@vscode/test-electron` 最小 harness | `README.md`、`docs/vscode-extension.md` | 覆盖 extension activation、trusted workspace 和 Chat view 基础加载；为后续端到端集成测试打底，不代表 P4-12 完成。 |
-| [ ] | P4-9：Provider capability model data contract | `README.md`、`docs/roadmap.md`、`docs/deepseek-api-adapter.md`、`docs/json-rpc-protocol.md` | 先写轻量 ADR/design note；首版做 data contract，不引入 heavy trait；通过 `agent.initialize` 暴露 thinking、tool choice、FIM、stream/cache usage、上下文和输出限制等能力。 |
-| [ ] | P4-5：事件 payload schema 与协议 fixture 对齐 | `docs/json-rpc-protocol.md`、`docs/turn-loop.md`、`packages/protocol` | 将 `provider.requested`、`tool.completed`、`run.completed` 等事件 payload 纳入 Rust/TypeScript 兼容性测试；协议版本不匹配提示作为子项。 |
-| [ ] | P4-4：RPC 高频事件输出节流与批量发送策略 | `docs/rpc-server.md`、`docs/vscode-extension.md`、`docs/json-rpc-protocol.md` | 必须在 P4-5 协议边界明确后实现；Run Log 仍逐事件写入并保持 `seq` 为事实来源，wire 层 batch/coalescing 不改变 replay 结构。 |
-| [ ] | P4-11：`agent.cancel` 类型化 helper 与 Chat Cancel UI | `README.md`、`docs/vscode-extension.md`、`docs/json-rpc-protocol.md` | 新增 `RpcServerManager.cancel()`、`ChatCancelClient` 边界测试和 Chat Cancel 按钮；与 Terminal approval 做轻量 composer UX review，但不阻塞 cancel helper 先行。 |
-| [ ] | P4-1：Problems 面板诊断进入 Context Builder | `README.md`、`docs/vscode-extension.md`、`docs/context-capsule.md` | 通过 `agent.sendTurn.attachments` 的 diagnostic attachment 注入；插件只采集 Problems 快照，预算、排序、截断和 omitted reason 由 Core/Context Builder 处理。 |
-| [ ] | P4-2：Terminal command approval | `README.md`、`docs/vscode-extension.md`、`docs/approval-model.md` | 展示命令、cwd、风险等级、输出摘要和持久化选项；复用 P4-11 的 composer 状态模型。 |
-| [ ] | P4-6：审批持久化存储 | `docs/approval-model.md`、`docs/tool-system.md`、`docs/vscode-extension.md` | 实现 session/workspace 持久批准存储；继续禁止 network/destructive 风险持久化。 |
-| [ ] | P4-3：provider、model、预算、审批策略和 RPC 命令配置界面 | `README.md`、`docs/vscode-extension.md` | 依赖 P4-9 capability data contract；避免保存 API Key，配置只管理非敏感选项。 |
-| [ ] | P4-7：真实 hunk 级 patch 审批 | `docs/tool-system.md`、`docs/vscode-extension.md`、`docs/json-rpc-protocol.md` | 首版限定 `apply_patch`；复用 Phase 3 hunk boundary，扩展 Core/RPC 审批决策、冲突诊断和 Run Log 回放记录。 |
-| [ ] | P4-8：FIM completion preview | `README.md`、`docs/deepseek-api-adapter.md`、`docs/vscode-extension.md` | 依赖 P4-9 Provider capability model；优先评估 VS Code 原生 inline completion 接入边界。 |
-| [ ] | P4-10：VSIX alpha / pre-release 打包与安装说明 | `docs/release.md`、`docs/vscode-extension.md` | Marketplace 上架不阻塞 Phase 4 完成，但需要可安装 VSIX 产物、clean 环境安装验收和文档。 |
-| [ ] | P4-12：补齐 end-to-end 集成测试覆盖 | `README.md`、`docs/vscode-extension.md`、`docs/testing.md` | 在 P4-0b harness 基础上覆盖 Chat sendTurn、Cancel、Problems diagnostics、审批、Run List / resume 和 VSIX 安装后的基础交互。 |
+| [x] | P4-1：VSIX dry-run packaging smoke | `README.md`、`docs/vscode-extension.md`、`docs/release.md` | 已完成：新增 `pnpm run vsix:smoke` / `vscode/extension/scripts/vsixDryRunSmoke.mjs`，构建 protocol 与 extension 后在 `target/` 下临时生成 VSIX，检查 `.vscodeignore`、`workspace:*` 运行时边界、media asset、compiled `out/`、activationEvents 和包内排除规则，并清理临时产物；不代表 P4-13 完成。验收：`pnpm -r --if-present vsix:smoke`。 |
+| [x] | P4-2：`@vscode/test-electron` 最小 harness | `README.md`、`docs/vscode-extension.md` | 已完成：新增 `pnpm run vscode:test-electron` / `vscode/extension/scripts/runVscodeIntegrationTests.mjs`，测试 extension activation、trusted workspace、Chat view focus 和命令注册；测试工作区禁用 RPC autoStart，为 P4-14 后续 E2E 打底。 |
+| [x] | P4-3：Provider capability model data contract | `README.md`、`docs/roadmap.md`、`docs/deepseek-api-adapter.md`、`docs/json-rpc-protocol.md` | 已完成：新增 ADR 0006；`agent.initialize.capabilities.provider` 暴露 DeepSeek V4 model capability data contract，包含 thinking、tool calls/tool choice、FIM、stream/cache usage、上下文和输出限制，首版不引入 heavy trait。 |
+| [x] | P4-4：事件 payload schema 与协议 fixture 对齐 | `docs/json-rpc-protocol.md`、`docs/turn-loop.md`、`packages/protocol` | 已完成：新增 `docs/protocol/event-payloads.v1.json`，将 `provider.requested`、`tool.completed`、`run.completed` 纳入 Rust/TypeScript 兼容性测试；VS Code 初始化协议版本不匹配会给出明确提示。 |
+| [x] | P4-5：RPC 高频事件输出节流与批量发送策略 | `docs/rpc-server.md`、`docs/vscode-extension.md`、`docs/json-rpc-protocol.md` | 已完成：实时 live event wire 层支持 `agent.eventBatch` 批量发送，VS Code manager 按序分发；Run Log 仍逐事件写入并保持 `seq` 为事实来源，`agent.resume` replay 仍按单事件结构输出。 |
+| [ ] | P4-6：`agent.cancel` 类型化 helper 与 Chat Cancel UI | `README.md`、`docs/vscode-extension.md`、`docs/json-rpc-protocol.md` | 新增 `RpcServerManager.cancel()`、`ChatCancelClient` 边界测试和 Chat Cancel 按钮；与 Terminal approval 做轻量 composer UX review，但不阻塞 cancel helper 先行。 |
+| [ ] | P4-7：Problems 面板诊断进入 Context Builder | `README.md`、`docs/vscode-extension.md`、`docs/context-capsule.md` | 通过 `agent.sendTurn.attachments` 的 diagnostic attachment 注入；插件只采集 Problems 快照，预算、排序、截断和 omitted reason 由 Core/Context Builder 处理。 |
+| [ ] | P4-8：Terminal command approval | `README.md`、`docs/vscode-extension.md`、`docs/approval-model.md` | 展示命令、cwd、风险等级、输出摘要和持久化选项；复用 P4-6 的 composer 状态模型。 |
+| [ ] | P4-9：审批持久化存储 | `docs/approval-model.md`、`docs/tool-system.md`、`docs/vscode-extension.md` | 实现 session/workspace 持久批准存储；继续禁止 network/destructive 风险持久化。 |
+| [ ] | P4-10：provider、model、预算、审批策略和 RPC 命令配置界面 | `README.md`、`docs/vscode-extension.md` | 依赖 P4-3 capability data contract；避免保存 API Key，配置只管理非敏感选项；UI 应展示 server 返回的 capability 数据，不根据 Flash/Pro 名称推断能力差异，后续如确认模型能力差异先更新 contract data。 |
+| [ ] | P4-11：真实 hunk 级 patch 审批 | `docs/tool-system.md`、`docs/vscode-extension.md`、`docs/json-rpc-protocol.md` | 首版限定 `apply_patch`；复用 Phase 3 hunk boundary，扩展 Core/RPC 审批决策、冲突诊断和 Run Log 回放记录；如新增或扩展审批事件 payload，同步扩展 `docs/protocol/event-payloads.v1.json`。 |
+| [ ] | P4-12：FIM completion preview | `README.md`、`docs/deepseek-api-adapter.md`、`docs/vscode-extension.md` | 依赖 P4-3 Provider capability model；优先评估 VS Code 原生 inline completion 接入边界；如新增 FIM preview 事件 payload，同步纳入协议 fixture。 |
+| [ ] | P4-13：VSIX alpha / pre-release 打包与安装说明 | `docs/release.md`、`docs/vscode-extension.md` | Marketplace 上架不阻塞 Phase 4 完成，但需要可安装 VSIX 产物、clean 环境安装验收和文档。 |
+| [ ] | P4-14：补齐 end-to-end 集成测试覆盖 | `README.md`、`docs/vscode-extension.md`、`docs/testing.md` | 在 P4-2 harness 基础上覆盖 Chat sendTurn、Cancel、Problems diagnostics、审批、Run List / resume 和 VSIX 安装后的基础交互。 |
 
 ## Phase 5：TUI 与生态扩展
 

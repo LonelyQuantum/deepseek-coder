@@ -1,6 +1,6 @@
 # 编辑器插件（VS Code Extension）
 
-状态：Phase 3 VS Code 插件核心体验已完成。基础命令、审批弹窗 adapter、RPC server 启动监管、初始化握手、JSON-RPC request client、VS Code/protocol TypeScript 类型共享、RPC/commands 边界测试、Sidebar Chat 事件渲染、Chat 输入发送真实 turn、真实审批回传、共享 RPC 全双工事件管线、命令风险动态升级展示、Native diff editor patch 预览、Run List / resume 和 Context Capsule 可视化已实现；Phase 4 按 14 项权威清单推进深度集成。
+状态：Phase 3 VS Code 插件核心体验已完成。基础命令、审批弹窗 adapter、RPC server 启动监管、初始化握手、JSON-RPC request client、VS Code/protocol TypeScript 类型共享、RPC/commands 边界测试、Sidebar Chat 事件渲染、Chat 输入发送真实 turn、真实审批回传、共享 RPC 全双工事件管线、命令风险动态升级展示、Native diff editor patch 预览、Run List / resume 和 Context Capsule 可视化已实现；Phase 4 按 14 项权威清单推进深度集成，P4-1 到 P4-5 已完成。
 
 VS Code 插件是 `ProleCoder` 的一等前端。它必须通过 JSON-RPC server 复用 Rust Agent Core，而不是在 TypeScript 侧重新实现 agent loop、context builder、provider 调用或 tool execution。
 
@@ -115,20 +115,20 @@ Phase 3 P0 验收标准：
 
 Phase 4 深度集成权威清单与 `docs/phase-tasks.md` 对齐：
 
-1. P4-0a：VSIX dry-run packaging smoke，先验证打包基础设施，不标记最终 VSIX 交付完成。
-2. P4-0b：`@vscode/test-electron` 最小 harness，覆盖 activation、trusted workspace 和 Chat view 基础加载。
-3. P4-9：Provider capability model data contract；首版通过 `agent.initialize` 暴露给插件。
-4. P4-5：事件 payload schema 与协议 fixture 对齐，并处理协议版本不匹配提示。
-5. P4-4：RPC 高频事件输出节流与批量发送策略，保持 Run Log `seq` 与 replay 语义稳定。
-6. P4-11：`agent.cancel` 类型化 helper 与 Chat Cancel UI；与 Terminal approval 共享 composer 状态模型。
-7. P4-1：通过 diagnostic attachments 读取 Problems 面板诊断并交给 Agent Core。
-8. P4-2：Terminal command approval 展示命令、cwd、风险等级、输出摘要和持久化选项。
-9. P4-6：审批持久化存储，继续禁止 network/destructive 风险持久化。
-10. P4-3：provider、model、预算、审批策略和 RPC 命令配置界面；不保存 API Key。
-11. P4-7：真实 hunk 级 patch 审批，首版限定 `apply_patch`。
-12. P4-8：FIM completion preview。
-13. P4-10：VSIX alpha / pre-release 打包与安装说明。
-14. P4-12：补齐 end-to-end 集成测试覆盖。
+1. P4-1：VSIX dry-run packaging smoke，已完成：`pnpm run vsix:smoke` 会构建 extension，临时生成 VSIX，检查 `.vscodeignore`、`workspace:*` 运行时边界、media asset、compiled `out/` 和 activationEvents，并清理产物；不标记最终 VSIX 交付完成。
+2. P4-2：`@vscode/test-electron` 最小 harness，已完成：`pnpm run vscode:test-electron` 覆盖 activation、trusted workspace、Chat view focus 和命令注册，测试工作区禁用 RPC autoStart。
+3. P4-3：Provider capability model data contract，已完成：`agent.initialize.capabilities.provider` 暴露 DeepSeek V4 model capability，首版不引入 heavy trait。
+4. P4-4：事件 payload schema 与协议 fixture 对齐，已完成：共享 fixture 覆盖 `provider.requested`、`tool.completed`、`run.completed`，并处理协议版本不匹配提示。
+5. P4-5：RPC 高频事件输出节流与批量发送策略，已完成：实时 live event 支持 `agent.eventBatch`，保持 Run Log `seq` 与 replay 语义稳定。
+6. P4-6：`agent.cancel` 类型化 helper 与 Chat Cancel UI；与 Terminal approval 共享 composer 状态模型。
+7. P4-7：通过 diagnostic attachments 读取 Problems 面板诊断并交给 Agent Core。
+8. P4-8：Terminal command approval 展示命令、cwd、风险等级、输出摘要和持久化选项。
+9. P4-9：审批持久化存储，继续禁止 network/destructive 风险持久化。
+10. P4-10：provider、model、预算、审批策略和 RPC 命令配置界面；不保存 API Key，并展示 server 返回的 capability 数据。
+11. P4-11：真实 hunk 级 patch 审批，首版限定 `apply_patch`，新增审批事件 payload 时同步扩展协议 fixture。
+12. P4-12：FIM completion preview，若新增 preview 事件 payload 同步纳入协议 fixture。
+13. P4-13：VSIX alpha / pre-release 打包与安装说明。
+14. P4-14：补齐 end-to-end 集成测试覆盖。
 
 在这些能力稳定前，不在插件侧重复实现 context builder、tool execution 或 provider 调用。
 
