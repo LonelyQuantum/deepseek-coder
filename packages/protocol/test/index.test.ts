@@ -154,7 +154,7 @@ test("server capabilities expose provider model capabilities", () => {
     protocolVersion,
     supportsRunResume: true,
     supportsPatchApproval: true,
-    supportsPersistentApprovals: false,
+    supportsPersistentApprovals: true,
     supportsEventBatching: true,
     supportedRiskLevels: riskLevels,
     provider,
@@ -196,6 +196,8 @@ test("approval request and decision params use stable protocol fields", () => {
     title: "Run shell command",
     detail: "Execute cargo test",
     command: "cargo test",
+    cwd: ".",
+    outputSummary: "previous command output was truncated",
     riskReasons: ["dependency install/update"],
     persistable: false,
   } satisfies ApprovalRequest;
@@ -207,6 +209,8 @@ test("approval request and decision params use stable protocol fields", () => {
     title: request.title,
     detail: request.detail,
     command: request.command,
+    cwd: request.cwd,
+    outputSummary: request.outputSummary,
     riskReasons: request.riskReasons,
     persistable: request.persistable,
   } satisfies ToolApprovalRequiredPayload;
