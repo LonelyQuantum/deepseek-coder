@@ -9,6 +9,7 @@ export const agentApproveMethod = "agent.approve" as const;
 export const agentRejectMethod = "agent.reject" as const;
 export const agentCancelMethod = "agent.cancel" as const;
 export const agentListRunsMethod = "agent.listRuns" as const;
+export const agentPreviewFimMethod = "agent.previewFim" as const;
 
 export interface ProtocolErrorDefinition {
   readonly code: number;
@@ -512,12 +513,18 @@ export interface ListRunsResult {
 export interface ApproveParams {
   readonly approvalId: string;
   readonly persist?: ApprovalPersistence;
+  readonly hunks?: {
+    readonly approved: readonly string[];
+  };
 }
 
 export interface ApproveResult {
   readonly approvalId: string;
   readonly state: "approved";
   readonly persist: ApprovalPersistence;
+  readonly hunks?: {
+    readonly approved: readonly string[];
+  };
 }
 
 export interface RejectParams {
@@ -542,6 +549,21 @@ export interface CancelResult {
   readonly reason?: string;
 }
 
+export interface FimPreviewParams {
+  readonly prefix: string;
+  readonly suffix?: string;
+  readonly path?: string;
+  readonly languageId?: string;
+  readonly model?: string;
+  readonly maxTokens?: number;
+}
+
+export interface FimPreviewResult {
+  readonly text: string;
+  readonly model: string;
+  readonly finishReason?: string;
+}
+
 export interface ApprovalRequest {
   readonly approvalId: string;
   readonly risk: RiskLevel;
@@ -553,8 +575,22 @@ export interface ApprovalRequest {
   readonly cwd?: string;
   readonly outputSummary?: string;
   readonly paths?: readonly string[];
+  readonly hunks?: readonly PatchApprovalHunk[];
   readonly riskReasons?: readonly string[];
   readonly persistable: boolean;
+}
+
+// Keep vscode/extension/src/approvalFlow.ts optionalApprovalHunks in sync with this wire shape.
+export interface PatchApprovalHunk {
+  readonly id: string;
+  readonly filePath: string;
+  readonly fileIndex: number;
+  readonly hunkIndex: number;
+  readonly oldStart: number;
+  readonly oldCount: number;
+  readonly newStart: number;
+  readonly newCount: number;
+  readonly section?: string;
 }
 
 export type JsonRpcId = string | number | null;
@@ -674,6 +710,7 @@ export interface ToolApprovalRequiredPayload {
   readonly cwd?: string;
   readonly outputSummary?: string;
   readonly paths?: readonly string[];
+  readonly hunks?: readonly PatchApprovalHunk[];
   readonly riskReasons?: readonly string[];
   readonly persistable: boolean;
 }
@@ -684,6 +721,14 @@ export interface ToolApprovalResolvedPayload {
   readonly toolName: ToolName;
   readonly decision: "approved" | "rejected" | "canceled" | "expired";
   readonly reason?: string;
+  readonly hunks?:
+    | {
+        readonly scope: "all";
+      }
+    | {
+        readonly scope: "selected";
+        readonly approved: readonly string[];
+      };
 }
 
 export type AgentEventNotification<TPayload = unknown> = JsonRpcNotification<

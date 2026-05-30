@@ -12,12 +12,15 @@ import {
   agentCancelMethod,
   agentListRunsMethod,
   agentEventBatchMethod,
+  agentPreviewFimMethod,
   type ApprovalRequest,
   type ApproveParams,
   type ApproveResult,
   type CancelParams,
   type CancelResult,
   type AgentEventBatchParams,
+  type FimPreviewParams,
+  type FimPreviewResult,
   type ListRunsParams,
   type ListRunsResult,
   type ProviderCapabilities,
@@ -127,6 +130,7 @@ test("JSON-RPC method constants match protocol document", () => {
   assert.equal(agentRejectMethod, "agent.reject");
   assert.equal(agentCancelMethod, "agent.cancel");
   assert.equal(agentListRunsMethod, "agent.listRuns");
+  assert.equal(agentPreviewFimMethod, "agent.previewFim");
   assert.equal(agentEventMethod, "agent.event");
   assert.equal(agentEventBatchMethod, "agent.eventBatch");
 });
@@ -191,13 +195,25 @@ test("approval request and decision params use stable protocol fields", () => {
   const request = {
     approvalId: "approval_1",
     toolCallId: "call_1",
-    toolName: "shell",
-    risk: "exec",
-    title: "Run shell command",
-    detail: "Execute cargo test",
-    command: "cargo test",
+    toolName: "apply_patch",
+    risk: "write",
+    title: "Apply patch",
+    detail: "Modify README.md",
     cwd: ".",
     outputSummary: "previous command output was truncated",
+    paths: ["README.md"],
+    hunks: [
+      {
+        id: "README.md#1:old1+3:new1+3",
+        filePath: "README.md",
+        fileIndex: 0,
+        hunkIndex: 0,
+        oldStart: 1,
+        oldCount: 3,
+        newStart: 1,
+        newCount: 3,
+      },
+    ],
     riskReasons: ["dependency install/update"],
     persistable: false,
   } satisfies ApprovalRequest;
@@ -208,9 +224,10 @@ test("approval request and decision params use stable protocol fields", () => {
     risk: request.risk,
     title: request.title,
     detail: request.detail,
-    command: request.command,
     cwd: request.cwd,
     outputSummary: request.outputSummary,
+    paths: request.paths,
+    hunks: request.hunks,
     riskReasons: request.riskReasons,
     persistable: request.persistable,
   } satisfies ToolApprovalRequiredPayload;
@@ -219,15 +236,23 @@ test("approval request and decision params use stable protocol fields", () => {
     toolCallId: request.toolCallId,
     toolName: request.toolName,
     decision: "approved",
+    hunks: {
+      scope: "selected",
+      approved: ["README.md#1:old1+3:new1+3"],
+    },
   } satisfies ToolApprovalResolvedPayload;
   const approve = {
     approvalId: request.approvalId,
-    persist: "session",
+    persist: "never",
+    hunks: {
+      approved: ["README.md#1:old1+3:new1+3"],
+    },
   } satisfies ApproveParams;
   const approveResult = {
     approvalId: request.approvalId,
     state: "approved",
-    persist: "session",
+    persist: "never",
+    hunks: approve.hunks,
   } satisfies ApproveResult;
   const reject = {
     approvalId: request.approvalId,
@@ -247,6 +272,19 @@ test("approval request and decision params use stable protocol fields", () => {
     state: "canceled",
     reason: cancel.reason,
   } satisfies CancelResult;
+  const fimPreview = {
+    prefix: "fn main() {",
+    suffix: "}",
+    path: "src/main.rs",
+    languageId: "rust",
+    model: "deepseek-v4-pro",
+    maxTokens: 32,
+  } satisfies FimPreviewParams;
+  const fimPreviewResult = {
+    text: " println!(\"hi\");",
+    model: "deepseek-v4-pro",
+    finishReason: "stop",
+  } satisfies FimPreviewResult;
   const expiredPayload = {
     approvalId: request.approvalId,
     toolCallId: request.toolCallId,
@@ -256,11 +294,15 @@ test("approval request and decision params use stable protocol fields", () => {
   } satisfies ToolApprovalResolvedPayload;
 
   assert.equal(approve.approvalId, "approval_1");
-  assert.equal(requiredPayload.toolName, "shell");
+  assert.equal(requiredPayload.toolName, "apply_patch");
+  assert.equal(requiredPayload.hunks?.[0]?.id, "README.md#1:old1+3:new1+3");
   assert.equal(resolvedPayload.decision, "approved");
+  assert.equal(approve.hunks?.approved[0], "README.md#1:old1+3:new1+3");
   assert.equal(approveResult.state, "approved");
   assert.equal(reject.reason, rejectResult.reason);
   assert.equal(cancelResult.state, "canceled");
+  assert.equal(fimPreview.languageId, "rust");
+  assert.equal(fimPreviewResult.finishReason, "stop");
   assert.equal(expiredPayload.decision, "expired");
 });
 
@@ -383,10 +425,44 @@ test("event payload fixture stays aligned with shared protocol types", () => {
     changedFiles: ["README.md"],
     verificationStatus: "passed",
   } satisfies RunCompletedPayload;
+  const toolApprovalRequired = {
+    approvalId: "approval_1",
+    toolCallId: "call_patch",
+    toolName: "apply_patch",
+    risk: "write",
+    title: "Apply patch",
+    detail: "Modify README.md",
+    paths: ["README.md"],
+    hunks: [
+      {
+        id: "README.md#1:old1+3:new1+3",
+        filePath: "README.md",
+        fileIndex: 0,
+        hunkIndex: 0,
+        oldStart: 1,
+        oldCount: 3,
+        newStart: 1,
+        newCount: 3,
+      },
+    ],
+    persistable: true,
+  } satisfies ToolApprovalRequiredPayload;
+  const toolApprovalResolved = {
+    approvalId: "approval_1",
+    toolCallId: "call_patch",
+    toolName: "apply_patch",
+    decision: "approved",
+    hunks: {
+      scope: "selected",
+      approved: ["README.md#1:old1+3:new1+3"],
+    },
+  } satisfies ToolApprovalResolvedPayload;
   const samples = {
     "provider.requested": providerRequested,
     "tool.completed": toolCompleted,
     "run.completed": runCompleted,
+    "tool.approvalRequired": toolApprovalRequired,
+    "tool.approvalResolved": toolApprovalResolved,
   } as const;
 
   assert.equal(eventPayloadFixture.version, protocolVersion);
@@ -394,6 +470,8 @@ test("event payload fixture stays aligned with shared protocol types", () => {
     "provider.requested",
     "tool.completed",
     "run.completed",
+    "tool.approvalRequired",
+    "tool.approvalResolved",
   ]);
 
   for (const event of eventPayloadFixture.events) {
