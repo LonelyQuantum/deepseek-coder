@@ -5,6 +5,7 @@ import {
   APPROVAL_APPROVE_LABEL,
   APPROVAL_APPROVE_ONCE_LABEL,
   APPROVAL_APPROVE_SESSION_LABEL,
+  APPROVAL_APPROVE_WORKSPACE_LABEL,
   APPROVAL_DISMISSED_REASON,
   APPROVAL_REJECTED_REASON,
   APPROVAL_REJECT_LABEL,
@@ -177,7 +178,11 @@ test("open chat command falls back to information messages for non-Error startup
 });
 
 test("requestApproval maps VS Code approve choices to approval params", async () => {
-  const approvals = [APPROVAL_APPROVE_ONCE_LABEL, APPROVAL_APPROVE_SESSION_LABEL] as const;
+  const approvals = [
+    APPROVAL_APPROVE_ONCE_LABEL,
+    APPROVAL_APPROVE_SESSION_LABEL,
+    APPROVAL_APPROVE_WORKSPACE_LABEL,
+  ] as const;
 
   for (const selected of approvals) {
     let message: string | undefined;
@@ -198,11 +203,37 @@ test("requestApproval maps VS Code approve choices to approval params", async ()
     assert.equal(decision.approvalId, "approval_1");
     assert.equal(
       decision.persist,
-      selected === APPROVAL_APPROVE_SESSION_LABEL ? "session" : "never",
+      selected === APPROVAL_APPROVE_SESSION_LABEL
+        ? "session"
+        : selected === APPROVAL_APPROVE_WORKSPACE_LABEL
+          ? "workspace"
+          : "never",
     );
     assert.equal(modal, true);
     assert.ok(message?.includes("Command: cargo test"));
+    assert.ok(message?.includes("Cwd: crates/cli"));
+    assert.ok(message?.includes("Output: last run passed"));
     assert.ok(items.includes(APPROVAL_REJECT_LABEL));
+  }
+});
+
+test("requestApproval omits persistent choices for network and destructive risks", async () => {
+  for (const risk of ["network", "destructive"] as const) {
+    let items: readonly string[] = [];
+    const window: ApprovalWindowMessenger = {
+      showWarningMessage(_message, _options, ...choices) {
+        items = choices;
+        return APPROVAL_APPROVE_ONCE_LABEL;
+      },
+    };
+
+    const decision = await requestApproval(window, {
+      ...sampleApprovalRequest(true),
+      risk,
+    });
+
+    assert.equal(decision.kind, "approve");
+    assert.deepEqual(items, [APPROVAL_APPROVE_ONCE_LABEL, APPROVAL_REJECT_LABEL]);
   }
 });
 
@@ -286,6 +317,8 @@ function sampleApprovalRequest(persistable: boolean): ApprovalPromptRequest {
     detail: "Run verification",
     persistable,
     command: "cargo test",
+    cwd: "crates/cli",
+    outputSummary: "last run passed",
     paths: ["crates/cli/src/lib.rs"],
   };
 }

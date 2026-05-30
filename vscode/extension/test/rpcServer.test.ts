@@ -5,6 +5,7 @@ import {
   DEFAULT_RPC_ARGS,
   DEFAULT_RPC_COMMAND,
   RPC_APPROVE_METHOD,
+  RPC_CANCEL_METHOD,
   RPC_EVENT_BATCH_METHOD,
   RPC_INITIALIZE_METHOD,
   RPC_LIST_RUNS_METHOD,
@@ -405,6 +406,42 @@ test("RPC server manager sends typed approval requests", async () => {
   });
 });
 
+test("RPC server manager sends typed cancel requests", async () => {
+  const factory = new FakeProcessFactory();
+  const manager = rpcManagerWithFactory(factory);
+  const readyPromise = manager.start();
+  const child = factory.lastChild();
+  child.stdout.pushJson(initializeResponse(child.initializeRequest().id));
+  await readyPromise;
+
+  const cancelPromise = manager.cancel({
+    runId: "run_1",
+    reason: "user canceled",
+  });
+  await flushMicrotasks();
+  const cancelRequest = child.requestAt(1);
+  assert.equal(cancelRequest.method, RPC_CANCEL_METHOD);
+  assert.deepEqual(cancelRequest.params, {
+    runId: "run_1",
+    reason: "user canceled",
+  });
+  child.stdout.pushJson({
+    jsonrpc: "2.0",
+    id: cancelRequest.id,
+    result: {
+      runId: "run_1",
+      state: "canceled",
+      reason: "user canceled",
+    },
+  });
+
+  assert.deepEqual(await cancelPromise, {
+    runId: "run_1",
+    state: "canceled",
+    reason: "user canceled",
+  });
+});
+
 test("RPC server manager rejects sendRequest when stdin write fails", async () => {
   const factory = new FakeProcessFactory();
   const manager = rpcManagerWithFactory(factory);
@@ -721,7 +758,7 @@ function initializeResponse(id: unknown): unknown {
         protocolVersion: RPC_PROTOCOL_VERSION,
         supportsRunResume: true,
         supportsPatchApproval: true,
-        supportsPersistentApprovals: false,
+        supportsPersistentApprovals: true,
         supportsEventBatching: true,
         supportedRiskLevels: ["read", "write", "exec", "network", "destructive"],
         provider: {
