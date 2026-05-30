@@ -24,8 +24,9 @@ use crate::{
         validate_tool_arguments,
     },
     tool_execution::{
-        ApplyPatchArgs, ReadFileArgs, ShellArgs, ShellResult, ToolExecutionError, ToolStatus,
-        WorkspaceManifestArgs, WorkspaceToolExecutor, redacted_tool_result_value,
+        ApplyPatchArgs, PatchApprovalHunk, ReadFileArgs, ShellArgs, ShellResult,
+        ToolExecutionError, ToolStatus, WorkspaceManifestArgs, WorkspaceToolExecutor,
+        filter_apply_patch_hunks, patch_approval_hunks, redacted_tool_result_value,
     },
 };
 
@@ -675,7 +676,8 @@ where
             }
             ToolName::ApplyPatch => {
                 let args: ApplyPatchArgs = parse_tool_arguments(tool_call, &arguments_preview)?;
-                self.ensure_approval(
+                let approval_hunks = patch_approval_hunks(&args.unified_diff)?;
+                let approval_scope = self.ensure_approval(
                     definition,
                     &risk_assessment,
                     tool_call,
@@ -686,9 +688,14 @@ where
                     None,
                     None,
                     None,
+                    Some(approval_hunks),
                     run_log,
                     event_sink,
                 )?;
+                let args = match approval_scope {
+                    ApprovalScope::All => args,
+                    ApprovalScope::Hunks { hunk_ids } => filter_apply_patch_hunks(args, &hunk_ids)?,
+                };
                 self.execute_without_approval(
                     tool_call,
                     context,
@@ -720,6 +727,7 @@ where
                     Some(args.command.clone()),
                     Some(args.cwd.clone().unwrap_or_else(|| ".".to_owned())),
                     context.previous_shell_output_summary.map(str::to_owned),
+                    None,
                     run_log,
                     event_sink,
                 )?;
@@ -835,12 +843,13 @@ where
         command: Option<String>,
         cwd: Option<String>,
         output_summary: Option<String>,
+        hunks: Option<Vec<PatchApprovalHunk>>,
         run_log: &mut (impl RunLogWriter + ?Sized),
         event_sink: &mut (impl TurnEventSink + ?Sized),
-    ) -> Result<(), AgentTurnLoopError> {
+    ) -> Result<ApprovalScope, AgentTurnLoopError> {
         let approval = effective_approval_requirement(definition.approval, risk_assessment.risk);
         if approval == ApprovalRequirement::None {
-            return Ok(());
+            return Ok(ApprovalScope::All);
         }
 
         let request = TurnApprovalRequest {
@@ -859,6 +868,7 @@ where
             cwd,
             output_summary,
             paths,
+            hunks,
             risk_reasons: risk_assessment.risk_reasons.clone(),
             persistable: approval_persistable(approval, risk_assessment.risk),
         };
@@ -878,9 +888,25 @@ where
                     event_sink,
                     "tool.approvalResolved",
                     Some(turn_id.to_owned()),
-                    approval_resolved_payload(&request, "approved", None),
+                    approval_resolved_payload(
+                        &request,
+                        "approved",
+                        None,
+                        Some(&ApprovalScope::All),
+                    ),
                 )?;
-                Ok(())
+                Ok(ApprovalScope::All)
+            }
+            ApprovalDecision::ApprovedHunks { hunk_ids } => {
+                let approval_scope = ApprovalScope::Hunks { hunk_ids };
+                append_turn_event(
+                    run_log,
+                    event_sink,
+                    "tool.approvalResolved",
+                    Some(turn_id.to_owned()),
+                    approval_resolved_payload(&request, "approved", None, Some(&approval_scope)),
+                )?;
+                Ok(approval_scope)
             }
             ApprovalDecision::Rejected { reason } => {
                 append_turn_event(
@@ -888,7 +914,7 @@ where
                     event_sink,
                     "tool.approvalResolved",
                     Some(turn_id.to_owned()),
-                    approval_resolved_payload(&request, "rejected", Some(reason.as_str())),
+                    approval_resolved_payload(&request, "rejected", Some(reason.as_str()), None),
                 )?;
                 Err(AgentTurnLoopError::ApprovalRejected {
                     approval_id: request.approval_id,
@@ -902,7 +928,7 @@ where
                     event_sink,
                     "tool.approvalResolved",
                     Some(turn_id.to_owned()),
-                    approval_resolved_payload(&request, "canceled", Some(reason.as_str())),
+                    approval_resolved_payload(&request, "canceled", Some(reason.as_str()), None),
                 )?;
                 Err(AgentTurnLoopError::ApprovalCanceled {
                     approval_id: request.approval_id,
@@ -916,7 +942,7 @@ where
                     event_sink,
                     "tool.approvalResolved",
                     Some(turn_id.to_owned()),
-                    approval_resolved_payload(&request, "expired", Some(reason.as_str())),
+                    approval_resolved_payload(&request, "expired", Some(reason.as_str()), None),
                 )?;
                 Err(AgentTurnLoopError::ApprovalExpired {
                     approval_id: request.approval_id,
@@ -1486,6 +1512,7 @@ pub struct TurnApprovalRequest {
     pub cwd: Option<String>,
     pub output_summary: Option<String>,
     pub paths: Option<Vec<String>>,
+    pub hunks: Option<Vec<PatchApprovalHunk>>,
     pub risk_reasons: Vec<String>,
     pub persistable: bool,
 }
@@ -1493,9 +1520,16 @@ pub struct TurnApprovalRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApprovalDecision {
     Approved,
+    ApprovedHunks { hunk_ids: Vec<String> },
     Rejected { reason: String },
     Canceled { reason: String },
     Expired { reason: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ApprovalScope {
+    All,
+    Hunks { hunk_ids: Vec<String> },
 }
 
 pub trait ApprovalPolicy {
@@ -2001,6 +2035,12 @@ fn approval_payload(request: &TurnApprovalRequest) -> Value {
             Value::Array(paths.iter().cloned().map(Value::String).collect()),
         );
     }
+    if let Some(hunks) = &request.hunks {
+        payload.insert(
+            "hunks".to_owned(),
+            serde_json::to_value(hunks).expect("patch approval hunks must serialize"),
+        );
+    }
     if !request.risk_reasons.is_empty() {
         payload.insert(
             "riskReasons".to_owned(),
@@ -2022,6 +2062,7 @@ fn approval_resolved_payload(
     request: &TurnApprovalRequest,
     decision: &'static str,
     reason: Option<&str>,
+    scope: Option<&ApprovalScope>,
 ) -> Value {
     let mut payload = Map::new();
     payload.insert(
@@ -2039,6 +2080,22 @@ fn approval_resolved_payload(
     payload.insert("decision".to_owned(), Value::String(decision.to_owned()));
     if let Some(reason) = reason {
         payload.insert("reason".to_owned(), Value::String(reason.to_owned()));
+    }
+    if let Some(scope) = scope {
+        let mut scope_payload = Map::new();
+        match scope {
+            ApprovalScope::All => {
+                scope_payload.insert("scope".to_owned(), Value::String("all".to_owned()));
+            }
+            ApprovalScope::Hunks { hunk_ids } => {
+                scope_payload.insert("scope".to_owned(), Value::String("selected".to_owned()));
+                scope_payload.insert(
+                    "approved".to_owned(),
+                    Value::Array(hunk_ids.iter().cloned().map(Value::String).collect()),
+                );
+            }
+        }
+        payload.insert("hunks".to_owned(), Value::Object(scope_payload));
     }
 
     Value::Object(payload)
@@ -2113,7 +2170,8 @@ mod tests {
 
     use super::{
         AgentRunMode, AgentTurnInput, AgentTurnLoop, AgentTurnLoopConfig, AgentTurnLoopError,
-        AutoApprovePolicy, CancellationToken, TextRange, TurnAttachment, TurnEventSink,
+        ApprovalDecision, ApprovalPolicy, ApprovalPolicyError, AutoApprovePolicy,
+        CancellationToken, TextRange, TurnApprovalRequest, TurnAttachment, TurnEventSink,
         TurnEventSinkError, TurnProvider, TurnProviderCompletion, TurnProviderDelta,
         TurnProviderError, TurnProviderEvent, TurnProviderFinishReason, TurnProviderFuture,
         TurnProviderRequest, TurnProviderResponse, TurnProviderStream,
@@ -2745,6 +2803,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn turn_loop_applies_only_approved_patch_hunks() {
+        let workspace = TestWorkspace::new("turn-loop");
+        workspace.write("README.md", "one\nold\nthree\n\nkeep\nremove\n");
+        let store = RunLogStore::new(workspace.path()).expect("run log store should open");
+        let mut run = store
+            .create_run("run_turn_patch_hunks")
+            .expect("run should be created");
+        let patch = concat!(
+            "--- a/README.md\n",
+            "+++ b/README.md\n",
+            "@@ -1,3 +1,3 @@\n",
+            " one\n",
+            "-old\n",
+            "+new\n",
+            " three\n",
+            "@@ -5,2 +5,3 @@\n",
+            " keep\n",
+            "+insert\n",
+            " remove\n",
+        );
+        let provider = ScriptedProvider::new(vec![
+            TurnProviderResponse::tool_calls(
+                None,
+                Some("I should edit the README.".to_owned()),
+                vec![ChatToolCall::function(
+                    "call_1",
+                    "apply_patch",
+                    json!({
+                        "unifiedDiff": patch,
+                        "expectedFiles": ["README.md"],
+                    })
+                    .to_string(),
+                )],
+            ),
+            TurnProviderResponse::final_text("Updated README."),
+        ]);
+        let mut loop_runner =
+            AgentTurnLoop::with_approval_policy(workspace.path(), provider, HunkApprovePolicy)
+                .expect("turn loop should initialize");
+
+        let outcome = loop_runner
+            .run_turn(AgentTurnInput::new("turn_1", "Update README"), &mut run)
+            .await
+            .expect("hunk-approved patch should complete");
+
+        assert_eq!(
+            workspace.read("README.md"),
+            "one\nold\nthree\n\nkeep\ninsert\nremove\n"
+        );
+        assert_eq!(outcome.changed_files, vec!["README.md"]);
+        let events = store
+            .load_run("run_turn_patch_hunks")
+            .expect("events should load");
+        let required = events
+            .iter()
+            .find(|event| event.event_type == "tool.approvalRequired")
+            .expect("approval should be required");
+        assert_eq!(required.payload["hunks"].as_array().map(Vec::len), Some(2));
+        let resolved = events
+            .iter()
+            .find(|event| event.event_type == "tool.approvalResolved")
+            .expect("approval should resolve");
+        assert_eq!(resolved.payload["hunks"]["scope"], "selected");
+        assert_eq!(
+            resolved.payload["hunks"]["approved"],
+            json!(["README.md#2:old5+2:new5+3"])
+        );
+    }
+
+    #[tokio::test]
     async fn turn_loop_allows_tool_calls_without_reasoning_when_thinking_is_disabled() {
         let workspace = TestWorkspace::new("turn-loop");
         workspace.write("README.md", "old\n");
@@ -2973,6 +3101,21 @@ mod tests {
     struct ScriptedProvider {
         responses: VecDeque<TurnProviderResponse>,
         requests: Vec<TurnProviderRequest>,
+    }
+
+    struct HunkApprovePolicy;
+
+    impl ApprovalPolicy for HunkApprovePolicy {
+        fn decide(
+            &mut self,
+            request: &TurnApprovalRequest,
+        ) -> Result<ApprovalDecision, ApprovalPolicyError> {
+            assert_eq!(request.tool_name, "apply_patch");
+            assert_eq!(request.hunks.as_ref().map(Vec::len), Some(2));
+            Ok(ApprovalDecision::ApprovedHunks {
+                hunk_ids: vec!["README.md#2:old5+2:new5+3".to_owned()],
+            })
+        }
     }
 
     impl ScriptedProvider {
