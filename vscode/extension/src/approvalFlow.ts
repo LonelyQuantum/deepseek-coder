@@ -224,7 +224,7 @@ function isApprovalPayload(value: unknown): value is ToolApprovalRequiredPayload
 }
 
 function optionalApprovalHunks(value: unknown): boolean {
-  // Mirrors PatchApprovalHunk in @prole-coder/protocol; update both when the wire shape changes.
+  // Mirrors the shared protocol PatchApprovalHunk shape; update both sides when the wire shape changes.
   if (value === undefined) {
     return true;
   }

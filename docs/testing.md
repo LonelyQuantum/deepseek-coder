@@ -48,6 +48,27 @@
 
 默认 CI 当前通过 `pnpm run check` 执行。`search` 工具测试会执行 `rg`，因此本机和 CI 都需要安装 ripgrep。
 
+## Phase 4 VS Code extension-host E2E
+
+Phase 4 P4-14 的确定性 VS Code 端到端入口：
+
+```powershell
+pnpm run vscode:test-electron
+```
+
+该命令会构建 protocol 与 extension，编译 `test/electron/index.ts`，再用 `@vscode/test-electron` 启动隔离的 VS Code test host。`vscode/extension/scripts/runVscodeIntegrationTests.mjs` 会为每轮测试创建独立 `target/vscode-test-user-data-*` 和 `target/vscode-test-extensions-*` profile，避免本机 VS Code 状态或上一轮测试 mutex 影响结果。
+
+测试工作区使用本地 JSON-RPC fixture server，不联网、不读取 API key，也不依赖全局 `prole` 命令。覆盖范围：
+
+- extension activation、trusted workspace、Chat view focus 和命令注册。
+- Chat submit turn 通过真实 `RpcServerManager.sendTurn()` 进入 fixture RPC server。
+- Problems diagnostics 被采集为 `agent.sendTurn.attachments` 的 diagnostic attachment。
+- `tool.approvalRequired` 经过 test-only auto approval requester 回传为真实 `agent.approve`。
+- Chat Cancel UI 边界通过真实 `agent.cancel` 请求收口。
+- Run List refresh 和 `agent.resume` replay 通过同一 `agent.event` 渲染路径更新 timeline。
+
+test-only command 和 auto approval 同时要求 VS Code `ExtensionMode.Test` 以及 `PROLE_CODER_VSCODE_TEST=1` / `PROLE_CODER_VSCODE_TEST_AUTO_APPROVE=1` 环境变量，普通扩展激活不会注册这些测试入口。
+
 ## 新增测试的协作要求
 
 - PR 或提交说明中标明测试类型：unit、integration、regression、live、demo 或 stress。

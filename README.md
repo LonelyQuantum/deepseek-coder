@@ -362,7 +362,9 @@ TypeScript workspace，需要先运行 `pnpm install`：
 pnpm -r typecheck
 pnpm -r lint
 pnpm -r test
+pnpm run vscode:test-electron
 pnpm run vsix:smoke
+pnpm run vsix:alpha
 ```
 
 全量检查：

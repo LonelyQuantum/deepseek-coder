@@ -84,7 +84,7 @@ type ExtensionToWebviewMessage =
 type ChatSubmissionStatus = "idle" | "sending" | "running" | "completed" | "failed" | "canceled";
 type TerminalSubmissionStatus = Extract<ChatSubmissionStatus, "completed" | "failed" | "canceled">;
 
-interface ChatSubmissionSnapshot {
+export interface ChatSubmissionSnapshot {
   readonly busy: boolean;
   readonly status: ChatSubmissionStatus;
   readonly message: string;
@@ -98,6 +98,13 @@ interface TerminalRunState {
   readonly status: TerminalSubmissionStatus;
   readonly message: string;
   readonly error?: string;
+}
+
+export interface ChatViewTestState {
+  readonly timeline: ChatTimelineSnapshot;
+  readonly submission: ChatSubmissionSnapshot;
+  readonly runs: RunListSnapshot;
+  readonly context: ContextVizSnapshot;
 }
 
 export class ProleChatViewProvider implements vscode.WebviewViewProvider, DisposableLike {
@@ -161,6 +168,19 @@ export class ProleChatViewProvider implements vscode.WebviewViewProvider, Dispos
 
   openChatView(): Thenable<unknown> {
     return vscode.commands.executeCommand(`${CHAT_VIEW_ID}.focus`);
+  }
+
+  testHandleWebviewMessage(message: unknown): Promise<void> {
+    return this.handleWebviewMessage(message);
+  }
+
+  testState(): ChatViewTestState {
+    return {
+      timeline: this.timeline.snapshot(),
+      submission: this.submission,
+      runs: this.runList,
+      context: this.contextViz,
+    };
   }
 
   dispose(): void {
