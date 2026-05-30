@@ -19,6 +19,7 @@ import type {
 export const RPC_PROTOCOL_VERSION = "0.1.0";
 export const RPC_INITIALIZE_METHOD = "agent.initialize";
 export const RPC_EVENT_METHOD = "agent.event";
+export const RPC_EVENT_BATCH_METHOD = "agent.eventBatch";
 export const RPC_SEND_TURN_METHOD = "agent.sendTurn";
 export const RPC_RESUME_METHOD = "agent.resume";
 export const RPC_LIST_RUNS_METHOD = "agent.listRuns";
@@ -402,8 +403,15 @@ export class RpcServerManager implements DisposableLike {
 
     if (isJsonRpcNotification(message) && message.method === RPC_EVENT_METHOD) {
       if (isAgentEventEnvelope(message.params)) {
-        for (const handler of this.eventHandlers) {
-          handler(message.params);
+        this.dispatchAgentEvent(message.params);
+      }
+      return;
+    }
+
+    if (isJsonRpcNotification(message) && message.method === RPC_EVENT_BATCH_METHOD) {
+      if (isAgentEventBatchParams(message.params)) {
+        for (const event of message.params.events) {
+          this.dispatchAgentEvent(event);
         }
       }
     }
@@ -429,6 +437,12 @@ export class RpcServerManager implements DisposableLike {
     this.rejectStart = undefined;
     this.startPromise = undefined;
     resolve?.(message.result);
+  }
+
+  private dispatchAgentEvent(event: AgentEventEnvelope): void {
+    for (const handler of this.eventHandlers) {
+      handler(event);
+    }
   }
 
   private handleRequestResponse(message: JsonRpcResponse): void {
@@ -560,8 +574,48 @@ function isAgentEventEnvelope(value: unknown): value is AgentEventEnvelope {
   );
 }
 
+function isAgentEventBatchParams(value: unknown): value is {
+  readonly events: readonly AgentEventEnvelope[];
+  readonly firstSeq: number;
+  readonly lastSeq: number;
+  readonly count: number;
+} {
+  return (
+    isRecord(value) &&
+    Array.isArray(value["events"]) &&
+    value["events"].every(isAgentEventEnvelope) &&
+    typeof value["firstSeq"] === "number" &&
+    typeof value["lastSeq"] === "number" &&
+    typeof value["count"] === "number" &&
+    value["events"].length === value["count"]
+  );
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function formatProtocolMismatch(error: JsonRpcErrorObject): string | undefined {
+  if (error.code !== RPC_UNSUPPORTED_PROTOCOL_CODE) {
+    return undefined;
+  }
+
+  const data = isRecord(error.data) ? error.data : {};
+  const clientProtocol =
+    stringField(data, "clientProtocolVersion") ??
+    stringField(data, "actualProtocolVersion") ??
+    RPC_PROTOCOL_VERSION;
+  const serverProtocol =
+    stringField(data, "serverProtocolVersion") ??
+    stringField(data, "expectedProtocolVersion") ??
+    "unknown";
+
+  return `RPC protocol mismatch: VS Code extension requested ${clientProtocol}, but the ProleCoder RPC server supports ${serverProtocol}. Update the CLI/server and extension so their protocol versions match.`;
+}
+
+function stringField(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === "string" ? value : undefined;
 }
 
 function asError(error: unknown): Error {

@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     io::{self, BufRead, Write},
     path::PathBuf,
     sync::{Arc, Condvar, Mutex, mpsc},
@@ -56,6 +56,7 @@ pub const CANCEL_METHOD: RpcMethod = RpcMethod::new("cancel");
 pub const RESUME_METHOD: RpcMethod = RpcMethod::new("resume");
 pub const LIST_RUNS_METHOD: RpcMethod = RpcMethod::new("listRuns");
 pub const EVENT_METHOD: RpcMethod = RpcMethod::new("event");
+pub const EVENT_BATCH_METHOD: RpcMethod = RpcMethod::new("eventBatch");
 
 pub const JSON_RPC_PARSE_ERROR: i64 = -32700;
 pub const JSON_RPC_INVALID_REQUEST: i64 = -32600;
@@ -79,6 +80,7 @@ pub const RPC_INTERNAL_INVARIANT: i64 = -32060;
 pub const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(300);
 const RPC_LOOP_QUEUE_BOUND: usize = 256;
 const RPC_LIVE_EVENT_QUEUE_BOUND: usize = 256;
+const RPC_LIVE_EVENT_BATCH_MAX: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JsonRpcRequest<TParams = Value> {
@@ -1716,6 +1718,7 @@ impl<TParams> JsonRpcNotification<TParams> {
 }
 
 pub type AgentEventNotification = JsonRpcNotification<AgentEventEnvelope>;
+pub type AgentEventBatchNotification = JsonRpcNotification<AgentEventBatchParams>;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1728,6 +1731,15 @@ pub struct AgentEventEnvelope {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<String>,
     pub payload: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentEventBatchParams {
+    pub events: Vec<AgentEventEnvelope>,
+    pub first_seq: u64,
+    pub last_seq: u64,
+    pub count: usize,
 }
 
 pub fn run_log_event_to_envelope(event: &RunLogEvent) -> Result<AgentEventEnvelope, AgentRpcError> {
@@ -1747,6 +1759,28 @@ pub fn run_log_event_to_notification(
     Ok(JsonRpcNotification::new(
         EVENT_METHOD,
         run_log_event_to_envelope(event)?,
+    ))
+}
+
+pub fn run_log_events_to_batch_notification(
+    events: &[RunLogEvent],
+) -> Result<AgentEventBatchNotification, AgentRpcError> {
+    let envelopes = events
+        .iter()
+        .map(run_log_event_to_envelope)
+        .collect::<Result<Vec<_>, _>>()?;
+    let first_seq = envelopes.first().map_or(0, |event| event.seq);
+    let last_seq = envelopes.last().map_or(0, |event| event.seq);
+    let count = envelopes.len();
+
+    Ok(JsonRpcNotification::new(
+        EVENT_BATCH_METHOD,
+        AgentEventBatchParams {
+            events: envelopes,
+            first_seq,
+            last_seq,
+            count,
+        },
     ))
 }
 
@@ -2161,7 +2195,16 @@ where
 
         let mut shutdown_started = false;
         let mut pending_error = None;
-        while let Ok(message) = loop_rx.recv() {
+        let mut pending_messages = VecDeque::new();
+        loop {
+            let message = match pending_messages.pop_front() {
+                Some(message) => message,
+                None => match loop_rx.recv() {
+                    Ok(message) => message,
+                    Err(_) => break,
+                },
+            };
+
             match message {
                 RpcLoopMessage::InputLine(Ok(line)) if !shutdown_started => {
                     let result = server.handle_line(&line, writer);
@@ -2181,7 +2224,20 @@ where
                     detach_stdio_loop_handler(&mut server);
                 }
                 RpcLoopMessage::RunEvent(event) => {
-                    let result = emit_run_log_events(writer, std::slice::from_ref(&event));
+                    let mut events = vec![event];
+                    while events.len() < RPC_LIVE_EVENT_BATCH_MAX {
+                        match loop_rx.try_recv() {
+                            Ok(RpcLoopMessage::RunEvent(event)) => events.push(event),
+                            Ok(other) => {
+                                pending_messages.push_back(other);
+                                break;
+                            }
+                            Err(mpsc::TryRecvError::Empty | mpsc::TryRecvError::Disconnected) => {
+                                break;
+                            }
+                        }
+                    }
+                    let result = emit_live_run_log_events(writer, &events);
                     handle_stdio_write_result(&mut server, result, &disconnect_handle)?;
                 }
                 RpcLoopMessage::InputLine(_) | RpcLoopMessage::ReaderEof => {}
@@ -2265,6 +2321,18 @@ where
     }
 
     Ok(())
+}
+
+fn emit_live_run_log_events<W>(writer: &mut W, events: &[RunLogEvent]) -> Result<(), AgentRpcError>
+where
+    W: Write,
+{
+    if events.len() <= 1 {
+        return emit_run_log_events(writer, events);
+    }
+
+    let notification = run_log_events_to_batch_notification(events)?;
+    write_json_line(writer, &notification)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2424,9 +2492,10 @@ mod tests {
             turn_provider_response_stream,
         },
     };
+    use serde::Deserialize;
     use serde_json::{Value, json};
     use std::{
-        collections::VecDeque,
+        collections::{HashMap, VecDeque},
         io::{self, Cursor, Read, Write},
         sync::{Arc, Condvar, Mutex, mpsc},
         thread,
@@ -2437,7 +2506,7 @@ mod tests {
         APPROVE_METHOD, ActiveRunSpawn, AgentInitializeParams, AgentInitializeResult,
         AgentRpcError, AgentRpcHandlerError, AgentRpcHandlerOutput, AgentRpcRequestHandler,
         AgentTurnLoopRpcHandler, ApproveParams, ApproveResult, CANCEL_METHOD, CancelParams,
-        CancelResult, EVENT_METHOD, INITIALIZE_METHOD, JSON_RPC_INTERNAL_ERROR,
+        CancelResult, EVENT_BATCH_METHOD, EVENT_METHOD, INITIALIZE_METHOD, JSON_RPC_INTERNAL_ERROR,
         JSON_RPC_INVALID_PARAMS, JSON_RPC_INVALID_REQUEST, JSON_RPC_METHOD_NOT_FOUND,
         JSON_RPC_PARSE_ERROR, LIST_RUNS_METHOD, ListRunsParams, ListRunsResult, PROTOCOL_VERSION,
         REJECT_METHOD, RESUME_METHOD, RPC_APPROVAL_DENIED, RPC_APPROVAL_NOT_FOUND,
@@ -2446,8 +2515,9 @@ mod tests {
         RPC_TOOL_EXECUTION_FAILED, RPC_UNSUPPORTED_PROTOCOL, RPC_WORKSPACE_UNTRUSTED, RejectParams,
         RejectResult, ResumeParams, ResumeResult, RpcApprovalPersistence, RpcApprovalQueue,
         RpcApprovalState, RpcRunState, RpcRunSummary, RpcRunSummaryStatus, RpcWorkspace,
-        SEND_TURN_METHOD, SendTurnParams, SendTurnResult, StdioEventBridge, format_unix_millis,
-        run_log_event_to_notification, run_stdio_request_loop, spawn_active_run,
+        SEND_TURN_METHOD, SendTurnParams, SendTurnResult, StdioEventBridge,
+        emit_live_run_log_events, format_unix_millis, run_log_event_to_notification,
+        run_log_events_to_batch_notification, run_stdio_request_loop, spawn_active_run,
     };
 
     #[test]
@@ -2460,6 +2530,7 @@ mod tests {
         assert_eq!(RESUME_METHOD.qualified_name(), "agent.resume");
         assert_eq!(LIST_RUNS_METHOD.qualified_name(), "agent.listRuns");
         assert_eq!(EVENT_METHOD.qualified_name(), "agent.event");
+        assert_eq!(EVENT_BATCH_METHOD.qualified_name(), "agent.eventBatch");
     }
 
     #[test]
@@ -3502,25 +3573,20 @@ mod tests {
 
         assert_eq!(workspace.read("README.md"), "old\n");
         let lines = output.lines();
+        let events = agent_event_values(&lines);
         let cancel_response_index = line_index(&lines, |line| line["id"] == "cancel_1");
         assert_eq!(lines[cancel_response_index]["result"]["state"], "canceled");
         assert_eq!(
             lines[cancel_response_index]["result"]["reason"],
             "user changed their mind"
         );
-        assert!(lines.iter().any(|line| {
-            line["method"] == "agent.event"
-                && line["params"]["type"] == "tool.approvalResolved"
-                && line["params"]["payload"]["decision"] == "canceled"
+        assert!(events.iter().any(|event| {
+            event["type"] == "tool.approvalResolved" && event["payload"]["decision"] == "canceled"
         }));
-        assert!(lines.iter().any(|line| {
-            line["method"] == "agent.event"
-                && line["params"]["type"] == "run.canceled"
-                && line["params"]["payload"]["code"] == "E_APPROVAL_CANCELED"
+        assert!(events.iter().any(|event| {
+            event["type"] == "run.canceled" && event["payload"]["code"] == "E_APPROVAL_CANCELED"
         }));
-        assert!(!lines.iter().any(|line| {
-            line["method"] == "agent.event" && line["params"]["type"] == "tool.started"
-        }));
+        assert!(!events.iter().any(|event| event["type"] == "tool.started"));
     }
 
     #[test]
@@ -3630,6 +3696,7 @@ mod tests {
             "EOF shutdown should finish the active run"
         );
         let lines = output.lines();
+        let events = agent_event_values(&lines);
         let first_turn_response_index = line_index(&lines, |line| line["id"] == "turn_1");
         assert_eq!(
             lines[first_turn_response_index]["result"]["runId"],
@@ -3641,18 +3708,16 @@ mod tests {
             lines[second_turn_error_index]["error"]["code"],
             RPC_RUN_ALREADY_ACTIVE
         );
-        assert!(lines.iter().any(|line| {
-            line["method"] == "agent.event"
-                && line["params"]["type"] == "tool.approvalResolved"
-                && line["params"]["runId"] == "run_rpc_active_disconnect"
-                && line["params"]["payload"]["decision"] == "canceled"
-                && line["params"]["payload"]["reason"] == "RPC client disconnected"
+        assert!(events.iter().any(|event| {
+            event["type"] == "tool.approvalResolved"
+                && event["runId"] == "run_rpc_active_disconnect"
+                && event["payload"]["decision"] == "canceled"
+                && event["payload"]["reason"] == "RPC client disconnected"
         }));
-        assert!(lines.iter().any(|line| {
-            line["method"] == "agent.event"
-                && line["params"]["type"] == "run.canceled"
-                && line["params"]["runId"] == "run_rpc_active_disconnect"
-                && line["params"]["payload"]["code"] == "E_APPROVAL_CANCELED"
+        assert!(events.iter().any(|event| {
+            event["type"] == "run.canceled"
+                && event["runId"] == "run_rpc_active_disconnect"
+                && event["payload"]["code"] == "E_APPROVAL_CANCELED"
         }));
     }
 
@@ -3850,6 +3915,22 @@ mod tests {
             .lines()
             .map(|line| serde_json::from_str(line).expect("line should be JSON"))
             .collect()
+    }
+
+    // Extracts event envelopes from single-event and batch wire formats for assertions.
+    // Batch metadata is validated by dedicated batch tests, not by this helper.
+    fn agent_event_values(lines: &[Value]) -> Vec<Value> {
+        let mut events = Vec::new();
+        for line in lines {
+            if line["method"] == "agent.event" {
+                events.push(line["params"].clone());
+            } else if line["method"] == "agent.eventBatch"
+                && let Some(batch_events) = line["params"]["events"].as_array()
+            {
+                events.extend(batch_events.iter().cloned());
+            }
+        }
+        events
     }
 
     fn line_index(lines: &[Value], predicate: impl Fn(&Value) -> bool) -> usize {

@@ -1,6 +1,7 @@
 export const protocolVersion = "0.1.0" as const;
 export const jsonRpcVersion = "2.0" as const;
 export const agentEventMethod = "agent.event" as const;
+export const agentEventBatchMethod = "agent.eventBatch" as const;
 export const agentInitializeMethod = "agent.initialize" as const;
 export const agentSendTurnMethod = "agent.sendTurn" as const;
 export const agentResumeMethod = "agent.resume" as const;
@@ -685,6 +686,19 @@ export type AgentEventNotification<TPayload = unknown> = JsonRpcNotification<
   AgentEventEnvelope<TPayload>
 > & {
   readonly method: typeof agentEventMethod;
+};
+
+export interface AgentEventBatchParams<TPayload = unknown> {
+  readonly events: readonly AgentEventEnvelope<TPayload>[];
+  readonly firstSeq: number;
+  readonly lastSeq: number;
+  readonly count: number;
+}
+
+export type AgentEventBatchNotification<TPayload = unknown> = JsonRpcNotification<
+  AgentEventBatchParams<TPayload>
+> & {
+  readonly method: typeof agentEventBatchMethod;
 };
 
 export type AgentEvent =

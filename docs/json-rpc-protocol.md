@@ -45,6 +45,29 @@ Agent Core
 }
 ```
 
+实时高频事件可以使用 `agent.eventBatch` notification 批量发送；Run Log 本身仍以单个 `seq` 事件作为事实来源，`agent.resume` replay 仍按 `agent.event` 重放。
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "agent.eventBatch",
+  "params": {
+    "events": [
+      {
+        "seq": 2,
+        "time": "2026-05-20T14:00:00.001Z",
+        "type": "assistant.delta",
+        "runId": "run_01",
+        "turnId": "turn_01",
+        "payload": { "text": "hello" }
+      }
+    ],
+    "firstSeq": 2,
+    "lastSeq": 2,
+    "count": 1
+  }
+}
+```
+
 ## 版本
 
 协议版本为 `0.1.0`。

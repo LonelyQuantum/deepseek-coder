@@ -5,6 +5,7 @@ import {
   DEFAULT_RPC_ARGS,
   DEFAULT_RPC_COMMAND,
   RPC_APPROVE_METHOD,
+  RPC_EVENT_BATCH_METHOD,
   RPC_INITIALIZE_METHOD,
   RPC_LIST_RUNS_METHOD,
   RPC_PROTOCOL_VERSION,
@@ -111,6 +112,84 @@ test("RPC server manager ignores malformed agent.event notifications", async () 
       time: "1970-01-01T00:00:00.000Z",
       type: "run.started",
       payload: { mode: "ask" },
+    },
+  });
+
+  assert.deepEqual(received, []);
+});
+
+test("RPC server manager forwards agent.eventBatch notifications in order", async () => {
+  const factory = new FakeProcessFactory();
+  const manager = rpcManagerWithFactory(factory);
+  const received: unknown[] = [];
+  manager.onEvent((event) => received.push(event));
+
+  const readyPromise = manager.start();
+  const child = factory.lastChild();
+  child.stdout.pushJson(initializeResponse(child.initializeRequest().id));
+  await readyPromise;
+
+  child.stdout.pushJson({
+    jsonrpc: "2.0",
+    method: RPC_EVENT_BATCH_METHOD,
+    params: {
+      events: [
+        {
+          seq: 2,
+          time: "1970-01-01T00:00:00.001Z",
+          type: "assistant.delta",
+          runId: "run_1",
+          turnId: "turn_1",
+          payload: { text: "hello" },
+        },
+        {
+          seq: 3,
+          time: "1970-01-01T00:00:00.002Z",
+          type: "assistant.delta",
+          runId: "run_1",
+          turnId: "turn_1",
+          payload: { text: " world" },
+        },
+      ],
+      firstSeq: 2,
+      lastSeq: 3,
+      count: 2,
+    },
+  });
+
+  assert.deepEqual(
+    received.map((event) => (event as { seq: number }).seq),
+    [2, 3],
+  );
+});
+
+test("RPC server manager ignores malformed agent.eventBatch notifications", async () => {
+  const factory = new FakeProcessFactory();
+  const manager = rpcManagerWithFactory(factory);
+  const received: unknown[] = [];
+  manager.onEvent((event) => received.push(event));
+
+  const readyPromise = manager.start();
+  const child = factory.lastChild();
+  child.stdout.pushJson(initializeResponse(child.initializeRequest().id));
+  await readyPromise;
+
+  child.stdout.pushJson({
+    jsonrpc: "2.0",
+    method: RPC_EVENT_BATCH_METHOD,
+    params: {
+      events: [
+        {
+          seq: 2,
+          time: "1970-01-01T00:00:00.001Z",
+          type: "assistant.delta",
+          runId: "run_1",
+          payload: { text: "hello" },
+        },
+      ],
+      firstSeq: 2,
+      lastSeq: 2,
+      count: 2,
     },
   });
 
