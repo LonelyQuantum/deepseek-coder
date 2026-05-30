@@ -180,12 +180,73 @@ pub struct ServerInfo {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ProviderModelCapabilities {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    pub context_window_tokens: u64,
+    pub max_output_tokens: u64,
+    pub supports_thinking: bool,
+    pub supports_tool_calls: bool,
+    pub supports_tool_choice: bool,
+    pub supports_fim: bool,
+    pub supports_streaming: bool,
+    pub reports_cache_usage: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderCapabilities {
+    pub provider: String,
+    pub default_model: String,
+    pub models: Vec<ProviderModelCapabilities>,
+}
+
+impl Default for ProviderCapabilities {
+    fn default() -> Self {
+        Self {
+            provider: "deepseek".to_owned(),
+            default_model: "deepseek-v4-pro".to_owned(),
+            models: vec![
+                ProviderModelCapabilities {
+                    id: "deepseek-v4-flash".to_owned(),
+                    display_name: Some("DeepSeek V4 Flash".to_owned()),
+                    context_window_tokens: 1_048_576,
+                    max_output_tokens: 393_216,
+                    supports_thinking: true,
+                    supports_tool_calls: true,
+                    supports_tool_choice: false,
+                    supports_fim: true,
+                    supports_streaming: true,
+                    reports_cache_usage: true,
+                },
+                ProviderModelCapabilities {
+                    id: "deepseek-v4-pro".to_owned(),
+                    display_name: Some("DeepSeek V4 Pro".to_owned()),
+                    context_window_tokens: 1_048_576,
+                    max_output_tokens: 393_216,
+                    supports_thinking: true,
+                    supports_tool_calls: true,
+                    supports_tool_choice: false,
+                    supports_fim: true,
+                    supports_streaming: true,
+                    reports_cache_usage: true,
+                },
+            ],
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ServerCapabilities {
     pub protocol_version: String,
     pub supports_run_resume: bool,
     pub supports_patch_approval: bool,
     pub supports_persistent_approvals: bool,
+    pub supports_event_batching: bool,
     pub supported_risk_levels: Vec<String>,
+    pub provider: ProviderCapabilities,
 }
 
 impl Default for ServerCapabilities {
@@ -195,10 +256,12 @@ impl Default for ServerCapabilities {
             supports_run_resume: true,
             supports_patch_approval: true,
             supports_persistent_approvals: false,
+            supports_event_batching: true,
             supported_risk_levels: ALL_RISK_LEVELS
                 .iter()
                 .map(|risk| risk.as_str().to_owned())
                 .collect(),
+            provider: ProviderCapabilities::default(),
         }
     }
 }

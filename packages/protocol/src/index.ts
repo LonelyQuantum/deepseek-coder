@@ -61,6 +61,35 @@ export const riskLevels = ["read", "write", "exec", "network", "destructive"] as
 export type RiskLevel = (typeof riskLevels)[number];
 export type ApprovalRisk = RiskLevel;
 
+export const providerCapabilityFeatures = [
+  "thinking",
+  "toolCalls",
+  "toolChoice",
+  "fim",
+  "streaming",
+  "cacheUsage",
+] as const;
+export type ProviderCapabilityFeature = (typeof providerCapabilityFeatures)[number];
+
+export interface ProviderModelCapabilities {
+  readonly id: string;
+  readonly displayName?: string;
+  readonly contextWindowTokens: number;
+  readonly maxOutputTokens: number;
+  readonly supportsThinking: boolean;
+  readonly supportsToolCalls: boolean;
+  readonly supportsToolChoice: boolean;
+  readonly supportsFim: boolean;
+  readonly supportsStreaming: boolean;
+  readonly reportsCacheUsage: boolean;
+}
+
+export interface ProviderCapabilities {
+  readonly provider: string;
+  readonly defaultModel: string;
+  readonly models: readonly ProviderModelCapabilities[];
+}
+
 export const approvalRequirements = ["none", "required", "always_required"] as const;
 export type ApprovalRequirement = (typeof approvalRequirements)[number];
 
@@ -402,7 +431,9 @@ export interface ServerCapabilities {
   readonly supportsRunResume: boolean;
   readonly supportsPatchApproval: boolean;
   readonly supportsPersistentApprovals: boolean;
+  readonly supportsEventBatching: boolean;
   readonly supportedRiskLevels: readonly RiskLevel[];
+  readonly provider: ProviderCapabilities;
 }
 
 export interface AgentInitializeResult {

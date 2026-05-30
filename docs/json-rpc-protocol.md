@@ -99,7 +99,28 @@ interface ServerCapabilities {
   supportsRunResume: boolean;
   supportsPatchApproval: boolean;
   supportsPersistentApprovals: boolean;
+  supportsEventBatching: boolean;
   supportedRiskLevels: RiskLevel[];
+  provider: ProviderCapabilities;
+}
+
+interface ProviderCapabilities {
+  provider: string;
+  defaultModel: string;
+  models: ProviderModelCapabilities[];
+}
+
+interface ProviderModelCapabilities {
+  id: string;
+  displayName?: string;
+  contextWindowTokens: number;
+  maxOutputTokens: number;
+  supportsThinking: boolean;
+  supportsToolCalls: boolean;
+  supportsToolChoice: boolean;
+  supportsFim: boolean;
+  supportsStreaming: boolean;
+  reportsCacheUsage: boolean;
 }
 ```
 
@@ -162,7 +183,26 @@ Result：
     "supportsRunResume": true,
     "supportsPatchApproval": true,
     "supportsPersistentApprovals": false,
-    "supportedRiskLevels": ["read", "write", "exec", "network", "destructive"]
+    "supportsEventBatching": true,
+    "supportedRiskLevels": ["read", "write", "exec", "network", "destructive"],
+    "provider": {
+      "provider": "deepseek",
+      "defaultModel": "deepseek-v4-pro",
+      "models": [
+        {
+          "id": "deepseek-v4-pro",
+          "displayName": "DeepSeek V4 Pro",
+          "contextWindowTokens": 1048576,
+          "maxOutputTokens": 393216,
+          "supportsThinking": true,
+          "supportsToolCalls": true,
+          "supportsToolChoice": false,
+          "supportsFim": true,
+          "supportsStreaming": true,
+          "reportsCacheUsage": true
+        }
+      ]
+    }
   },
   "stateDir": ".prole-coder"
 }

@@ -103,6 +103,41 @@ test("JSON-RPC method constants match protocol document", () => {
   assert.equal(agentCancelMethod, "agent.cancel");
   assert.equal(agentListRunsMethod, "agent.listRuns");
   assert.equal(agentEventMethod, "agent.event");
+  assert.equal(agentEventBatchMethod, "agent.eventBatch");
+});
+
+test("server capabilities expose provider model capabilities", () => {
+  const provider = {
+    provider: "deepseek",
+    defaultModel: "deepseek-v4-pro",
+    models: [
+      {
+        id: "deepseek-v4-pro",
+        displayName: "DeepSeek V4 Pro",
+        contextWindowTokens: 1_048_576,
+        maxOutputTokens: 393_216,
+        supportsThinking: true,
+        supportsToolCalls: true,
+        supportsToolChoice: false,
+        supportsFim: true,
+        supportsStreaming: true,
+        reportsCacheUsage: true,
+      },
+    ],
+  } satisfies ProviderCapabilities;
+  const capabilities = {
+    protocolVersion,
+    supportsRunResume: true,
+    supportsPatchApproval: true,
+    supportsPersistentApprovals: false,
+    supportsEventBatching: true,
+    supportedRiskLevels: riskLevels,
+    provider,
+  } satisfies ServerCapabilities;
+
+  assert.equal(capabilities.provider.defaultModel, "deepseek-v4-pro");
+  assert.equal(capabilities.provider.models[0]?.supportsFim, true);
+  assert.equal(capabilities.supportsEventBatching, true);
 });
 
 test("protocol error code registry matches protocol document", () => {
