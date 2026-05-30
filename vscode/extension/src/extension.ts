@@ -9,7 +9,7 @@ import { RpcServerManager, readRpcServerLaunchConfig } from "./rpcServer";
 export function activate(context: vscode.ExtensionContext): void {
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   const rpcServer = createRpcServerManager(context);
-  const chatView = new ProleChatViewProvider(context.extensionUri, rpcServer);
+  const chatView = new ProleChatViewProvider(context.extensionUri, rpcServer, workspaceRoot);
   const openChat = registerOpenChatCommand(vscode.commands, vscode.window, rpcServer, chatView);
   const chatViewRegistration = vscode.window.registerWebviewViewProvider(CHAT_VIEW_ID, chatView, {
     webviewOptions: {
