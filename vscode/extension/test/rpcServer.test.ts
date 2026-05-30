@@ -57,6 +57,8 @@ test("RPC server manager spawns the configured command and initializes the works
 
   assert.equal(manager.status, "ready");
   assert.equal(ready.server.name, "prole-coder-agent-rpc");
+  assert.equal(ready.capabilities.provider.defaultModel, "deepseek-v4-pro");
+  assert.equal(ready.capabilities.supportsEventBatching, true);
 });
 
 test("RPC server manager forwards agent.event notifications", async () => {
@@ -720,7 +722,26 @@ function initializeResponse(id: unknown): unknown {
         supportsRunResume: true,
         supportsPatchApproval: true,
         supportsPersistentApprovals: false,
+        supportsEventBatching: true,
         supportedRiskLevels: ["read", "write", "exec", "network", "destructive"],
+        provider: {
+          provider: "deepseek",
+          defaultModel: "deepseek-v4-pro",
+          models: [
+            {
+              id: "deepseek-v4-pro",
+              displayName: "DeepSeek V4 Pro",
+              contextWindowTokens: 1_048_576,
+              maxOutputTokens: 393_216,
+              supportsThinking: true,
+              supportsToolCalls: true,
+              supportsToolChoice: false,
+              supportsFim: true,
+              supportsStreaming: true,
+              reportsCacheUsage: true,
+            },
+          ],
+        },
       },
       stateDir: ".prole-coder",
     },

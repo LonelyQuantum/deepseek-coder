@@ -12,6 +12,7 @@ import type {
   ResumeResult,
   SendTurnParams,
   SendTurnResult,
+  ServerCapabilities,
 } from "@prole-coder/protocol" with {
   "resolution-mode": "import",
 };
@@ -48,6 +49,7 @@ export interface RpcServerReadyState {
     readonly name: string;
     readonly version: string;
   };
+  readonly capabilities: ServerCapabilities;
   readonly stateDir: string;
 }
 
@@ -567,7 +569,48 @@ function isRpcServerReadyState(value: unknown): value is RpcServerReadyState {
     isRecord(value["server"]) &&
     typeof value["server"]["name"] === "string" &&
     typeof value["server"]["version"] === "string" &&
+    isServerCapabilities(value["capabilities"]) &&
     typeof value["stateDir"] === "string"
+  );
+}
+
+function isServerCapabilities(value: unknown): value is ServerCapabilities {
+  return (
+    isRecord(value) &&
+    typeof value["protocolVersion"] === "string" &&
+    typeof value["supportsRunResume"] === "boolean" &&
+    typeof value["supportsPatchApproval"] === "boolean" &&
+    typeof value["supportsPersistentApprovals"] === "boolean" &&
+    typeof value["supportsEventBatching"] === "boolean" &&
+    Array.isArray(value["supportedRiskLevels"]) &&
+    value["supportedRiskLevels"].every((risk) => typeof risk === "string") &&
+    isProviderCapabilities(value["provider"])
+  );
+}
+
+function isProviderCapabilities(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value["provider"] === "string" &&
+    typeof value["defaultModel"] === "string" &&
+    Array.isArray(value["models"]) &&
+    value["models"].every(isProviderModelCapabilities)
+  );
+}
+
+function isProviderModelCapabilities(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value["id"] === "string" &&
+    (value["displayName"] === undefined || typeof value["displayName"] === "string") &&
+    typeof value["contextWindowTokens"] === "number" &&
+    typeof value["maxOutputTokens"] === "number" &&
+    typeof value["supportsThinking"] === "boolean" &&
+    typeof value["supportsToolCalls"] === "boolean" &&
+    typeof value["supportsToolChoice"] === "boolean" &&
+    typeof value["supportsFim"] === "boolean" &&
+    typeof value["supportsStreaming"] === "boolean" &&
+    typeof value["reportsCacheUsage"] === "boolean"
   );
 }
 
