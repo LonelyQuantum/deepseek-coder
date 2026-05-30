@@ -166,6 +166,22 @@ interface PlanStep {
 }
 ```
 
+### PatchApprovalHunk
+
+```ts
+interface PatchApprovalHunk {
+  id: string;
+  filePath: string;
+  fileIndex: number;
+  hunkIndex: number;
+  oldStart: number;
+  oldCount: number;
+  newStart: number;
+  newCount: number;
+  section?: string;
+}
+```
+
 ## 方法
 
 ### `agent.initialize`
@@ -290,12 +306,18 @@ Phase 2c 起，Rust handler 会消费 `attachments` 并转换为 Context Capsule
 interface ApproveParams {
   approvalId: string;
   persist?: "never" | "session" | "workspace";
+  hunks?: {
+    approved: string[];
+  };
 }
 
 interface ApproveResult {
   approvalId: string;
   state: "approved";
   persist: "never" | "session" | "workspace";
+  hunks?: {
+    approved: string[];
+  };
 }
 ```
 
@@ -304,8 +326,9 @@ interface ApproveResult {
 - `persist` 默认是 `never`。
 - 只有明确标记为 `persistable: true` 的审批类型才能使用 `session` / `workspace` 持久化。
 - `network` 和 `destructive` 风险不可持久化，即使客户端发送持久化参数也会被 server 拒绝。
+- `hunks.approved` 只用于 `apply_patch` 的 hunk 级批准；必须引用 `tool.approvalRequired.hunks` 中存在的 id，且不能与 `session` / `workspace` 持久化同时使用。
 - 批准已过期或未知审批时返回 `E_APPROVAL_NOT_FOUND`。
-- 当前 Rust request loop 已能解析 `agent.approve` 并分发给 `AgentRpcRequestHandler`；`AgentTurnLoopRpcHandler` 已能批准当前 active run 的 pending approval，并按需写入 session/workspace 持久批准。后续相同 key 的审批会自动通过并继续输出 `tool.approvalResolved`、后续工具事件和 run 结束事件。未知、已使用或已过期的 approval 会返回 `E_APPROVAL_NOT_FOUND`。
+- 当前 Rust request loop 已能解析 `agent.approve` 并分发给 `AgentRpcRequestHandler`；`AgentTurnLoopRpcHandler` 已能批准当前 active run 的 pending approval，并按需写入 session/workspace 持久批准。后续相同 key 的审批会自动通过并继续输出 `tool.approvalResolved`、后续工具事件和 run 结束事件。hunk 级批准会在 Core 层过滤 `apply_patch` 后只应用已批准 hunks。未知、已使用或已过期的 approval 会返回 `E_APPROVAL_NOT_FOUND`。
 
 ### `agent.reject`
 
@@ -419,6 +442,34 @@ interface ListRunsResult {
 - 返回顺序按 `updatedAt` 从新到旧排序；时间相同时按 `runId` 升序稳定排序。
 - `limit` 省略时返回全部已知 run；传入时只返回前 N 条。
 - 当前 Rust request loop 已能解析 `agent.listRuns` 并分发给 handler；`AgentTurnLoopRpcHandler` 已能从 Run Log summary metadata 返回列表。
+
+### `agent.previewFim`
+
+请求一次 fill-in-the-middle completion preview。该方法用于编辑器 inline completion，不创建 run，也不写入 run log。
+
+```ts
+interface FimPreviewParams {
+  prefix: string;
+  suffix?: string;
+  path?: string;
+  languageId?: string;
+  model?: string;
+  maxTokens?: number;
+}
+
+interface FimPreviewResult {
+  text: string;
+  model: string;
+  finishReason?: string;
+}
+```
+
+规则：
+
+- `prefix` 必须非空。
+- `model` 只能由 client 在 server capability 明确支持 FIM 时传入；前端不得靠模型名称推断能力。
+- `maxTokens` 是 provider 请求上限，不改变 server 侧上下文预算。
+- 当前 Rust request loop 已能解析 `agent.previewFim` 并分发给 handler；CLI fixture provider 返回可测试预览，DeepSeek provider 通过 beta FIM completion endpoint 获取结果。
 
 ## 事件封装
 
@@ -688,6 +739,7 @@ interface ToolApprovalRequired {
   command?: string;
   outputSummary?: string;
   paths?: string[];
+  hunks?: PatchApprovalHunk[];
   riskReasons?: string[];
   persistable: boolean;
 }
@@ -702,10 +754,16 @@ interface ToolApprovalResolved {
   toolName: ToolName;
   decision: "approved" | "rejected" | "canceled" | "expired";
   reason?: string;
+  hunks?:
+    | { scope: "all" }
+    | {
+        scope: "selected";
+        approved: string[];
+      };
 }
 ```
 
-该事件记录用户、策略或 RPC 队列对审批请求的决定。`decision: "approved"` 后续应进入 `tool.started`；`decision: "rejected"` 后当前工具调用不得执行，run 可以失败、继续只读工作或让模型请求不同操作；`decision: "canceled"` 和 `decision: "expired"` 表示 active run 被用户取消或审批超时，后续必须写入 `run.canceled`，对应工具不得执行。CLI 当前会把 prompt 的批准/拒绝写入该事件；RPC handler 的 pending approval 队列会在 `agent.approve` / `agent.reject` / `agent.cancel` 或超时后写入同等事件。
+该事件记录用户、策略或 RPC 队列对审批请求的决定。`decision: "approved"` 后续应进入 `tool.started`；`hunks.scope: "selected"` 表示后续只会应用指定 hunk id。`decision: "rejected"` 后当前工具调用不得执行，run 可以失败、继续只读工作或让模型请求不同操作；`decision: "canceled"` 和 `decision: "expired"` 表示 active run 被用户取消或审批超时，后续必须写入 `run.canceled`，对应工具不得执行。CLI 当前会把 prompt 的批准/拒绝写入该事件；RPC handler 的 pending approval 队列会在 `agent.approve` / `agent.reject` / `agent.cancel` 或超时后写入同等事件。
 
 ### `tool.started`
 
@@ -744,7 +802,7 @@ interface PatchProposed {
 }
 ```
 
-Patch 通过其中的 `approvalId` 使用 `agent.approve` 批准。
+Patch 通过其中的 `approvalId` 使用 `agent.approve` 批准。`apply_patch` 首版支持在 `tool.approvalRequired.hunks` 中暴露可批准 hunk；client 可以发送 `agent.approve` 的 `hunks.approved` 只批准其中一部分。
 
 ### `patch.applied`
 

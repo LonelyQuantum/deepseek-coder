@@ -1,6 +1,6 @@
 # 编辑器插件（VS Code Extension）
 
-状态：Phase 3 VS Code 插件核心体验已完成。基础命令、审批弹窗 adapter、RPC server 启动监管、初始化握手、JSON-RPC request client、VS Code/protocol TypeScript 类型共享、RPC/commands 边界测试、Sidebar Chat 事件渲染、Chat 输入发送真实 turn、真实审批回传、共享 RPC 全双工事件管线、命令风险动态升级展示、Native diff editor patch 预览、Run List / resume 和 Context Capsule 可视化已实现；Phase 4 按 14 项权威清单推进深度集成，P4-1 到 P4-9 已完成。
+状态：Phase 3 VS Code 插件核心体验已完成。基础命令、审批弹窗 adapter、RPC server 启动监管、初始化握手、JSON-RPC request client、VS Code/protocol TypeScript 类型共享、RPC/commands 边界测试、Sidebar Chat 事件渲染、Chat 输入发送真实 turn、真实审批回传、共享 RPC 全双工事件管线、命令风险动态升级展示、Native diff editor patch 预览、Run List / resume 和 Context Capsule 可视化已实现；Phase 4 按 14 项权威清单推进深度集成，P4-1 到 P4-12 已完成。
 
 VS Code 插件是 `ProleCoder` 的一等前端。它必须通过 JSON-RPC server 复用 Rust Agent Core，而不是在 TypeScript 侧重新实现 agent loop、context builder、provider 调用或 tool execution。
 
@@ -109,9 +109,11 @@ Phase 3 P0 验收标准：
 - stdin EOF、writer BrokenPipe 或插件停用会取消 active run；run log 最终出现 `run.canceled` 或已有 terminal event。
 - Sidebar Chat 能消费 `agent.event` 并展示 `assistant.delta`、tool lifecycle 和 terminal event。已完成首版事件渲染。
 - Chat 输入能发送真实 `agent.sendTurn`，并通过事件流收到最终结果。已完成首版输入发送和事件流收口。
-- `tool.approvalRequired` 触发 VS Code modal，approve/reject 能回传到 `agent.approve` / `agent.reject`。已完成首版真实 RPC pending queue 接入。
+- `tool.approvalRequired` 触发 VS Code modal，approve/reject 能回传到 `agent.approve` / `agent.reject`。已完成真实 RPC pending queue 接入；`apply_patch` 首版支持 selected hunk quick pick 并通过 `agent.approve.hunks` 回传。
 - Sidebar Chat 能通过 `agent.listRuns` 展示最近 run，并用 `agent.resume` 回放历史事件。已完成首版 Run List / resume 接入。
 - Sidebar Chat 能把 `context.built` 渲染为 Context Capsule 面板，展示 token 分段、来源和 manifest/cache/estimator metadata。已完成首版 Context Capsule 可视化。
+- `ProleCoder: Open Settings` 能打开 VS Code 设置，并显示 server capability、模型预算、审批策略、RPC command/state；扩展配置不保存 API Key。
+- Inline completion 首版通过 `agent.previewFim` 请求 RPC server 的 FIM preview，只有 server capability 明确标记 `supportsFim` 的模型会被使用。
 
 Phase 4 深度集成权威清单与 `docs/phase-tasks.md` 对齐：
 
@@ -124,9 +126,9 @@ Phase 4 深度集成权威清单与 `docs/phase-tasks.md` 对齐：
 7. P4-7：通过 diagnostic attachments 读取 Problems 面板诊断并交给 Agent Core，已完成：发送 turn 时采集 Problems 快照，并按协议 attachment 上限裁剪。
 8. P4-8：Terminal command approval 展示命令、cwd、风险等级、上一条 shell 输出摘要和持久化选项，已完成：modal 和 shared protocol payload 已支持。
 9. P4-9：审批持久化存储，已完成：RPC 队列支持 session/workspace 持久批准，并继续禁止 network/destructive 风险持久化。
-10. P4-10：provider、model、预算、审批策略和 RPC 命令配置界面；不保存 API Key，并展示 server 返回的 capability 数据。
-11. P4-11：真实 hunk 级 patch 审批，首版限定 `apply_patch`，新增审批事件 payload 时同步扩展协议 fixture。
-12. P4-12：FIM completion preview，若新增 preview 事件 payload 同步纳入协议 fixture。
+10. P4-10：provider、model、预算、审批策略和 RPC 命令配置界面，已完成：Open Settings 命令展示 `agent.initialize` 返回的 capability data、RPC command/state 和 API Key 不落 VS Code settings 的边界。
+11. P4-11：真实 hunk 级 patch 审批，已完成：`apply_patch` 可选择 hunks，RPC/Core 校验 hunk id 并只应用已批准 hunks，审批事件 payload 已同步 fixture。
+12. P4-12：FIM completion preview，已完成：VS Code 原生 inline completion 通过 `agent.previewFim` 获取 preview，模型选择只依赖 server capability。
 13. P4-13：VSIX alpha / pre-release 打包与安装说明。
 14. P4-14：补齐 end-to-end 集成测试覆盖。
 
