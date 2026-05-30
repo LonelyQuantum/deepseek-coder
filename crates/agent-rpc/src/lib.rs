@@ -1,9 +1,10 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
+    fs,
     io::{self, BufRead, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Condvar, Mutex, mpsc},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -81,6 +82,8 @@ pub const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(300);
 const RPC_LOOP_QUEUE_BOUND: usize = 256;
 const RPC_LIVE_EVENT_QUEUE_BOUND: usize = 256;
 const RPC_LIVE_EVENT_BATCH_MAX: usize = 64;
+const APPROVAL_PERSISTENCE_FILE: &str = "approvals.v1.json";
+const APPROVAL_PERSISTENCE_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JsonRpcRequest<TParams = Value> {
@@ -257,7 +260,7 @@ impl Default for ServerCapabilities {
             protocol_version: PROTOCOL_VERSION.to_owned(),
             supports_run_resume: true,
             supports_patch_approval: true,
-            supports_persistent_approvals: false,
+            supports_persistent_approvals: true,
             supports_event_batching: true,
             supported_risk_levels: ALL_RISK_LEVELS
                 .iter()
@@ -709,6 +712,8 @@ where
         }
 
         let store = RunLogStore::new(&params.workspace_root).map_err(map_run_log_error)?;
+        self.approval_queue
+            .configure_workspace_persistence(store.workspace_root())?;
         let result = AgentInitializeResult::default();
         self.workspace = Some(RpcWorkspace { store });
         Ok(result)
@@ -1172,7 +1177,22 @@ impl Default for RpcApprovalQueue {
 struct RpcApprovalQueueInner {
     approval_timeout: Duration,
     pending: Mutex<HashMap<String, PendingApproval>>,
+    persistence: Mutex<RpcApprovalPersistenceState>,
     changed: Condvar,
+}
+
+#[derive(Debug, Default)]
+struct RpcApprovalPersistenceState {
+    session_keys: HashSet<String>,
+    workspace_keys: HashSet<String>,
+    workspace_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RpcApprovalPersistenceFile {
+    version: u32,
+    approvals: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1189,9 +1209,25 @@ impl RpcApprovalQueue {
             inner: Arc::new(RpcApprovalQueueInner {
                 approval_timeout,
                 pending: Mutex::new(HashMap::new()),
+                persistence: Mutex::new(RpcApprovalPersistenceState::default()),
                 changed: Condvar::new(),
             }),
         }
+    }
+
+    fn configure_workspace_persistence(
+        &self,
+        workspace_root: &Path,
+    ) -> Result<(), AgentRpcHandlerError> {
+        let path = workspace_root
+            .join(AGENT_METADATA.state_dir)
+            .join(APPROVAL_PERSISTENCE_FILE);
+        let workspace_keys = load_workspace_approvals(&path)?;
+        let mut persistence = self.lock_persistence()?;
+        persistence.session_keys.clear();
+        persistence.workspace_path = Some(path);
+        persistence.workspace_keys = workspace_keys;
+        Ok(())
     }
 
     fn register(
@@ -1272,6 +1308,12 @@ impl RpcApprovalQueue {
                         return Ok(decision);
                     }
 
+                    if self.is_persistently_approved(&entry.request)? {
+                        pending.remove(&request.approval_id);
+                        self.inner.changed.notify_all();
+                        return Ok(ApprovalDecision::Approved);
+                    }
+
                     if Instant::now() >= entry.expires_at {
                         pending.remove(&request.approval_id);
                         self.inner.changed.notify_all();
@@ -1314,6 +1356,63 @@ impl RpcApprovalQueue {
         decision: ApprovalDecision,
         persist: Option<RpcApprovalPersistence>,
     ) -> Result<(), AgentRpcHandlerError> {
+        let request_to_persist = {
+            let pending = self.lock_pending()?;
+            let entry = pending.get(approval_id).ok_or_else(|| {
+                AgentRpcHandlerError::new(
+                    RPC_APPROVAL_NOT_FOUND,
+                    format!("approval `{approval_id}` is not pending in the current RPC handler"),
+                )
+            })?;
+
+            if entry.decision.is_some() {
+                return Err(AgentRpcHandlerError::new(
+                    RPC_APPROVAL_NOT_FOUND,
+                    format!("approval `{approval_id}` has already been resolved"),
+                ));
+            }
+
+            if Instant::now() >= entry.expires_at {
+                return Err(AgentRpcHandlerError::new(
+                    RPC_APPROVAL_NOT_FOUND,
+                    format!("approval `{approval_id}` expired before it could be resolved"),
+                ));
+            }
+
+            if matches!(
+                persist,
+                Some(RpcApprovalPersistence::Session | RpcApprovalPersistence::Workspace)
+            ) && !approval_request_allows_persistence(&entry.request)
+            {
+                return Err(AgentRpcHandlerError::new(
+                    RPC_APPROVAL_DENIED,
+                    format!("approval `{approval_id}` does not allow persistent decisions"),
+                ));
+            }
+
+            if matches!(decision, ApprovalDecision::Approved)
+                && matches!(
+                    persist,
+                    Some(RpcApprovalPersistence::Session | RpcApprovalPersistence::Workspace)
+                )
+            {
+                Some(entry.request.clone())
+            } else {
+                None
+            }
+        };
+
+        let persistence_key = request_to_persist
+            .as_ref()
+            .map(approval_persistence_key)
+            .transpose()?
+            .flatten();
+        if let (Some(key), Some(RpcApprovalPersistence::Workspace)) =
+            (persistence_key.as_ref(), persist)
+        {
+            self.write_workspace_approval_key(key)?;
+        }
+
         let mut pending = self.lock_pending()?;
         let entry = pending.get_mut(approval_id).ok_or_else(|| {
             AgentRpcHandlerError::new(
@@ -1340,20 +1439,61 @@ impl RpcApprovalQueue {
             ));
         }
 
-        if matches!(
-            persist,
-            Some(RpcApprovalPersistence::Session | RpcApprovalPersistence::Workspace)
-        ) && !entry.request.persistable
-        {
-            return Err(AgentRpcHandlerError::new(
-                RPC_APPROVAL_DENIED,
-                format!("approval `{approval_id}` does not allow persistent decisions"),
-            ));
-        }
-
         entry.decision = Some(decision);
         self.inner.changed.notify_all();
+        drop(pending);
+        if let (Some(key), Some(persist)) = (persistence_key, persist) {
+            self.remember_persistent_key(key, persist)?;
+        }
         Ok(())
+    }
+
+    fn is_persistently_approved(
+        &self,
+        request: &TurnApprovalRequest,
+    ) -> Result<bool, AgentRpcHandlerError> {
+        let Some(key) = approval_persistence_key(request)? else {
+            return Ok(false);
+        };
+        let persistence = self.lock_persistence()?;
+        Ok(persistence.session_keys.contains(&key) || persistence.workspace_keys.contains(&key))
+    }
+
+    fn write_workspace_approval_key(&self, key: &str) -> Result<(), AgentRpcHandlerError> {
+        let (path, keys) = {
+            let persistence = self.lock_persistence()?;
+            let mut keys = persistence.workspace_keys.clone();
+            keys.insert(key.to_owned());
+            let path = persistence.workspace_path.clone().ok_or_else(|| {
+                AgentRpcHandlerError::new(
+                    RPC_INTERNAL_INVARIANT,
+                    "workspace approval persistence was not configured",
+                )
+            })?;
+            (path, keys)
+        };
+
+        write_workspace_approvals(&path, &keys)
+    }
+
+    fn remember_persistent_key(
+        &self,
+        key: String,
+        persist: RpcApprovalPersistence,
+    ) -> Result<(), AgentRpcHandlerError> {
+        match persist {
+            RpcApprovalPersistence::Never => Ok(()),
+            RpcApprovalPersistence::Session => {
+                let mut persistence = self.lock_persistence()?;
+                persistence.session_keys.insert(key);
+                Ok(())
+            }
+            RpcApprovalPersistence::Workspace => {
+                let mut persistence = self.lock_persistence()?;
+                persistence.workspace_keys.insert(key);
+                Ok(())
+            }
+        }
     }
 
     fn lock_pending(
@@ -1362,6 +1502,17 @@ impl RpcApprovalQueue {
     {
         self.inner.pending.lock().map_err(|_| {
             AgentRpcHandlerError::new(RPC_INTERNAL_INVARIANT, "approval queue lock was poisoned")
+        })
+    }
+
+    fn lock_persistence(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, RpcApprovalPersistenceState>, AgentRpcHandlerError> {
+        self.inner.persistence.lock().map_err(|_| {
+            AgentRpcHandlerError::new(
+                RPC_INTERNAL_INVARIANT,
+                "approval persistence lock was poisoned",
+            )
         })
     }
 }
@@ -1373,6 +1524,88 @@ fn approval_expires_at(timeout: Duration) -> Instant {
 
 fn approval_expired_reason(approval_id: &str) -> String {
     format!("approval `{approval_id}` expired before a decision was received")
+}
+
+fn approval_request_allows_persistence(request: &TurnApprovalRequest) -> bool {
+    request.persistable && !matches!(request.risk, RiskLevel::Network | RiskLevel::Destructive)
+}
+
+fn approval_persistence_key(
+    request: &TurnApprovalRequest,
+) -> Result<Option<String>, AgentRpcHandlerError> {
+    if !approval_request_allows_persistence(request) {
+        return Ok(None);
+    }
+
+    let mut paths = request.paths.clone().unwrap_or_default();
+    paths.sort_unstable();
+    paths.dedup();
+    serde_json::to_string(&json!({
+        "toolName": request.tool_name.as_str(),
+        "risk": request.risk.as_str(),
+        "command": request.command.as_deref(),
+        "cwd": request.cwd.as_deref(),
+        "paths": paths,
+    }))
+    .map(Some)
+    .map_err(|source| {
+        AgentRpcHandlerError::new(
+            RPC_INTERNAL_INVARIANT,
+            format!("approval persistence key could not be serialized: {source}"),
+        )
+    })
+}
+
+fn load_workspace_approvals(path: &Path) -> Result<HashSet<String>, AgentRpcHandlerError> {
+    if !path.exists() {
+        return Ok(HashSet::new());
+    }
+
+    let bytes = fs::read(path).map_err(map_io_error)?;
+    let file: RpcApprovalPersistenceFile = serde_json::from_slice(&bytes).map_err(|source| {
+        AgentRpcHandlerError::new(
+            RPC_INTERNAL_INVARIANT,
+            format!("approval persistence file is malformed: {source}"),
+        )
+    })?;
+    if file.version != APPROVAL_PERSISTENCE_VERSION {
+        return Err(AgentRpcHandlerError::new(
+            RPC_INTERNAL_INVARIANT,
+            format!(
+                "unsupported approval persistence version {}, expected {}",
+                file.version, APPROVAL_PERSISTENCE_VERSION
+            ),
+        ));
+    }
+
+    Ok(file.approvals.into_iter().collect())
+}
+
+fn write_workspace_approvals(
+    path: &Path,
+    keys: &HashSet<String>,
+) -> Result<(), AgentRpcHandlerError> {
+    let parent = path.parent().ok_or_else(|| {
+        AgentRpcHandlerError::new(
+            RPC_INTERNAL_INVARIANT,
+            "approval persistence path has no parent directory",
+        )
+    })?;
+    fs::create_dir_all(parent).map_err(map_io_error)?;
+
+    let mut approvals = keys.iter().cloned().collect::<Vec<_>>();
+    approvals.sort_unstable();
+    let file = RpcApprovalPersistenceFile {
+        version: APPROVAL_PERSISTENCE_VERSION,
+        approvals,
+    };
+    let bytes = serde_json::to_vec_pretty(&file).map_err(|source| {
+        AgentRpcHandlerError::new(
+            RPC_INTERNAL_INVARIANT,
+            format!("approval persistence file could not be serialized: {source}"),
+        )
+    })?;
+    fs::write(path, bytes).map_err(map_io_error)
 }
 
 #[derive(Debug, Clone)]
@@ -1589,6 +1822,8 @@ fn approval_request_from_event(
         title: payload.title,
         detail: payload.detail,
         command: payload.command,
+        cwd: payload.cwd,
+        output_summary: payload.output_summary,
         paths: payload.paths,
         risk_reasons: payload.risk_reasons,
         persistable: payload.persistable,
@@ -1605,6 +1840,8 @@ struct ApprovalRequiredPayload {
     title: String,
     detail: String,
     command: Option<String>,
+    cwd: Option<String>,
+    output_summary: Option<String>,
     paths: Option<Vec<String>>,
     #[serde(default)]
     risk_reasons: Vec<String>,
@@ -2483,13 +2720,14 @@ mod tests {
     const RPC_TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
     use prole_coder_agent_core::{
+        approval::RiskLevel,
         provider::deepseek_api::ChatToolCall,
         run_log::{RunLogEvent, RunLogStore},
         test_helpers::TestWorkspace,
         turn_loop::{
-            AgentTurnInput, AgentTurnLoopConfig, TurnEventSink, TurnProvider, TurnProviderError,
-            TurnProviderFuture, TurnProviderRequest, TurnProviderResponse,
-            turn_provider_response_stream,
+            AgentTurnInput, AgentTurnLoopConfig, ApprovalDecision, TurnApprovalRequest,
+            TurnEventSink, TurnProvider, TurnProviderError, TurnProviderFuture,
+            TurnProviderRequest, TurnProviderResponse, turn_provider_response_stream,
         },
     };
     use serde::Deserialize;
@@ -3835,6 +4073,88 @@ mod tests {
     }
 
     #[test]
+    fn approval_queue_reuses_session_persistent_approval() {
+        let queue = RpcApprovalQueue::new(Duration::from_secs(60));
+        let first = sample_turn_approval_request("approval_1", RiskLevel::Exec, true);
+        queue
+            .register("run_1".to_owned(), first.clone())
+            .expect("approval should register");
+        queue
+            .approve("approval_1", RpcApprovalPersistence::Session)
+            .expect("session approval should resolve");
+        assert_eq!(
+            queue
+                .wait_for_decision(&first)
+                .expect("first approval should resolve"),
+            ApprovalDecision::Approved
+        );
+
+        let second = sample_turn_approval_request("approval_2", RiskLevel::Exec, true);
+        queue
+            .register("run_2".to_owned(), second.clone())
+            .expect("second approval should register");
+        assert_eq!(
+            queue
+                .wait_for_decision(&second)
+                .expect("second approval should be auto-approved"),
+            ApprovalDecision::Approved
+        );
+    }
+
+    #[test]
+    fn approval_queue_reuses_workspace_persistent_approval_after_reload() {
+        let workspace = TestWorkspace::new("rpc-approval-persistence");
+        let queue = RpcApprovalQueue::new(Duration::from_secs(60));
+        queue
+            .configure_workspace_persistence(workspace.path())
+            .expect("workspace persistence should configure");
+        let first = sample_turn_approval_request("approval_1", RiskLevel::Exec, true);
+        queue
+            .register("run_1".to_owned(), first.clone())
+            .expect("approval should register");
+        queue
+            .approve("approval_1", RpcApprovalPersistence::Workspace)
+            .expect("workspace approval should resolve");
+        assert_eq!(
+            queue
+                .wait_for_decision(&first)
+                .expect("first approval should resolve"),
+            ApprovalDecision::Approved
+        );
+
+        let reloaded = RpcApprovalQueue::new(Duration::from_secs(60));
+        reloaded
+            .configure_workspace_persistence(workspace.path())
+            .expect("workspace persistence should reload");
+        let second = sample_turn_approval_request("approval_2", RiskLevel::Exec, true);
+        reloaded
+            .register("run_2".to_owned(), second.clone())
+            .expect("second approval should register");
+        assert_eq!(
+            reloaded
+                .wait_for_decision(&second)
+                .expect("workspace approval should be auto-approved"),
+            ApprovalDecision::Approved
+        );
+    }
+
+    #[test]
+    fn approval_queue_rejects_persistence_for_network_and_destructive_risks() {
+        for risk in [RiskLevel::Network, RiskLevel::Destructive] {
+            let queue = RpcApprovalQueue::new(Duration::from_secs(60));
+            let request = sample_turn_approval_request("approval_1", risk, true);
+            queue
+                .register("run_1".to_owned(), request)
+                .expect("approval should register");
+            let error = queue
+                .approve("approval_1", RpcApprovalPersistence::Session)
+                .expect_err("high-risk approvals must not be persisted");
+
+            assert_eq!(error.code, RPC_APPROVAL_DENIED);
+        }
+    }
+
+    #[test]
     fn approval_request_from_event_uses_typed_payload_schema() {
         let event = run_log_event(
             1,
@@ -3848,6 +4168,8 @@ mod tests {
                 "risk": "write",
                 "title": "Apply patch",
                 "detail": "Modify README.md",
+                "cwd": ".",
+                "outputSummary": "previous command output summary",
                 "paths": ["README.md"],
                 "riskReasons": ["file deletion"],
                 "persistable": true
@@ -3865,6 +4187,11 @@ mod tests {
             prole_coder_agent_core::approval::RiskLevel::Write
         );
         assert_eq!(request.paths, Some(vec!["README.md".to_owned()]));
+        assert_eq!(request.cwd, Some(".".to_owned()));
+        assert_eq!(
+            request.output_summary,
+            Some("previous command output summary".to_owned())
+        );
         assert_eq!(request.risk_reasons, vec!["file deletion".to_owned()]);
         assert!(request.persistable);
     }
@@ -3890,6 +4217,27 @@ mod tests {
             .expect_err("missing persistable should reject the payload");
 
         assert_eq!(error.code, RPC_INTERNAL_INVARIANT);
+    }
+
+    fn sample_turn_approval_request(
+        approval_id: &str,
+        risk: RiskLevel,
+        persistable: bool,
+    ) -> TurnApprovalRequest {
+        TurnApprovalRequest {
+            approval_id: approval_id.to_owned(),
+            tool_call_id: "call_shell".to_owned(),
+            tool_name: "shell".to_owned(),
+            risk,
+            title: "Run shell command".to_owned(),
+            detail: "Execute cargo test".to_owned(),
+            command: Some("cargo test".to_owned()),
+            cwd: Some(".".to_owned()),
+            output_summary: None,
+            paths: None,
+            risk_reasons: Vec::new(),
+            persistable,
+        }
     }
 
     fn initialize_params() -> Value {
