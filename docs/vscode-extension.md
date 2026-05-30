@@ -1,6 +1,6 @@
 # 编辑器插件（VS Code Extension）
 
-状态：Phase 3 优先开发项。基础命令、审批弹窗 adapter、RPC server 启动监管、初始化握手、JSON-RPC request client、VS Code/protocol TypeScript 类型共享、RPC/commands 边界测试、Sidebar Chat 事件渲染、Chat 输入发送真实 turn、真实审批回传、共享 RPC 全双工事件管线、命令风险动态升级展示、Native diff editor patch 预览、Run List / resume 和 Context Capsule 可视化已实现。
+状态：Phase 3 VS Code 插件核心体验已完成。基础命令、审批弹窗 adapter、RPC server 启动监管、初始化握手、JSON-RPC request client、VS Code/protocol TypeScript 类型共享、RPC/commands 边界测试、Sidebar Chat 事件渲染、Chat 输入发送真实 turn、真实审批回传、共享 RPC 全双工事件管线、命令风险动态升级展示、Native diff editor patch 预览、Run List / resume 和 Context Capsule 可视化已实现；Phase 4 按 14 项权威清单推进深度集成。
 
 VS Code 插件是 `ProleCoder` 的一等前端。它必须通过 JSON-RPC server 复用 Rust Agent Core，而不是在 TypeScript 侧重新实现 agent loop、context builder、provider 调用或 tool execution。
 
@@ -113,23 +113,28 @@ Phase 3 P0 验收标准：
 - Sidebar Chat 能通过 `agent.listRuns` 展示最近 run，并用 `agent.resume` 回放历史事件。已完成首版 Run List / resume 接入。
 - Sidebar Chat 能把 `context.built` 渲染为 Context Capsule 面板，展示 token 分段、来源和 manifest/cache/estimator metadata。已完成首版 Context Capsule 可视化。
 
-Phase 4 P1/P2 深度集成：
+Phase 4 深度集成权威清单与 `docs/phase-tasks.md` 对齐：
 
-1. 读取 Problems 面板诊断并交给 Agent Core。
-2. Terminal command approval 展示命令、cwd、风险等级、输出摘要和持久化选项。
-3. provider、model、预算、审批策略和 RPC 命令配置界面。
-4. FIM completion preview。
-5. VSIX alpha / pre-release 打包与安装说明。
+1. P4-0a：VSIX dry-run packaging smoke，先验证打包基础设施，不标记最终 VSIX 交付完成。
+2. P4-0b：`@vscode/test-electron` 最小 harness，覆盖 activation、trusted workspace 和 Chat view 基础加载。
+3. P4-9：Provider capability model data contract；首版通过 `agent.initialize` 暴露给插件。
+4. P4-5：事件 payload schema 与协议 fixture 对齐，并处理协议版本不匹配提示。
+5. P4-4：RPC 高频事件输出节流与批量发送策略，保持 Run Log `seq` 与 replay 语义稳定。
+6. P4-11：`agent.cancel` 类型化 helper 与 Chat Cancel UI；与 Terminal approval 共享 composer 状态模型。
+7. P4-1：通过 diagnostic attachments 读取 Problems 面板诊断并交给 Agent Core。
+8. P4-2：Terminal command approval 展示命令、cwd、风险等级、输出摘要和持久化选项。
+9. P4-6：审批持久化存储，继续禁止 network/destructive 风险持久化。
+10. P4-3：provider、model、预算、审批策略和 RPC 命令配置界面；不保存 API Key。
+11. P4-7：真实 hunk 级 patch 审批，首版限定 `apply_patch`。
+12. P4-8：FIM completion preview。
+13. P4-10：VSIX alpha / pre-release 打包与安装说明。
+14. P4-12：补齐 end-to-end 集成测试覆盖。
 
 在这些能力稳定前，不在插件侧重复实现 context builder、tool execution 或 provider 调用。
 
 ## 后续增强
 
-- `agent.sendTurn`、`agent.approve` 和 `agent.reject` 类型化 helper 已完成；继续为 `agent.cancel` 等常用方法增加类型化 helper，避免 UI 层直接拼 method string。
-- 支持 `agent.cancel`，在用户关闭 run 或插件停用时取消 pending run。
-- 处理协议版本不匹配：显示 server/client protocol version，并引导用户升级对应组件。
 - 支持多 workspace folder：每个 workspace root 对应一个 RPC server 或明确选择 active workspace。
-- 渲染 `agent.event` 流，包括 assistant delta、计划、工具调用、审批请求、patch 和验证结果。
-- 扩展 Native diff editor 当前的 hunk boundary，支持真实 hunk 级选择、部分批准和对应 RPC/Core 协议扩展。
-- 从 Problems 面板读取 diagnostics，通过协议传给 Agent Core，而不是在插件内自行生成修复逻辑。
-- 增加 `@vscode/test-electron` 集成测试，覆盖真实 extension activation、配置读取、启动失败提示和基础事件渲染。
+- 支持多 active run 与多个前端订阅同一 run 的事件流。
+- 扩展 Native diff editor hunk 审批到更复杂的编辑器 diff 场景。
+- 增加更细的 replay 标记与历史事件筛选语义。

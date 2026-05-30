@@ -1,6 +1,6 @@
 # 路线图
 
-状态：草案，Phase 1 Agent Core MVP、合并主线前离线最终验收、Phase 2 的 1M Context Capsule 核心收敛和 Phase 2e 展示型 demo 扩展均已完成；后续随 Phase 3 VS Code 插件核心与共享 RPC 事件队列实现持续更新。
+状态：草案，Phase 1 Agent Core MVP、合并主线前离线最终验收、Phase 2 的 1M Context Capsule 核心收敛、Phase 2e 展示型 demo 扩展和 Phase 3 VS Code 插件核心与共享 RPC 事件队列均已完成；Phase 4 按 14 项权威清单推进 VS Code 深度集成。
 
 本文档把 README 中的大阶段拆成更可执行的优先级。README 保留项目入口和高层计划；这里记录跨模块的落地顺序、取舍和验收重点。具体任务的阶段、状态和来源统一登记在 `docs/phase-tasks.md`，阶段条目标记完成前应同步检查并更新该索引。
 
@@ -105,22 +105,36 @@ P0 不追求：
 
 目标：让 VS Code 插件成为 Agent Core 的薄前端，而不是第二套 Agent。
 
-Phase 3 优先交付 VS Code 插件核心体验；Phase 4 再做 VS Code 深度集成；TUI 进入 Phase 5，与生态扩展一起推进。Marketplace 发布不阻塞 Phase 3 完成，先保证本地可安装、可运行、可审计。Phase 2e 展示型 demo 已经给 VS Code Context Viz / Approval / Run Log UI 提供可观察样本。
+Phase 3 已交付 VS Code 插件核心体验；Phase 4 继续做 VS Code 深度集成；TUI 进入 Phase 5，与生态扩展一起推进。Marketplace 发布不阻塞 Phase 4，但 Phase 4 需要可安装 VSIX alpha / pre-release 产物和安装说明。Phase 2e 展示型 demo 已经给 VS Code Context Viz / Approval / Run Log UI 提供可观察样本。
 
 优先事项：
 
-- 在已完成的 RPC server 管理和 request client 基础上，接入真实 Chat / Approval / Diff / Run List / Context Viz UI。
-- Sidebar Chat 渲染 run events。
+- VSIX dry-run packaging smoke 和 `@vscode/test-electron` 最小 harness 先行，提前验证打包、activation、trusted workspace 和 Chat view 基础加载。
+- Provider capability model 先做 data contract，不引入 heavy trait；首版通过 `agent.initialize` 暴露给前端。
+- 事件 payload schema 与协议 fixture 先于 RPC 高频事件节流，确保 batch/coalescing 不改变 Run Log `seq` 和 replay 语义。
+- `agent.cancel` 类型化 helper 与 Chat Cancel UI 前移，并与 Terminal approval 做轻量 composer UX review。
+- Problems 面板诊断通过 diagnostic attachments 进入 Context Builder，插件不新增独立 diagnostics 状态同步 RPC。
+- Terminal command approval 展示命令、cwd、风险等级和输出摘要。
+- 审批持久化存储继续禁止 network/destructive 风险持久化。
+- 配置界面依赖 Provider capability model；provider、model、预算、审批策略和 RPC 命令配置都不得保存 API Key。
+- 真实 hunk 级 patch 审批首版限定 `apply_patch`，再扩展 Core/RPC 审批决策和 Run Log 记录。
+- FIM completion preview 依赖 Provider capability model，优先评估 VS Code 原生 inline completion 接入。
+- VSIX alpha / pre-release 交付和 end-to-end 集成测试作为 Phase 4 收敛项。
+
+已完成的 Phase 3 基础：
+
 - 原生 diff editor 展示 patch 已完成：VS Code 在 `apply_patch` 审批前打开虚拟 after 文档 diff，并保留 hunk boundary。
 - Run List / resume 已完成：Sidebar Chat 用 `agent.listRuns` 展示最近 run summary，点击历史 run 后调用 `agent.resume` 并复用同一 `agent.event` 渲染路径。
 - Context Capsule 可视化已完成：Sidebar Chat 消费 `context.built` metadata，展示三层 token 分布、来源纳入/省略、manifest、cache 和 estimator 摘要。
-- Problems 面板诊断进入 Context Builder。
-- Terminal command approval 展示命令、cwd、风险等级和输出摘要。
 - Phase 3 命令风险分类器已完成：识别网络访问、依赖安装、远程 git、发布和破坏性命令，并在审批前升级风险。
-- Phase 4 Provider capability model：显式表达 thinking、tool choice、FIM、stream usage、cache usage、最大上下文和最大输出长度等能力。
 
 验收重点：
 
+- Phase 4 的 14 个条目全部在 `docs/phase-tasks.md` 标记 `[x]` 后，README 才能写 Phase 4 全部完成。
+- VS Code 插件可通过 VSIX 安装到 clean 环境。
+- fixture provider 下 Chat sendTurn、Cancel、Problems diagnostics、审批和 Run List / resume 至少有一条 extension-host 或可重复手动验收路径。
+- CLI 与 VS Code 对同一 fixture task 的关键 Run Log event type 顺序一致。
+- 配置界面不保存 API Key，只管理非敏感配置。
 - Phase 3 RPC 管线中，`agent.sendTurn` 创建 run 后返回 accepted，不等待 `assistant.delta`、审批或 terminal event。
 - 同一 run 的 live `agent.event` notification 和 `agent.resume` replay 使用同一 Run Log `seq` 与 envelope。
 - `context.built` 在插件侧只作为 Run Log metadata 渲染，插件不重新实现 context builder。
@@ -162,11 +176,11 @@ Phase 2 的 1M Context Capsule 按 4 个增量轮次推进：
    - [x] `demo-attachment`：展示 file、selection、explicit_content、diagnostic attachments 如何进入 Context Builder。
    - [x] `demo-live` provider summary 增强：展示模型、duration、usage、cache hit/miss 和 stream 摘要。
 
-后续 DeepSeek 差异化事项：
+与 Phase 4 关联的 DeepSeek 差异化事项：
 
 - `reasoning_content` replay 状态摘要。
-- FIM completion preview。
-- 高频 JSON-RPC streaming 性能基准和必要的 delta 合并策略。
+- FIM completion preview 已纳入 Phase 4 `P4-8`，依赖 Provider capability model。
+- 高频 JSON-RPC streaming 性能基准和必要的 delta 合并策略已纳入 Phase 4 `P4-4`。
 
 验收重点：
 

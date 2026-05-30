@@ -666,21 +666,29 @@ extension.ts
 
 ### Phase 4：VS Code 深度集成
 
-- [ ] Problems 面板 diagnostics 进入 Context Builder。
-- [ ] Terminal command approval。
-- [ ] provider、model、预算、审批策略和 RPC 命令配置界面。
-- [ ] RPC 高频事件输出节流与批量发送策略。
-- [ ] 事件 payload schema 与协议 fixture 对齐。
-- [ ] 审批持久化存储。
-- [ ] 真实 hunk 级 patch 审批。
-- [ ] FIM completion preview。
-- [ ] Provider capability model：显式表达 thinking、tool choice、FIM、stream usage、cache usage、上下文和输出限制。
-- [ ] VSIX alpha / pre-release 打包与插件安装说明。
+- [ ] P4-0a：VSIX dry-run packaging smoke，提前验证 `.vscodeignore`、`workspace:*` 依赖、media asset、compiled `out/` 和 activationEvents。
+- [ ] P4-0b：`@vscode/test-electron` 最小 harness，覆盖 extension activation、trusted workspace 和 Chat view 基础加载。
+- [ ] P4-9：Provider capability model data contract，显式表达 thinking、tool choice、FIM、stream usage、cache usage、上下文和输出限制，并通过 `agent.initialize` 暴露给前端。
+- [ ] P4-5：事件 payload schema 与协议 fixture 对齐，包含协议版本不匹配的前端提示边界。
+- [ ] P4-4：RPC 高频事件输出节流与批量发送策略，保持 Run Log `seq` 为事实来源。
+- [ ] P4-11：`agent.cancel` 类型化 helper 与 Chat Cancel UI，和 Terminal approval 共用 composer 状态模型。
+- [ ] P4-1：Problems 面板 diagnostics 通过 diagnostic attachments 进入 Context Builder。
+- [ ] P4-2：Terminal command approval。
+- [ ] P4-6：审批持久化存储。
+- [ ] P4-3：provider、model、预算、审批策略和 RPC 命令配置界面。
+- [ ] P4-7：真实 hunk 级 patch 审批，首版限定 `apply_patch`。
+- [ ] P4-8：FIM completion preview。
+- [ ] P4-10：VSIX alpha / pre-release 打包与插件安装说明。
+- [ ] P4-12：补齐 end-to-end 集成测试覆盖。
 
 验收标准：
 
 - 插件不需要用户手动打开终端即可完成一次“诊断 -> 修改 -> 测试 -> 报告”。
 - 插件和 CLI 对同一任务产生一致的 run log。
+- VS Code 插件可通过 VSIX 安装到 clean 环境。
+- fixture provider 下 Chat sendTurn、Cancel、Problems diagnostics、审批和 Run List / resume 至少有一条 extension-host 或可重复手动验收路径。
+- 配置界面不保存 API Key，只管理非敏感配置。
+- `docs/phase-tasks.md` 的 Phase 4 条目全部标记为 `[x]` 后，README 才能把 Phase 4 表述为整阶段完成。
 
 ### Phase 5：TUI 与生态扩展
 
