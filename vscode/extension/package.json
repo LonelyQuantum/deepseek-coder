@@ -15,6 +15,7 @@
   "activationEvents": [
     "onStartupFinished",
     "onCommand:prole-coder.openChat",
+    "onCommand:prole-coder.openSettings",
     "onView:prole-coder.chat"
   ],
   "main": "./out/extension.js",
@@ -23,6 +24,10 @@
       {
         "command": "prole-coder.openChat",
         "title": "ProleCoder: Open Chat"
+      },
+      {
+        "command": "prole-coder.openSettings",
+        "title": "ProleCoder: Open Settings"
       }
     ],
     "viewsContainers": {
@@ -63,6 +68,30 @@
             "type": "string"
           },
           "description": "Arguments passed to the Rust Agent RPC server command."
+        },
+        "prole-coder.fim.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable ProleCoder inline FIM completion previews when the connected RPC server reports FIM-capable provider data."
+        },
+        "prole-coder.fim.model": {
+          "type": "string",
+          "default": "",
+          "description": "Optional model id for FIM previews. Leave empty to use the RPC server default model from provider capabilities."
+        },
+        "prole-coder.fim.maxTokens": {
+          "type": "integer",
+          "default": 128,
+          "minimum": 1,
+          "maximum": 4096,
+          "description": "Maximum completion tokens requested for FIM previews."
+        },
+        "prole-coder.fim.maxContextChars": {
+          "type": "integer",
+          "default": 12000,
+          "minimum": 1000,
+          "maximum": 100000,
+          "description": "Maximum prefix and suffix characters sent to the RPC server for a FIM preview."
         }
       }
     }

@@ -9,6 +9,7 @@ import {
   RPC_EVENT_BATCH_METHOD,
   RPC_INITIALIZE_METHOD,
   RPC_LIST_RUNS_METHOD,
+  RPC_PREVIEW_FIM_METHOD,
   RPC_PROTOCOL_VERSION,
   RPC_REJECT_METHOD,
   RPC_RESUME_METHOD,
@@ -355,14 +356,20 @@ test("RPC server manager sends typed approval requests", async () => {
 
   const approvePromise = manager.approve({
     approvalId: "approval_1",
-    persist: "session",
+    persist: "never",
+    hunks: {
+      approved: ["README.md#1:old1+3:new1+3"],
+    },
   });
   await flushMicrotasks();
   const approveRequest = child.requestAt(1);
   assert.equal(approveRequest.method, RPC_APPROVE_METHOD);
   assert.deepEqual(approveRequest.params, {
     approvalId: "approval_1",
-    persist: "session",
+    persist: "never",
+    hunks: {
+      approved: ["README.md#1:old1+3:new1+3"],
+    },
   });
   child.stdout.pushJson({
     jsonrpc: "2.0",
@@ -370,13 +377,19 @@ test("RPC server manager sends typed approval requests", async () => {
     result: {
       approvalId: "approval_1",
       state: "approved",
-      persist: "session",
+      persist: "never",
+      hunks: {
+        approved: ["README.md#1:old1+3:new1+3"],
+      },
     },
   });
   assert.deepEqual(await approvePromise, {
     approvalId: "approval_1",
     state: "approved",
-    persist: "session",
+    persist: "never",
+    hunks: {
+      approved: ["README.md#1:old1+3:new1+3"],
+    },
   });
 
   const rejectPromise = manager.reject({
@@ -439,6 +452,50 @@ test("RPC server manager sends typed cancel requests", async () => {
     runId: "run_1",
     state: "canceled",
     reason: "user canceled",
+  });
+});
+
+test("RPC server manager sends typed FIM preview requests", async () => {
+  const factory = new FakeProcessFactory();
+  const manager = rpcManagerWithFactory(factory);
+  const readyPromise = manager.start();
+  const child = factory.lastChild();
+  child.stdout.pushJson(initializeResponse(child.initializeRequest().id));
+  await readyPromise;
+
+  const previewPromise = manager.previewFim({
+    prefix: "fn main() {",
+    suffix: "}",
+    path: "src/main.rs",
+    languageId: "rust",
+    model: "deepseek-v4-pro",
+    maxTokens: 32,
+  });
+  await flushMicrotasks();
+  const previewRequest = child.requestAt(1);
+  assert.equal(previewRequest.method, RPC_PREVIEW_FIM_METHOD);
+  assert.deepEqual(previewRequest.params, {
+    prefix: "fn main() {",
+    suffix: "}",
+    path: "src/main.rs",
+    languageId: "rust",
+    model: "deepseek-v4-pro",
+    maxTokens: 32,
+  });
+  child.stdout.pushJson({
+    jsonrpc: "2.0",
+    id: previewRequest.id,
+    result: {
+      text: " println!(\"hi\");",
+      model: "deepseek-v4-pro",
+      finishReason: "stop",
+    },
+  });
+
+  assert.deepEqual(await previewPromise, {
+    text: " println!(\"hi\");",
+    model: "deepseek-v4-pro",
+    finishReason: "stop",
   });
 });
 

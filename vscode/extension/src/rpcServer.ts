@@ -6,6 +6,8 @@ import type {
   ApproveResult,
   CancelParams,
   CancelResult,
+  FimPreviewParams,
+  FimPreviewResult,
   ListRunsParams,
   ListRunsResult,
   RejectParams,
@@ -29,6 +31,7 @@ export const RPC_LIST_RUNS_METHOD = "agent.listRuns";
 export const RPC_APPROVE_METHOD = "agent.approve";
 export const RPC_REJECT_METHOD = "agent.reject";
 export const RPC_CANCEL_METHOD = "agent.cancel";
+export const RPC_PREVIEW_FIM_METHOD = "agent.previewFim";
 export const DEFAULT_RPC_COMMAND = "prole";
 export const DEFAULT_RPC_ARGS = ["rpc"] as const;
 const RPC_UNSUPPORTED_PROTOCOL_CODE = -32001;
@@ -213,6 +216,10 @@ export class RpcServerManager implements DisposableLike {
     return this.launch.autoStart;
   }
 
+  get launchConfig(): RpcServerLaunchConfig {
+    return this.launch;
+  }
+
   start(): Promise<RpcServerReadyState> {
     if (this.readyState !== undefined && this.currentStatus === "ready") {
       return Promise.resolve(this.readyState);
@@ -335,6 +342,10 @@ export class RpcServerManager implements DisposableLike {
 
   cancel(params: CancelParams): Promise<CancelResult> {
     return this.sendRequest<CancelResult>(RPC_CANCEL_METHOD, params);
+  }
+
+  previewFim(params: FimPreviewParams): Promise<FimPreviewResult> {
+    return this.sendRequest<FimPreviewResult>(RPC_PREVIEW_FIM_METHOD, params);
   }
 
   stop(): void {

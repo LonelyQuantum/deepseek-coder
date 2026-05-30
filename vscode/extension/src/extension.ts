@@ -2,8 +2,9 @@ import * as vscode from "vscode";
 
 import { ApprovalEventController } from "./approvalFlow";
 import { CHAT_VIEW_ID, ProleChatViewProvider } from "./chatView";
-import { registerOpenChatCommand } from "./commands";
+import { registerOpenChatCommand, registerOpenSettingsCommand } from "./commands";
 import { createPatchDiffPreviewController } from "./diffPreview";
+import { registerFimInlineCompletionProvider } from "./fimPreviewVscode";
 import { RpcServerManager, readRpcServerLaunchConfig } from "./rpcServer";
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -11,13 +12,28 @@ export function activate(context: vscode.ExtensionContext): void {
   const rpcServer = createRpcServerManager(context);
   const chatView = new ProleChatViewProvider(context.extensionUri, rpcServer, workspaceRoot);
   const openChat = registerOpenChatCommand(vscode.commands, vscode.window, rpcServer, chatView);
+  const openSettings = registerOpenSettingsCommand(
+    vscode.commands,
+    {
+      showInformationMessage(message) {
+        return vscode.window.showInformationMessage(message);
+      },
+      showWarningMessage(message) {
+        return vscode.window.showWarningMessage(message);
+      },
+      openSettings(query) {
+        return vscode.commands.executeCommand("workbench.action.openSettings", query);
+      },
+    },
+    rpcServer,
+  );
   const chatViewRegistration = vscode.window.registerWebviewViewProvider(CHAT_VIEW_ID, chatView, {
     webviewOptions: {
       retainContextWhenHidden: true,
     },
   });
 
-  context.subscriptions.push(openChat, chatView, chatViewRegistration);
+  context.subscriptions.push(openChat, openSettings, chatView, chatViewRegistration);
   if (rpcServer !== undefined && workspaceRoot !== undefined) {
     const patchDiffPreviewController = createPatchDiffPreviewController(context, rpcServer, workspaceRoot);
     const approvalController = new ApprovalEventController(
@@ -32,6 +48,7 @@ export function activate(context: vscode.ExtensionContext): void {
       patchDiffPreviewController,
     );
     context.subscriptions.push(patchDiffPreviewController, approvalController);
+    context.subscriptions.push(registerFimInlineCompletionProvider(rpcServer));
     context.subscriptions.push(rpcServer);
     if (rpcServer.autoStart) {
       void rpcServer.start().catch((error: unknown) => {
