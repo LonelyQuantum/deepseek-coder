@@ -205,7 +205,7 @@ Result：
     "protocolVersion": "0.1.0",
     "supportsRunResume": true,
     "supportsPatchApproval": true,
-    "supportsPersistentApprovals": false,
+    "supportsPersistentApprovals": true,
     "supportsEventBatching": true,
     "supportedRiskLevels": ["read", "write", "exec", "network", "destructive"],
     "provider": {
@@ -278,9 +278,9 @@ interface SendTurnResult {
 
 Result 返回后，进度通过 `agent.event` notification 持续到达。
 
-当前 Rust request loop 已能解析 `agent.sendTurn` 并分发给 `AgentRpcRequestHandler`。`crates/agent-rpc::AgentTurnLoopRpcHandler` 已能创建 run、选择注入的 provider factory、启动后台 Turn Loop worker，并在创建 run 后立即返回 `accepted`。Run Log 事件会通过独立的 live event queue 发送到 request loop 的单 writer，并持续输出为 `agent.event` notification；遇到审批时，worker 在 pending approval 队列中等待 `agent.approve` / `agent.reject` / `agent.cancel`，并在超时时写入取消事件。如果 request loop 读到 EOF 或 writer 失败，会触发 handler shutdown / disconnect cancel；对于 active run，shutdown 会把未决审批解析为 `decision: "canceled"` 并写入 `run.canceled`，或等待已有 terminal event 收口。
+当前 Rust request loop 已能解析 `agent.sendTurn` 并分发给 `AgentRpcRequestHandler`。`crates/agent-rpc::AgentTurnLoopRpcHandler` 已能创建 run、选择注入的 provider factory、启动后台 Turn Loop worker，并在创建 run 后立即返回 `accepted`。Run Log 事件会通过独立的 live event queue 发送到 request loop 的单 writer，并持续输出为 `agent.event` notification；遇到审批时，worker 会先检查 session/workspace 持久批准，再在 pending approval 队列中等待 `agent.approve` / `agent.reject` / `agent.cancel`，并在超时时写入取消事件。如果 request loop 读到 EOF 或 writer 失败，会触发 handler shutdown / disconnect cancel；对于 active run，shutdown 会把未决审批解析为 `decision: "canceled"` 并写入 `run.canceled`，或等待已有 terminal event 收口。
 
-Phase 2c 起，Rust handler 会消费 `attachments` 并转换为 Context Capsule 来源：`file` 由 Core 在工作区内读取，复用工具执行层的路径和敏感目录保护；`selection` / `explicit_content` 由前端提供文本但受数量、大小、重复来源和路径校验限制；`diagnostic` 由 VS Code/TUI 等前端传入结构化诊断文本。当前默认限制是单 turn 最多 32 个 attachment，单个 attachment 文本最多 256 KiB；超过限制会让该 run 以 `run.failed` / `E_INVALID_ATTACHMENT` 结束。
+Phase 2c 起，Rust handler 会消费 `attachments` 并转换为 Context Capsule 来源：`file` 由 Core 在工作区内读取，复用工具执行层的路径和敏感目录保护；`selection` / `explicit_content` 由前端提供文本但受数量、大小、重复来源和路径校验限制；`diagnostic` 由 VS Code/TUI 等前端传入结构化诊断文本。VS Code 插件在发送 turn 时会把当前 Problems 快照转换为 diagnostic attachments，并按协议 attachment 上限优先保留 error。当前默认限制是单 turn 最多 32 个 attachment，单个 attachment 文本最多 256 KiB；超过限制会让该 run 以 `run.failed` / `E_INVALID_ATTACHMENT` 结束。
 
 ### `agent.approve`
 
@@ -302,9 +302,10 @@ interface ApproveResult {
 规则：
 
 - `persist` 默认是 `never`。
-- 只有明确标记为 persistable 的审批类型才能使用 `workspace` 持久化。
+- 只有明确标记为 `persistable: true` 的审批类型才能使用 `session` / `workspace` 持久化。
+- `network` 和 `destructive` 风险不可持久化，即使客户端发送持久化参数也会被 server 拒绝。
 - 批准已过期或未知审批时返回 `E_APPROVAL_NOT_FOUND`。
-- 当前 Rust request loop 已能解析 `agent.approve` 并分发给 `AgentRpcRequestHandler`；`AgentTurnLoopRpcHandler` 已能批准当前 active run 的 pending approval，并继续输出 `tool.approvalResolved`、后续工具事件和 run 结束事件。未知、已使用或已过期的 approval 会返回 `E_APPROVAL_NOT_FOUND`。
+- 当前 Rust request loop 已能解析 `agent.approve` 并分发给 `AgentRpcRequestHandler`；`AgentTurnLoopRpcHandler` 已能批准当前 active run 的 pending approval，并按需写入 session/workspace 持久批准。后续相同 key 的审批会自动通过并继续输出 `tool.approvalResolved`、后续工具事件和 run 结束事件。未知、已使用或已过期的 approval 会返回 `E_APPROVAL_NOT_FOUND`。
 
 ### `agent.reject`
 
@@ -685,6 +686,7 @@ interface ToolApprovalRequired {
   detail: string;
   cwd?: string;
   command?: string;
+  outputSummary?: string;
   paths?: string[];
   riskReasons?: string[];
   persistable: boolean;

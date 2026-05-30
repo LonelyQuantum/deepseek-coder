@@ -566,7 +566,7 @@ extension.ts
 
 ## 开发计划
 
-当前进度：Phase 1 Agent Core MVP 功能闭环、Phase 2 的 1M Context Capsule 核心收敛和 Phase 3 的 VS Code 插件核心与共享 RPC 交互管线均已完成。DeepSeek provider、基础工具执行、Context Builder、Run Log、Turn Loop、CLI、RPC、审批、取消、真实 DeepSeek streaming/tool-call 验收、本地 fixture smoke、进程级 CLI smoke、小型真实仓库 CLI 联网验收、合并前测试收敛、Context Capsule、manifest、token estimator、attachments、provider summary、Run Log 体积控制、tool call JSON Schema 校验、200K/500K/900K 离线大上下文验收入口和 Phase 2e 展示型 demo 扩展均已完成；VS Code RPC server 启动监管、JSON-RPC request client、RPC 全双工 reader/writer 与事件发送队列、Sidebar Chat 事件渲染、Chat 输入发送真实 turn、真实审批回传、命令风险动态升级、Native diff editor patch 预览、Run List / resume、Context Capsule 可视化和命令子进程树清理均已完成。Phase 4 已开始，P4-1 到 P4-5 已完成。
+当前进度：Phase 1 Agent Core MVP 功能闭环、Phase 2 的 1M Context Capsule 核心收敛和 Phase 3 的 VS Code 插件核心与共享 RPC 交互管线均已完成。DeepSeek provider、基础工具执行、Context Builder、Run Log、Turn Loop、CLI、RPC、审批、取消、真实 DeepSeek streaming/tool-call 验收、本地 fixture smoke、进程级 CLI smoke、小型真实仓库 CLI 联网验收、合并前测试收敛、Context Capsule、manifest、token estimator、attachments、provider summary、Run Log 体积控制、tool call JSON Schema 校验、200K/500K/900K 离线大上下文验收入口和 Phase 2e 展示型 demo 扩展均已完成；VS Code RPC server 启动监管、JSON-RPC request client、RPC 全双工 reader/writer 与事件发送队列、Sidebar Chat 事件渲染、Chat 输入发送真实 turn、真实审批回传、命令风险动态升级、Native diff editor patch 预览、Run List / resume、Context Capsule 可视化和命令子进程树清理均已完成。Phase 4 已开始，P4-1 到 P4-9 已完成，P4-10 到 P4-14 仍在推进。
 
 阶段完成口径：README 中某个 Phase 只有在 `docs/phase-tasks.md` 对应 Phase 下的所有任务都标记为 `[x]` 后，才能在高层开发计划中表述为“全部完成”。如果某阶段核心功能已完成但仍有 P1/P2 增强或发布/文档验收项未完成，README 必须继续把该阶段表述为进行中，并列出剩余任务。
 
@@ -671,10 +671,10 @@ extension.ts
 - [x] P4-3：Provider capability model data contract，已通过 ADR 0006 和 `agent.initialize.capabilities.provider` 显式表达 thinking、tool calls/tool choice、FIM、stream/cache usage、上下文和输出限制。
 - [x] P4-4：事件 payload schema 与协议 fixture 对齐，已新增共享 fixture 与 Rust/TypeScript 测试，并补齐协议版本不匹配的 VS Code 提示边界。
 - [x] P4-5：RPC 高频事件输出节流与批量发送策略，实时 wire 层支持 `agent.eventBatch`，Run Log 与 replay 仍保持逐事件 `seq` 事实来源。
-- [ ] P4-6：`agent.cancel` 类型化 helper 与 Chat Cancel UI，和 Terminal approval 共用 composer 状态模型。
-- [ ] P4-7：Problems 面板 diagnostics 通过 diagnostic attachments 进入 Context Builder。
-- [ ] P4-8：Terminal command approval。
-- [ ] P4-9：审批持久化存储。
+- [x] P4-6：`agent.cancel` 类型化 helper 与 Chat Cancel UI，已新增 `RpcServerManager.cancel()`、Cancel 按钮和运行中 composer 状态收口。
+- [x] P4-7：Problems 面板 diagnostics 通过 diagnostic attachments 进入 Context Builder，VS Code 发送 turn 时会采集当前 Problems 快照，按协议 attachment 上限裁剪并优先保留 error。
+- [x] P4-8：Terminal command approval，审批 modal 展示命令、cwd、风险等级、风险原因、上一条 shell 输出摘要和持久化选项。
+- [x] P4-9：审批持久化存储，RPC 队列支持 session/workspace 持久批准，并继续禁止 network/destructive 风险持久化。
 - [ ] P4-10：provider、model、预算、审批策略和 RPC 命令配置界面，展示 server 返回的 capability 数据且不保存 API Key。
 - [ ] P4-11：真实 hunk 级 patch 审批，首版限定 `apply_patch`，新增审批事件 payload 时同步扩展协议 fixture。
 - [ ] P4-12：FIM completion preview，若新增 preview 事件 payload 同步纳入协议 fixture。

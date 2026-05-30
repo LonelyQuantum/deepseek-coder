@@ -1,6 +1,6 @@
 # 编辑器插件（VS Code Extension）
 
-状态：Phase 3 VS Code 插件核心体验已完成。基础命令、审批弹窗 adapter、RPC server 启动监管、初始化握手、JSON-RPC request client、VS Code/protocol TypeScript 类型共享、RPC/commands 边界测试、Sidebar Chat 事件渲染、Chat 输入发送真实 turn、真实审批回传、共享 RPC 全双工事件管线、命令风险动态升级展示、Native diff editor patch 预览、Run List / resume 和 Context Capsule 可视化已实现；Phase 4 按 14 项权威清单推进深度集成，P4-1 到 P4-5 已完成。
+状态：Phase 3 VS Code 插件核心体验已完成。基础命令、审批弹窗 adapter、RPC server 启动监管、初始化握手、JSON-RPC request client、VS Code/protocol TypeScript 类型共享、RPC/commands 边界测试、Sidebar Chat 事件渲染、Chat 输入发送真实 turn、真实审批回传、共享 RPC 全双工事件管线、命令风险动态升级展示、Native diff editor patch 预览、Run List / resume 和 Context Capsule 可视化已实现；Phase 4 按 14 项权威清单推进深度集成，P4-1 到 P4-9 已完成。
 
 VS Code 插件是 `ProleCoder` 的一等前端。它必须通过 JSON-RPC server 复用 Rust Agent Core，而不是在 TypeScript 侧重新实现 agent loop、context builder、provider 调用或 tool execution。
 
@@ -27,7 +27,7 @@ VS Code 插件是 `ProleCoder` 的一等前端。它必须通过 JSON-RPC server
 - 按行解析 stdout 上的 JSON-RPC response / notification。
 - 把 `agent.event` notification 转发给注册的事件 handler。
 - 通过 `sendRequest()` 发送 JSON-RPC request，并按 request id 管理 pending response。
-- 提供 typed `sendTurn()`、`approve()` 和 `reject()` helper，避免 UI 层直接拼常用 JSON-RPC method string。
+- 提供 typed `sendTurn()`、`cancel()`、`approve()`、`reject()`、`listRuns()` 和 `resume()` helper，避免 UI 层直接拼常用 JSON-RPC method string。
 - 把 JSON-RPC error response 转换为 `RpcRequestError`，保留 `code` 和 `data`。
 - server 停止、退出或出错时，会拒绝尚未完成的 pending request。
 - 记录 stderr 尾部，供后续错误提示和诊断使用。
@@ -47,17 +47,17 @@ VS Code 插件是 `ProleCoder` 的一等前端。它必须通过 JSON-RPC server
 - 通过 `RpcServerManager.onEvent()` 订阅 live `agent.event`。
 - 使用 `ChatEventTimeline` 把 `assistant.delta`、tool lifecycle、approval、context/provider 和 terminal event 转换为 timeline item。
 - 同一 run/turn 的连续 `assistant.delta` 会合并为一条 assistant 消息，避免流式输出刷屏。
-- 提供 prompt 输入和 mode 选择，通过 Webview `submitTurn` 消息调用 typed `RpcServerManager.sendTurn()`，accepted 后等待同一 run 的 terminal event 收口输入状态。
+- 提供 prompt 输入、mode 选择和运行中 Cancel 按钮；通过 Webview `submitTurn` 消息调用 typed `RpcServerManager.sendTurn()`，发送时把 Problems 快照转换为 diagnostic attachments，并按协议 attachment 上限优先保留 error；accepted 后等待同一 run 的 terminal event 收口输入状态，Cancel 会调用 typed `RpcServerManager.cancel()`。
 
 `vscode/extension/src/commands.ts` 还提供 `requestApproval`：
 
 - 使用 VS Code modal warning 展示审批摘要。
-- 将 `Approve` / `Approve Once` / `Approve For Session` / `Reject` / 关闭弹窗映射为稳定的批准或拒绝决定。
+- 将 `Approve` / `Approve Once` / `Approve For Session` / `Approve For Workspace` / `Reject` / 关闭弹窗映射为稳定的批准或拒绝决定；`network` 和 `destructive` 风险不展示持久化选项。
 
 `vscode/extension/src/approvalFlow.ts` 当前接入真实 RPC pending approval：
 
 - 订阅 `RpcServerManager.onEvent()`，只处理 `tool.approvalRequired`。
-- 校验 approval payload 的 `approvalId`、`toolCallId`、`toolName`、`risk`、`title`、`detail`、`persistable`、`command` 和 `paths`。
+- 校验 approval payload 的 `approvalId`、`toolCallId`、`toolName`、`risk`、`title`、`detail`、`persistable`、`command`、`cwd`、`outputSummary` 和 `paths`。
 - 复用 `requestApproval` 打开 VS Code modal，并把 approve/reject 结果发送为 typed `RpcServerManager.approve()` / `reject()`。
 - 记录已处理的 approvalId，避免重复事件触发重复弹窗。
 
@@ -120,10 +120,10 @@ Phase 4 深度集成权威清单与 `docs/phase-tasks.md` 对齐：
 3. P4-3：Provider capability model data contract，已完成：`agent.initialize.capabilities.provider` 暴露 DeepSeek V4 model capability，首版不引入 heavy trait。
 4. P4-4：事件 payload schema 与协议 fixture 对齐，已完成：共享 fixture 覆盖 `provider.requested`、`tool.completed`、`run.completed`，并处理协议版本不匹配提示。
 5. P4-5：RPC 高频事件输出节流与批量发送策略，已完成：实时 live event 支持 `agent.eventBatch`，保持 Run Log `seq` 与 replay 语义稳定。
-6. P4-6：`agent.cancel` 类型化 helper 与 Chat Cancel UI；与 Terminal approval 共享 composer 状态模型。
-7. P4-7：通过 diagnostic attachments 读取 Problems 面板诊断并交给 Agent Core。
-8. P4-8：Terminal command approval 展示命令、cwd、风险等级、输出摘要和持久化选项。
-9. P4-9：审批持久化存储，继续禁止 network/destructive 风险持久化。
+6. P4-6：`agent.cancel` 类型化 helper 与 Chat Cancel UI，已完成：`RpcServerManager.cancel()` 和 Sidebar Chat Cancel 按钮接入真实 RPC。
+7. P4-7：通过 diagnostic attachments 读取 Problems 面板诊断并交给 Agent Core，已完成：发送 turn 时采集 Problems 快照，并按协议 attachment 上限裁剪。
+8. P4-8：Terminal command approval 展示命令、cwd、风险等级、上一条 shell 输出摘要和持久化选项，已完成：modal 和 shared protocol payload 已支持。
+9. P4-9：审批持久化存储，已完成：RPC 队列支持 session/workspace 持久批准，并继续禁止 network/destructive 风险持久化。
 10. P4-10：provider、model、预算、审批策略和 RPC 命令配置界面；不保存 API Key，并展示 server 返回的 capability 数据。
 11. P4-11：真实 hunk 级 patch 审批，首版限定 `apply_patch`，新增审批事件 payload 时同步扩展协议 fixture。
 12. P4-12：FIM completion preview，若新增 preview 事件 payload 同步纳入协议 fixture。
