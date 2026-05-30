@@ -15,6 +15,8 @@
     "format": "cargo fmt --all",
     "lint": "cargo clippy --workspace --all-targets -- -D warnings && pnpm -r lint",
     "test": "cargo test --workspace && pnpm -r test",
-    "typecheck": "pnpm -r typecheck"
+    "typecheck": "pnpm -r typecheck",
+    "vscode:test-electron": "pnpm --filter prole-coder-vscode test:electron",
+    "vsix:smoke": "pnpm -r --if-present vsix:smoke"
   }
 }

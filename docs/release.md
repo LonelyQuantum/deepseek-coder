@@ -32,6 +32,18 @@
 - 用于安装 wrapper 的 npm package
 - VS Code Marketplace 或 Open VSX
 
+## VSIX dry-run packaging smoke
+
+Phase 4 P4-1 已提供 VSIX 打包烟测入口：
+
+```powershell
+pnpm run vsix:smoke
+```
+
+该命令会构建 `@prole-coder/protocol` 与 `prole-coder-vscode`，在 `target/` 下临时生成 VSIX，检查 `.vscodeignore`、`workspace:*` 依赖是否只停留在开发期、`media/prole-coder-view.svg`、compiled `out/`、activationEvents 和包内排除规则，然后清理临时产物。
+
+此 smoke 使用 dry-run 口径，允许缺少 repository 和发布许可证文件，并禁用依赖探测以避免把 workspace 开发依赖写入运行时包。它只验证打包基础设施，不代表 P4-13 的 alpha / pre-release VSIX 安装交付已经完成。
+
 ## 后续增强
 
 - 添加 `LICENSE` 文件，并在发布包中包含 AGPL-3.0-or-later 许可证文本和源码获取说明。

@@ -71,6 +71,8 @@
     "build": "pnpm --filter @prole-coder/protocol build && tsc -p tsconfig.json",
     "lint": "pnpm --filter @prole-coder/protocol build && tsc -p tsconfig.test.json --noEmit",
     "package": "vsce package",
+    "test:electron": "pnpm run build && tsc -p tsconfig.test.json && node scripts/runVscodeIntegrationTests.mjs",
+    "vsix:smoke": "pnpm run build && node scripts/vsixDryRunSmoke.mjs",
     "test": "pnpm --filter @prole-coder/protocol build && tsc -p tsconfig.test.json && node --test \"out-test/**/*.test.js\"",
     "typecheck": "pnpm --filter @prole-coder/protocol build && tsc -p tsconfig.json --noEmit"
   },
