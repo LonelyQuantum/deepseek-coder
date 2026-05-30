@@ -27,6 +27,7 @@ export const RPC_APPROVE_METHOD = "agent.approve";
 export const RPC_REJECT_METHOD = "agent.reject";
 export const DEFAULT_RPC_COMMAND = "prole";
 export const DEFAULT_RPC_ARGS = ["rpc"] as const;
+const RPC_UNSUPPORTED_PROTOCOL_CODE = -32001;
 
 export type RpcServerStatus = "stopped" | "starting" | "ready" | "failed";
 
@@ -419,6 +420,13 @@ export class RpcServerManager implements DisposableLike {
 
   private handleInitializeResponse(message: JsonRpcResponse): void {
     if (message.error !== undefined) {
+      const protocolMismatch = formatProtocolMismatch(message.error);
+      if (protocolMismatch !== undefined) {
+        this.notifier?.warn(protocolMismatch);
+        this.failStarting(new Error(protocolMismatch));
+        return;
+      }
+
       this.failStarting(
         new Error(`RPC initialize failed: ${message.error.message} (${message.error.code})`),
       );

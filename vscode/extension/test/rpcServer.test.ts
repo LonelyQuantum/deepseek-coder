@@ -518,6 +518,53 @@ test("RPC server manager fails startup on process error", async () => {
   assert.equal(manager.status, "failed");
 });
 
+test("RPC server manager warns clearly on protocol mismatch startup errors", async () => {
+  const factory = new FakeProcessFactory();
+  const warnings: string[] = [];
+  const manager = new RpcServerManager({
+    launch: {
+      command: "prole",
+      args: ["rpc"],
+      autoStart: true,
+    },
+    workspace: {
+      root: "C:/workspace/project",
+      trusted: true,
+    },
+    extensionVersion: "0.1.0",
+    processFactory: factory,
+    notifier: {
+      info: () => undefined,
+      warn(message) {
+        warnings.push(message);
+      },
+    },
+  });
+
+  const readyPromise = manager.start();
+  const child = factory.lastChild();
+  const request = child.initializeRequest();
+  child.stdout.pushJson({
+    jsonrpc: "2.0",
+    id: request.id,
+    error: {
+      code: -32001,
+      message: "unsupported protocol version `9.9.9`, expected `0.1.0`",
+      data: {
+        clientProtocolVersion: "9.9.9",
+        serverProtocolVersion: RPC_PROTOCOL_VERSION,
+      },
+    },
+  });
+
+  await assert.rejects(readyPromise, /protocol mismatch/i);
+  assert.equal(manager.status, "failed");
+  assert.equal(child.killed, true);
+  assert.equal(warnings.length, 1);
+  assert.ok(warnings[0]?.includes("9.9.9"));
+  assert.ok(warnings[0]?.includes(RPC_PROTOCOL_VERSION));
+});
+
 test("RPC server manager stop rejects pending startup", async () => {
   const factory = new FakeProcessFactory();
   const manager = rpcManagerWithFactory(factory);
