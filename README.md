@@ -566,7 +566,7 @@ extension.ts
 
 ## 开发计划
 
-当前进度：Phase 1 Agent Core MVP 功能闭环、Phase 2 的 1M Context Capsule 核心收敛和 Phase 3 的 VS Code 插件核心与共享 RPC 交互管线均已完成。DeepSeek provider、基础工具执行、Context Builder、Run Log、Turn Loop、CLI、RPC、审批、取消、真实 DeepSeek streaming/tool-call 验收、本地 fixture smoke、进程级 CLI smoke、小型真实仓库 CLI 联网验收、合并前测试收敛、Context Capsule、manifest、token estimator、attachments、provider summary、Run Log 体积控制、tool call JSON Schema 校验、200K/500K/900K 离线大上下文验收入口和 Phase 2e 展示型 demo 扩展均已完成；VS Code RPC server 启动监管、JSON-RPC request client、RPC 全双工 reader/writer 与事件发送队列、Sidebar Chat 事件渲染、Chat 输入发送真实 turn、真实审批回传、命令风险动态升级、Native diff editor patch 预览、Run List / resume、Context Capsule 可视化和命令子进程树清理均已完成。Phase 4 已开始，P4-1 到 P4-12 已完成，P4-13 和 P4-14 仍在推进。
+当前进度：Phase 1 Agent Core MVP 功能闭环、Phase 2 的 1M Context Capsule 核心收敛、Phase 3 的 VS Code 插件核心与共享 RPC 交互管线，以及 Phase 4 的 VS Code 深度集成均已完成。DeepSeek provider、基础工具执行、Context Builder、Run Log、Turn Loop、CLI、RPC、审批、取消、真实 DeepSeek streaming/tool-call 验收、本地 fixture smoke、进程级 CLI smoke、小型真实仓库 CLI 联网验收、合并前测试收敛、Context Capsule、manifest、token estimator、attachments、provider summary、Run Log 体积控制、tool call JSON Schema 校验、200K/500K/900K 离线大上下文验收入口和 Phase 2e 展示型 demo 扩展均已完成；VS Code RPC server 启动监管、JSON-RPC request client、RPC 全双工 reader/writer 与事件发送队列、Sidebar Chat 事件渲染、Chat 输入发送真实 turn、真实审批回传、命令风险动态升级、Native diff editor patch 预览、Run List / resume、Context Capsule 可视化、命令子进程树清理、VSIX alpha 打包和 extension-host 端到端验收均已完成。下一阶段进入 Phase 5：TUI 与生态扩展。
 
 阶段完成口径：README 中某个 Phase 只有在 `docs/phase-tasks.md` 对应 Phase 下的所有任务都标记为 `[x]` 后，才能在高层开发计划中表述为“全部完成”。如果某阶段核心功能已完成但仍有 P1/P2 增强或发布/文档验收项未完成，README 必须继续把该阶段表述为进行中，并列出剩余任务。
 
@@ -678,8 +678,8 @@ extension.ts
 - [x] P4-10：provider、model、预算、审批策略和 RPC 命令配置界面，已新增 Open Settings 命令，打开 VS Code 设置并展示 RPC server capability、默认模型、预算、审批能力、RPC command/state；配置只包含非敏感 RPC/FIM 选项，不保存 API Key。
 - [x] P4-11：真实 hunk 级 patch 审批，首版限定 `apply_patch`，Core/RPC 支持 selected hunk 决策、校验未知/重复 hunk、Run Log 记录 selected/all 范围，VS Code modal 可选择 hunks 并通过 `agent.approve.hunks` 回传；审批事件 payload 已同步协议 fixture。
 - [x] P4-12：FIM completion preview，已新增 `agent.previewFim` RPC、DeepSeek beta FIM adapter、fixture provider 预览和 VS Code inline completion provider，模型选择只依赖 server capability 的 `supportsFim`。
-- [ ] P4-13：VSIX alpha / pre-release 打包与插件安装说明。
-- [ ] P4-14：补齐 end-to-end 集成测试覆盖。
+- [x] P4-13：VSIX alpha / pre-release 打包与插件安装说明，已新增 `pnpm run vsix:alpha`，在 `target/vsix/` 生成可安装 pre-release VSIX 与 SHA-256 校验和，并在 `docs/release.md` 记录 clean 环境安装验收路径。
+- [x] P4-14：补齐 end-to-end 集成测试覆盖，已在 `pnpm run vscode:test-electron` 中接入本地 JSON-RPC fixture server，覆盖 Chat sendTurn、Cancel、Problems diagnostics、自动审批回传、Run List / resume 和隔离 VS Code profile 启动；VSIX 安装后的 clean 环境基础交互继续按 `docs/release.md` 的 P4-13 路径手动验收。
 
 验收标准：
 
