@@ -636,6 +636,30 @@ export interface ProviderCompletedPayload extends RunLogPayloadMetadata {
   readonly streaming?: ProviderStreamingPayload;
 }
 
+export interface ProviderRequestedPayload {
+  readonly iteration: number;
+  readonly messageCount: number;
+  readonly reasoningState: Readonly<Record<string, unknown>>;
+}
+
+export type ToolExecutionStatus = "ok" | "failed";
+
+export interface ToolCompletedPayload extends RunLogPayloadMetadata {
+  readonly toolCallId: string;
+  readonly name: ToolName;
+  readonly status: ToolExecutionStatus;
+  readonly summary: string;
+  readonly result: Readonly<Record<string, unknown>>;
+}
+
+export type VerificationStatus = "passed" | "failed" | "skipped";
+
+export interface RunCompletedPayload {
+  readonly summary: string;
+  readonly changedFiles: readonly string[];
+  readonly verificationStatus: VerificationStatus;
+}
+
 export interface ToolApprovalRequiredPayload {
   readonly approvalId: string;
   readonly toolCallId: string;

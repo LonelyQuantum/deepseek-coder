@@ -1,0 +1,38 @@
+{
+  "version": "0.1.0",
+  "scope": "Initial Phase 4 fixture alignment covers these three event payloads; later Phase 4 tasks should extend this fixture when new event payloads become protocol surfaces.",
+  "events": [
+    {
+      "type": "provider.requested",
+      "payloadName": "ProviderRequestedPayload",
+      "required": ["iteration", "messageCount", "reasoningState"],
+      "properties": {
+        "iteration": "number",
+        "messageCount": "number",
+        "reasoningState": "object"
+      }
+    },
+    {
+      "type": "tool.completed",
+      "payloadName": "ToolCompletedPayload",
+      "required": ["toolCallId", "name", "status", "summary", "result"],
+      "properties": {
+        "toolCallId": "string",
+        "name": "string",
+        "status": "ok|failed",
+        "summary": "string",
+        "result": "object"
+      }
+    },
+    {
+      "type": "run.completed",
+      "payloadName": "RunCompletedPayload",
+      "required": ["summary", "changedFiles", "verificationStatus"],
+      "properties": {
+        "summary": "string",
+        "changedFiles": "array<string>",
+        "verificationStatus": "passed|failed|skipped"
+      }
+    }
+  ]
+}

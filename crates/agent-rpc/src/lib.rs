@@ -2518,6 +2518,174 @@ mod tests {
     }
 
     #[test]
+    fn default_initialize_result_exposes_provider_capabilities() {
+        let result = AgentInitializeResult::default();
+        let value = serde_json::to_value(&result).expect("initialize result should serialize");
+
+        assert_eq!(value["capabilities"]["supportsEventBatching"], true);
+        assert_eq!(
+            value["capabilities"]["provider"]["defaultModel"],
+            "deepseek-v4-pro"
+        );
+        assert_eq!(
+            value["capabilities"]["provider"]["models"][0]["contextWindowTokens"],
+            1_048_576
+        );
+        assert_eq!(
+            value["capabilities"]["provider"]["models"][1]["maxOutputTokens"],
+            393_216
+        );
+    }
+
+    #[test]
+    fn run_log_events_convert_to_agent_event_batch_notification() {
+        let events = vec![
+            run_log_event(
+                10,
+                "assistant.delta",
+                "run_01",
+                Some("turn_01"),
+                json!({ "text": "hello" }),
+            ),
+            run_log_event(
+                11,
+                "assistant.delta",
+                "run_01",
+                Some("turn_01"),
+                json!({ "text": " world" }),
+            ),
+        ];
+
+        let notification = run_log_events_to_batch_notification(&events)
+            .expect("batch notification should convert");
+
+        assert_eq!(notification.jsonrpc, "2.0");
+        assert_eq!(notification.method, "agent.eventBatch");
+        assert_eq!(notification.params.first_seq, 10);
+        assert_eq!(notification.params.last_seq, 11);
+        assert_eq!(notification.params.count, 2);
+        assert_eq!(notification.params.events[0].seq, 10);
+        assert_eq!(notification.params.events[1].payload["text"], " world");
+    }
+
+    #[test]
+    fn live_event_emission_batches_multiple_queued_events() {
+        let events = vec![
+            run_log_event(
+                1,
+                "assistant.delta",
+                "run_01",
+                Some("turn_01"),
+                json!({ "text": "a" }),
+            ),
+            run_log_event(
+                2,
+                "assistant.delta",
+                "run_01",
+                Some("turn_01"),
+                json!({ "text": "b" }),
+            ),
+        ];
+        let mut output = Vec::new();
+
+        emit_live_run_log_events(&mut output, &events)
+            .expect("live events should be emitted as one batch");
+
+        let lines = output_lines(output);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0]["method"], "agent.eventBatch");
+        assert_eq!(lines[0]["params"]["firstSeq"], 1);
+        assert_eq!(lines[0]["params"]["lastSeq"], 2);
+        assert_eq!(lines[0]["params"]["count"], 2);
+    }
+
+    #[test]
+    fn live_event_emission_keeps_single_event_wire_compatible() {
+        let event = run_log_event(
+            1,
+            "assistant.delta",
+            "run_01",
+            Some("turn_01"),
+            json!({ "text": "hello" }),
+        );
+        let mut output = Vec::new();
+
+        emit_live_run_log_events(&mut output, &[event]).expect("single live event should emit");
+
+        let lines = output_lines(output);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0]["method"], "agent.event");
+        assert_eq!(lines[0]["params"]["seq"], 1);
+    }
+
+    #[test]
+    fn event_payload_fixture_matches_rust_payload_samples() {
+        #[derive(Deserialize)]
+        struct EventPayloadFixture {
+            version: String,
+            events: Vec<EventPayloadFixtureEntry>,
+        }
+
+        #[derive(Deserialize)]
+        struct EventPayloadFixtureEntry {
+            #[serde(rename = "type")]
+            event_type: String,
+            required: Vec<String>,
+        }
+
+        let fixture: EventPayloadFixture = serde_json::from_str(include_str!(
+            "../../../docs/protocol/event-payloads.v1.json"
+        ))
+        .expect("event payload fixture should parse");
+        let samples = HashMap::from([
+            (
+                "provider.requested",
+                json!({
+                    "iteration": 1,
+                    "messageCount": 4,
+                    "reasoningState": { "status": "active" }
+                }),
+            ),
+            (
+                "tool.completed",
+                json!({
+                    "toolCallId": "call_1",
+                    "name": "shell",
+                    "status": "ok",
+                    "summary": "Command completed.",
+                    "result": { "exitCode": 0 }
+                }),
+            ),
+            (
+                "run.completed",
+                json!({
+                    "summary": "Updated the workspace.",
+                    "changedFiles": ["README.md"],
+                    "verificationStatus": "passed"
+                }),
+            ),
+        ]);
+
+        assert_eq!(fixture.version, PROTOCOL_VERSION);
+        for event in fixture.events {
+            let sample = samples
+                .get(event.event_type.as_str())
+                .unwrap_or_else(|| panic!("missing sample for {}", event.event_type));
+            let object = sample
+                .as_object()
+                .expect("sample payload must be an object");
+            for field in event.required {
+                assert!(
+                    object.contains_key(&field),
+                    "{} must include required field {}",
+                    event.event_type,
+                    field
+                );
+            }
+        }
+    }
+
+    #[test]
     fn stdio_bridge_writes_newline_delimited_notifications() {
         let events = vec![
             RunLogEvent {

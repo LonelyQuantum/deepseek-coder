@@ -53,12 +53,30 @@ interface ToolRegistryTool {
   readonly status: string;
 }
 
+interface EventPayloadFixture {
+  readonly version: string;
+  readonly events: readonly EventPayloadFixtureEntry[];
+}
+
+interface EventPayloadFixtureEntry {
+  readonly type: string;
+  readonly payloadName: string;
+  readonly required: readonly string[];
+  readonly properties: Readonly<Record<string, string>>;
+}
+
 const toolRegistryFixture = JSON.parse(
   readFileSync(
     new URL("../../../../docs/protocol/tool-registry.v1.json", import.meta.url),
     "utf8",
   ),
 ) as ToolRegistryFixture;
+const eventPayloadFixture = JSON.parse(
+  readFileSync(
+    new URL("../../../../docs/protocol/event-payloads.v1.json", import.meta.url),
+    "utf8",
+  ),
+) as EventPayloadFixture;
 const jsonRpcProtocolDocument = readFileSync(
   new URL("../../../../docs/json-rpc-protocol.md", import.meta.url),
   "utf8",
@@ -330,6 +348,80 @@ test("attachments and provider completed payload use phase 2c and 2d fields", ()
   assert.equal(providerCompleted.usage.promptCacheHitTokens, 64);
   assert.equal(providerCompleted.streaming.toolCallDeltaCount, 1);
   assert.equal(metadata.runLogTruncation?.[0]?.reason, "max_string_bytes");
+});
+
+test("event payload fixture stays aligned with shared protocol types", () => {
+  const providerRequested = {
+    iteration: 1,
+    messageCount: 4,
+    reasoningState: {
+      status: "active",
+    },
+  } satisfies ProviderRequestedPayload;
+  const toolCompleted = {
+    toolCallId: "call_1",
+    name: "shell",
+    status: "ok",
+    summary: "Command completed.",
+    result: {
+      exitCode: 0,
+    },
+  } satisfies ToolCompletedPayload;
+  const runCompleted = {
+    summary: "Updated the workspace.",
+    changedFiles: ["README.md"],
+    verificationStatus: "passed",
+  } satisfies RunCompletedPayload;
+  const samples = {
+    "provider.requested": providerRequested,
+    "tool.completed": toolCompleted,
+    "run.completed": runCompleted,
+  } as const;
+
+  assert.equal(eventPayloadFixture.version, protocolVersion);
+  assert.deepEqual(eventPayloadFixture.events.map((event) => event.type), [
+    "provider.requested",
+    "tool.completed",
+    "run.completed",
+  ]);
+
+  for (const event of eventPayloadFixture.events) {
+    const sample = samples[event.type as keyof typeof samples] as Record<string, unknown>;
+    assert.ok(sample, `missing sample for ${event.type}`);
+    for (const field of event.required) {
+      assert.equal(field in sample, true, `${event.type} must include ${field}`);
+    }
+  }
+});
+
+test("event batch notification payload preserves event ordering metadata", () => {
+  const batch = {
+    events: [
+      {
+        seq: 10,
+        time: "1970-01-01T00:00:00.000Z",
+        type: "assistant.delta",
+        runId: "run_1",
+        turnId: "turn_1",
+        payload: { text: "hello" },
+      },
+      {
+        seq: 11,
+        time: "1970-01-01T00:00:00.001Z",
+        type: "assistant.delta",
+        runId: "run_1",
+        turnId: "turn_1",
+        payload: { text: " world" },
+      },
+    ],
+    firstSeq: 10,
+    lastSeq: 11,
+    count: 2,
+  } satisfies AgentEventBatchParams;
+
+  assert.equal(batch.events[0]?.seq, batch.firstSeq);
+  assert.equal(batch.events[1]?.seq, batch.lastSeq);
+  assert.equal(batch.events.length, batch.count);
 });
 
 test("tool registry contains every declared tool exactly once", () => {
