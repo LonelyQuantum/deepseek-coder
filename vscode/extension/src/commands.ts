@@ -4,6 +4,7 @@ export const OPEN_CHAT_NO_WORKSPACE_MESSAGE =
 export const APPROVAL_APPROVE_LABEL = "Approve";
 export const APPROVAL_APPROVE_ONCE_LABEL = "Approve Once";
 export const APPROVAL_APPROVE_SESSION_LABEL = "Approve For Session";
+export const APPROVAL_APPROVE_WORKSPACE_LABEL = "Approve For Workspace";
 export const APPROVAL_REJECT_LABEL = "Reject";
 export const APPROVAL_DISMISSED_REASON = "approval prompt dismissed";
 export const APPROVAL_REJECTED_REASON = "rejected in VS Code";
@@ -54,6 +55,8 @@ export interface ApprovalPromptRequest {
   readonly detail: string;
   readonly persistable: boolean;
   readonly command?: string;
+  readonly cwd?: string;
+  readonly outputSummary?: string;
   readonly paths?: readonly string[];
   readonly riskReasons?: readonly string[];
 }
@@ -105,9 +108,7 @@ export async function requestApproval(
   window: ApprovalWindowMessenger,
   request: ApprovalPromptRequest,
 ): Promise<ApprovalPromptDecision> {
-  const choices = request.persistable
-    ? [APPROVAL_APPROVE_ONCE_LABEL, APPROVAL_APPROVE_SESSION_LABEL, APPROVAL_REJECT_LABEL]
-    : [APPROVAL_APPROVE_LABEL, APPROVAL_REJECT_LABEL];
+  const choices = approvalChoices(request);
   const selected = await window.showWarningMessage(
     formatApprovalMessage(request),
     { modal: true },
@@ -130,6 +131,14 @@ export async function requestApproval(
     };
   }
 
+  if (selected === APPROVAL_APPROVE_WORKSPACE_LABEL) {
+    return {
+      kind: "approve",
+      approvalId: request.approvalId,
+      persist: "workspace",
+    };
+  }
+
   if (selected === APPROVAL_REJECT_LABEL) {
     return {
       kind: "reject",
@@ -143,6 +152,23 @@ export async function requestApproval(
     approvalId: request.approvalId,
     reason: APPROVAL_DISMISSED_REASON,
   };
+}
+
+function approvalChoices(request: ApprovalPromptRequest): string[] {
+  if (!request.persistable) {
+    return [APPROVAL_APPROVE_LABEL, APPROVAL_REJECT_LABEL];
+  }
+
+  if (request.risk === "network" || request.risk === "destructive") {
+    return [APPROVAL_APPROVE_ONCE_LABEL, APPROVAL_REJECT_LABEL];
+  }
+
+  return [
+    APPROVAL_APPROVE_ONCE_LABEL,
+    APPROVAL_APPROVE_SESSION_LABEL,
+    APPROVAL_APPROVE_WORKSPACE_LABEL,
+    APPROVAL_REJECT_LABEL,
+  ];
 }
 
 function formatApprovalMessage(request: ApprovalPromptRequest): string {
@@ -159,6 +185,14 @@ function formatApprovalMessage(request: ApprovalPromptRequest): string {
 
   if (request.command !== undefined) {
     detail.push(`Command: ${request.command}`);
+  }
+
+  if (request.cwd !== undefined) {
+    detail.push(`Cwd: ${request.cwd}`);
+  }
+
+  if (request.outputSummary !== undefined) {
+    detail.push(`Output: ${request.outputSummary}`);
   }
 
   if (request.paths !== undefined && request.paths.length > 0) {

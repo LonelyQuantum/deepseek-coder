@@ -4,6 +4,8 @@ import type {
   AgentEventEnvelope as ProtocolAgentEventEnvelope,
   ApproveParams,
   ApproveResult,
+  CancelParams,
+  CancelResult,
   ListRunsParams,
   ListRunsResult,
   RejectParams,
@@ -26,6 +28,7 @@ export const RPC_RESUME_METHOD = "agent.resume";
 export const RPC_LIST_RUNS_METHOD = "agent.listRuns";
 export const RPC_APPROVE_METHOD = "agent.approve";
 export const RPC_REJECT_METHOD = "agent.reject";
+export const RPC_CANCEL_METHOD = "agent.cancel";
 export const DEFAULT_RPC_COMMAND = "prole";
 export const DEFAULT_RPC_ARGS = ["rpc"] as const;
 const RPC_UNSUPPORTED_PROTOCOL_CODE = -32001;
@@ -328,6 +331,10 @@ export class RpcServerManager implements DisposableLike {
 
   reject(params: RejectParams): Promise<RejectResult> {
     return this.sendRequest<RejectResult>(RPC_REJECT_METHOD, params);
+  }
+
+  cancel(params: CancelParams): Promise<CancelResult> {
+    return this.sendRequest<CancelResult>(RPC_CANCEL_METHOD, params);
   }
 
   stop(): void {

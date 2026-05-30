@@ -177,6 +177,10 @@ export function approvalPromptRequestFromEvent(
     detail: event.payload.detail,
     persistable: event.payload.persistable,
     ...(event.payload.command === undefined ? {} : { command: event.payload.command }),
+    ...(event.payload.cwd === undefined ? {} : { cwd: event.payload.cwd }),
+    ...(event.payload.outputSummary === undefined
+      ? {}
+      : { outputSummary: event.payload.outputSummary }),
     ...(event.payload.paths === undefined ? {} : { paths: event.payload.paths }),
     ...(event.payload.riskReasons === undefined ? {} : { riskReasons: event.payload.riskReasons }),
   };
@@ -196,6 +200,8 @@ function isApprovalPayload(value: unknown): value is ToolApprovalRequiredPayload
     isNonEmptyString(value["detail"]) &&
     typeof value["persistable"] === "boolean" &&
     optionalString(value["command"]) &&
+    optionalString(value["cwd"]) &&
+    optionalString(value["outputSummary"]) &&
     optionalStringArray(value["paths"]) &&
     optionalStringArray(value["riskReasons"])
   );
